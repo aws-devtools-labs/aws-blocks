@@ -2,6 +2,1042 @@
 
 <!-- doc-snippet: skip-file — release notes show the API of past releases, including the removed AuthOIDC block -->
 
+## 1.0.0
+
+### Major Changes
+
+- e50b9e9: Rename every published package from the `@aws-blocks` scope to `@aws-cdk-blocks`. The umbrella package is now unscoped: `@aws-blocks/blocks` becomes `aws-cdk-blocks`.
+
+  No export or option moved. To upgrade, replace the dependency names in `package.json` and the specifiers in every import:
+
+  ```diff
+   {
+     "dependencies": {
+  -    "@aws-blocks/blocks": "<your range>",
+  -    "@aws-blocks/core": "<your range>"
+  +    "aws-cdk-blocks": "<your range>",
+  +    "@aws-cdk-blocks/core": "<your range>"
+     }
+   }
+  ```
+
+  ```diff
+  -import { KVStore } from '@aws-blocks/blocks';
+  +import { KVStore } from 'aws-cdk-blocks';
+
+  -import { ApiNamespace } from '@aws-blocks/core';
+  +import { ApiNamespace } from '@aws-cdk-blocks/core';
+  ```
+
+  Warning IDs reported at synth carry the package name, so they now start with `@aws-cdk-blocks/` instead of `@aws-blocks/`: update any `Annotations.of(stack).acknowledgeWarning('@aws-blocks/…')` call to the new prefix. An acknowledgement left on an old ID silently stops matching, the warning comes back, and `cdk synth --strict` fails on it.
+
+  The `cdk-blocks` CLI binary, the `aws-blocks` keyword used to discover third-party blocks, and the `aws-blocks` manifest key that carries the `native` and `vendorize` declarations are all unchanged, so a published third-party block is still discovered and still loads its manifest without a republish. A block that depends on `@aws-blocks/core` brings its own copy of core alongside the app's `@aws-cdk-blocks/core`, which is two module instances; block authors should move the dependency to `@aws-cdk-blocks/core`.
+
+  The CDK context key `@aws-blocks/bb-data:encryptStorageByDefault` keeps its name too. `LegacyDatabaseCluster` reads it out of your `cdk.json`, where apps scaffolded before the cutover already set it, and no package was ever published under a `@aws-cdk-blocks/bb-data` name. Renaming the key would leave `StorageEncrypted` unset on a cluster deployed with it on, which CloudFormation answers by replacing the cluster. Keep the key as it is.
+
+  The old `@aws-blocks/*` packages stop receiving releases.
+
+### Minor Changes
+
+- 5f55dac: `Auth` has `protect()`, for an API namespace that is deny by default. `auth.protect(scope, 'notesApi', { public: (context) => ({ ...methods }), methods: (context, user) => ({ ...methods }) })` returns an ordinary `ApiNamespace`. For each call to one of its `methods`, the session is checked first, and only then is the `methods` factory called, once, with the signed-in user, typed by the block's options (`AuthenticatedUser<O>`). So nothing in it runs for a signed-out caller, and a forgotten guard, or one called without `await`, can't leave a method open. A signed-out call to any name that isn't a `public` method gets 401 `NotAuthenticatedException`, whether or not the method exists, so the protected methods can't be listed without a session; a signed-in caller gets "method not found" for an unknown name. `public` methods (optional) run as in a plain `ApiNamespace`. A name defined in both is a compile error. With `{ role: 'admin' }` as the last argument, every protected method also requires that group, as `requireRole` does (401 first, then 403 `NotAuthorizedException`); `compute` and every other `ApiNamespace` option go in the same object and are passed on to the namespace. It works the same locally and on AWS, and the frontend calls every method like any other namespace. Existing `ApiNamespace` code is unchanged.
+
+  The OpenRPC spec (`blocks-generate-spec`) describes every method of a `protect()` namespace, public and protected, and warns, naming the namespace, if it can't list them. It also now describes the parameters of a namespace typed through a mapped type, such as one returned by a factory, by name and type, instead of as a single `args` parameter.
+
+  The `Auth` README has a "Protect every method" recipe. The `ApiNamespace` docs and the scaffolded `AGENTS.md` now recommend `auth.protect` for namespaces with signed-in methods, and say that a guard which isn't awaited protects nothing. The templates don't add a floating-promise lint rule: Biome's `noFloatingPromises` doesn't flag an un-awaited `requireAuth` / `requireRole` call, so `protect` is the safeguard.
+
+- c67048e: feat!: `Database` from `@aws-cdk-blocks/bb-database` is the only SQL Building Block
+
+  **Breaking change.** `aws-cdk-blocks` exports `Database`, `DatabaseCluster`, `DatabaseErrors` and `sql` from `@aws-cdk-blocks/bb-database`. The packages `@aws-blocks/bb-data`, `@aws-blocks/bb-distributed-data` and `@aws-blocks/data-common` are not part of AWS Blocks any more. There is no compatibility layer.
+
+  ```ts
+  import { Database, DatabaseCluster, sql } from "aws-cdk-blocks";
+
+  const orders = new Database(scope, "orders"); // owns an Aurora DSQL cluster
+
+  const cluster = new DatabaseCluster(scope, "main", { type: "aurora" }); // Aurora PostgreSQL Serverless v2
+  const users = new Database(scope, "users", { cluster });
+  ```
+
+  - **`Database`** owns an Aurora DSQL cluster when it has no `cluster` option. A `DatabaseCluster` of type `'dsql'` or `'aurora'` holds several `Database` blocks, each in its own schema. Migrations are ordered `.sql` files in `cdk-blocks/migrations/<id>/`.
+  - **Not exported any more:** `DistributedDatabase`, `DistributedDatabaseErrors`, `DistributedDatabaseOptions`, `Database.fromExisting()` and `ExternalDatabaseRef` (an existing PostgreSQL database is now `DatabaseCluster.fromExisting()`, passed as `cluster`). `withRLS()` is replaced by `asUser()` and `asRole()`. `crud()` has no equivalent in `@aws-cdk-blocks/bb-database`. For Kysely, use `DatabaseDialect` from `@aws-cdk-blocks/bb-database/kysely`.
+  - **`getSdkIdentifiers(db)`** returns `clusterId` and `schemaName`, plus `clusterEndpoint` and `region` in a deployed Lambda. `getSdkIdentifiers(cluster)` returns `clusterEndpoint`.
+  - **Data is not moved.** A `Database` that takes the place of a `Database` of `@aws-blocks/bb-data` on the same line of code is a new block with a new cluster. To keep the old cluster, make that line a `LegacyDatabaseCluster` and put a `Database` with a new id on it. A `Database` that takes the place of a `DistributedDatabase` with the same id keeps its cluster.
+  - **`@aws-cdk-blocks/create-blocks-app`:** the `sql` and `demo` templates use the new `Database` on its default Aurora DSQL cluster, with migrations in `cdk-blocks/migrations/<id>/`. The templates' `cdk.json` has no `@aws-blocks/bb-data:encryptStorageByDefault` context key.
+  - **`@aws-cdk-blocks/bb-database`:** the CDK `Database` records itself as the `Database` Building Block of the stack.
+
+  **An existing PostgreSQL database.** `DatabaseCluster.fromExisting({ name, ca })` puts a `Database` on a PostgreSQL database that already exists, with its tables and data; Supabase is the tested provider. The block provisions nothing and `db.cluster.kind` is `'external'`. The connection string is never written in code: with `name` the block reads the SSM SecureString `/<stackName>-<name>` on AWS and a local value under `.cdk-blocks/local/data/`, and `connectionString` takes your own `AppSetting` or `Secret`. The server certificate is always verified, against `ca` (PEM text) or Node's trust store, and a connection string that carries a TLS parameter is refused. Local mode connects to the real database and runs no migration file.
+
+  Migrations on an existing database run during the deploy, in a function outside any VPC, one transaction per file; the file is recorded in that transaction. The `_migrations` table and the files of an app that used `@aws-blocks/bb-data` with `fromExisting()` continue as they are, so no file runs twice.
+
+  **`npm run db`** runs the commands of `@aws-cdk-blocks/bb-database`. `pull` and `generate-types` are not commands any more.
+
+  - `connect` checks an existing database (certificate, role, policies, endpoint) and stores the connection string for local mode or for a stage. The connection string is read from a hidden prompt or stdin and is never printed.
+  - `migrate` applies pending files to the development database with the code a deploy uses. `migrate --mark-applied <file>` records a file as applied without running it, for a schema dump of a database that already has the schema; `--stage` records it on a stage.
+  - `types` writes one `Tables` interface for Kysely. `status` lists applied and pending files.
+  - `types --block <id>` writes the `Tables` interface of a block that provisions its cluster, from the block's migration files (`cdk-blocks/migrations/<id>`). It applies the files to a new local database in a temporary directory, so it needs no AWS account and does not touch `.cdk-blocks/local/data/`. Pass `--type aurora` for a block on an `aurora` cluster.
+  - `status --block <id>` lists the applied and the pending files in the block's local database; pass `--cluster <id>` for a block on a `DatabaseCluster`. It reads a copy of the database, so it is safe while `npm run dev` runs.
+
+  On a cluster that the block owns, migrations run on the first statement in local mode and during the deploy on AWS.
+
+  **Statements as a user or a role.** `Database.asUser(user, claims?)` returns the block with every statement run as one user, for tables with Row Level Security on an `aurora` cluster. Each transaction on it starts by setting `request.jwt.claims` to `{ ...claims, sub: user.userId }` for that transaction only, so a policy such as `USING (owner_id = current_setting('request.jwt.claims', true)::jsonb ->> 'sub')` gives each user their own rows. `query`, `queryOne`, `execute`, `transaction` and Kysely (`new DatabaseDialect(db.asUser(user))`) all run as the user, locally and on AWS. The result of an auth block's `requireAuth()` passes as it is. A statement on the block itself carries no user and reads no rows from a table whose policy compares with `sub`.
+
+  `Database.asRole(role, claims?)` returns the block with every statement run as a database role, for Row Level Security policies written for a role (`TO authenticated`): each transaction starts with `SET LOCAL ROLE` and the claims, for that transaction only. Use it where the connection role owns the tables, since PostgreSQL does not apply policies to an owner.
+
+  `asUser()` and `asRole()` throw `DatabaseConfigurationError` on a `dsql` cluster. A Kysely transaction's isolation level is now set by the engine, and `BEGIN` is tried once more when its pooled connection was closed while idle.
+
+  **Errors.**
+
+  - A write that a policy refuses fails with the new `DatabaseErrors.PermissionDenied` (HTTP 403).
+  - A statement that breaks a constraint now has its own error name: `DatabaseErrors.NotNullViolation` and `DatabaseErrors.CheckViolation` (HTTP 400), and `DatabaseErrors.ForeignKeyViolation` (HTTP 409). These were `QueryFailed` before. The message has no value of the row; the server's own text stays on the server-side `cause`. None of the three is retried.
+  - `ConnectionFailed` now also covers a connection that was never made (the address did not answer, the server certificate was not accepted, the login was refused); these were `QueryFailed` before. A connection that ends between two statements of a transaction no longer ends the Node process, and a connect that timed out is no longer tried a second time.
+
+  **Local mode.** A block's statements run as a plain database role with the grants the deployed app role gets; migrations run as the admin. PostgreSQL now refuses the same statements under `npm run dev` as on AWS: DDL and `TRUNCATE` outside a migration, and reads of the migration ledger, fail with `QueryFailed`. A Row Level Security policy on a table of an `aurora` cluster applies to the block's statements locally as it does on AWS. DDL in a handler was `DatabasePermissionException` locally before; the `_migrations` and `_migration_progress` tables are no longer readable from application code. An existing `.cdk-blocks/local/data` directory needs no reset.
+
+  **`@aws-cdk-blocks/core`.** `npm run dev`, `sandbox` and `deploy` do not apply migrations to an external database before they run. `sandbox` and `deploy` no longer copy a `*_DB_URL` or `*_CONNECTION_STRING` environment variable to the SSM parameter `/<stackName>-db-url`. `npm run db -- connect --stage <stage>` stores the connection string of a `Database` on an existing database, after it has checked the database; an environment value written on every deploy replaced what that command stored. A parameter that an earlier deploy wrote stays in SSM and is still read with `DatabaseCluster.fromExisting({ name: 'db-url' })`. `ensureSecrets` is not exported from `@aws-cdk-blocks/core/scripts` and `aws-cdk-blocks/scripts` any more.
+
+- c42ba42: **Breaking: the hidden `.blocks/` folder is now `.cdk-blocks/`, and local data moves from `.bb-data/` to `.cdk-blocks/local/data/`.**
+
+  To upgrade an existing app:
+
+  1. Move the config file: `mkdir -p .cdk-blocks && git mv .blocks/config.json .cdk-blocks/config.json`. Then delete the empty `.blocks/` folder. Do not run `git mv .blocks .cdk-blocks`, because it nests the old folder inside the new one when `.cdk-blocks/` already exists.
+  2. In your tsconfig `include`, change `.blocks/**/*.d.ts` to `.cdk-blocks/**/*.d.ts`. Without this change, `getSecret()` and `getConfig()` lose their key types.
+  3. Run `npm run typegen` and commit `.cdk-blocks/hosting-values.d.ts`.
+
+  Local data, the local database included, is copied to the new location the first time each block opens its store. `.bb-data/` stays in place. `.cdk-blocks/local/` ignores itself, so it needs no `.gitignore` rule.
+
+  An app that still has `.blocks/config.json` deploys and destroys as before. The telemetry first-run notice prints once more after the upgrade. Pull request #1607 has the full notes.
+
+- 703238f: refactor: rename the scaffolded backend folder to `cdk-blocks`
+
+  `create-blocks-app` now scaffolds the backend into `cdk-blocks/`, the folder's own package is named `cdk-blocks`, the parent lists it under `"workspaces"`, and the frontend imports it as `cdk-blocks`.
+
+  `@aws-cdk-blocks/bb-database` moves its default migrations root with the folder: `DEFAULT_MIGRATIONS_ROOT` is now `./cdk-blocks/migrations`, and `db pull` writes `cdk-blocks/database.types.ts` by default. An app that keeps an `aws-blocks/migrations` directory finds no migrations after upgrading, so rename the directory or set an explicit migrations path.
+
+  **Breaking: the scaffolded backend folder is `cdk-blocks/`, not `aws-blocks/`.** An existing app renames the directory, the `"workspaces"` entry that names it, the `"name"` in its `cdk-blocks/package.json`, and every `from 'aws-blocks'` import. There is no dual-name support and no compatibility shim.
+
+  The reserved URL namespace (`/aws-blocks/api`, `/aws-blocks/auth/*`, `/aws-blocks/dashboard`) keeps its path, so deployed API Gateway routes and OAuth callback URLs already registered with an identity provider keep working.
+
+- 45a05d1: The per-deploy state directory is now `.cdk-blocks-sandbox/`
+
+  The directory that holds an app's per-deploy state was named `.blocks-sandbox/`. It is renamed to `.cdk-blocks-sandbox/`. The path the runtime config is served at does not change — it stays `/.blocks-sandbox/config.json` — so a frontend you have already deployed keeps resolving its API URL, and nothing has to be redeployed on account of this.
+
+  **Your sandbox state is copied forward for you.** On the first `npm run dev`, `npm run deploy`, `npm run sandbox` or `npm run destroy` after upgrading, each state file in `.blocks-sandbox/` is copied into `.cdk-blocks-sandbox/`: `sandbox-id.txt`, `config.json`, `config.sandbox.json`, `config.production.json`, `outputs.json`, `outputs.production.json`, `last-deploy.json`, and the per-port `dev-server.<port>.pid` files. `sandbox-id.txt` is the one that matters: it names your sandbox's CloudFormation stack, and it cannot be regenerated — a lost one would send your next deploy to a different stack and leave your existing sandbox standing in your account, with `npm run sandbox:destroy` reporting there is nothing to delete.
+
+  The copy is per file, so the CDK cloud assembly the directory also holds (`cdk.out/`, `sandbox-destroy.out/`) is left behind rather than duplicated. The old directory is copied, never moved, so an older `cdk-blocks` in the same checkout keeps working; delete `.blocks-sandbox/` yourself once you no longer need it. A file already present under the new name is never overwritten — state written since the upgrade is newer. If the copy cannot be made (a read-only project directory), the command fails and names the file, rather than continuing and generating a new sandbox id.
+
+  **If you scaffolded a Next.js app and serve the config from its route,** keep `src/app/.blocks-sandbox/config.json/route.ts` exactly where it is — the directory name is the URL it answers, and that has not changed. Change only the path it reads, from `.blocks-sandbox/config.json` to `.cdk-blocks-sandbox/config.json`. Leaving it on the old path returns a stale `apiUrl` from the pre-upgrade file, or a 404 once that file is gone. This applies when you serve Next directly; behind the Blocks front door the hosted route is used instead.
+
+  **If you reference the directory yourself,** update it: a `.gitignore` entry, a `cdk.json` `watch.exclude` entry, a CI step reading `.blocks-sandbox/config.sandbox.json` or `outputs.json`, or a script passing `outputsFile`. Apps scaffolded by `create-blocks-app` get the new entries; an existing app's own files are yours. `npm run migrate` skips both directory names while scanning, so it still works on an app that has not been upgraded yet.
+
+- 1de6ea4: The framework's reserved URL prefix is now `/cdk-blocks/` (`/cdk-blocks/api`, `/cdk-blocks/auth/*`, `/cdk-blocks/settings`, `/cdk-blocks/dashboard`, ...). The old `/aws-blocks/` prefix stays served as an alias with the same handlers: the runtime (Lambda, container and dev server) treats `/aws-blocks/...` as `/cdk-blocks/...`, the shared API gateway and the Hosting front doors route both, so already-deployed clients, mobile apps and registered auth callbacks keep working. Clients, generated config and defaults use `/cdk-blocks/`.
+
+  `BLOCKS_RPC_PREFIX` and `BLOCKS_AUTH_PREFIX` now hold the new prefix, and `canonicalBlocksPath()` maps a legacy path to its canonical one.
+
+  **Upgrade:**
+
+  - The default `redirects.callbackPath` of an `Auth` with `providers` becomes `/cdk-blocks/auth/callback`. An external identity provider (OIDC, Google, ...) that only allows the old `/aws-blocks/auth/callback` redirect URI must have the new one registered, or set `redirects.callbackPath: '/aws-blocks/auth/callback'` to keep the old one.
+  - A custom front door or an explicit `apiPaths` that routes `/aws-blocks/*` by hand must also route `/cdk-blocks/*` (or use `cf.apiBehaviors(origins.api)`), or the upgraded frontend's API calls won't reach the backend. A custom front door that records only `/aws-blocks/*` as wired now fails synth with `ProxySameOriginApi`; one that wires only `/cdk-blocks/*` gets a warning that legacy `/aws-blocks/*` clients are not routed.
+  - The built-in CloudFront front door adds one cache behavior (`/aws-blocks/*`). An app already at the distribution's cache-behavior quota (25 by default) needs to free a behavior or raise the quota, or the upgrade fails (at synth when container namespaces add direct behaviors, else at deploy).
+
+  A sandbox `stubIdp()` issuer moves to `/cdk-blocks/auth/idp/<id>`, so its users get a new `userId`. Native clients move tokens stored under a block's old `/aws-blocks/` keys to its new keys, so an upgrade keeps their session.
+
+  The Admin UI calls `/cdk-blocks/api` and retries at `/aws-blocks/api` only when an older dev server answers 404 without a JSON-RPC envelope, so it still works with that server and never runs a method twice.
+
+  A `ContainerCompute` keeps the logical ID and priority of each API listener rule it deployed under `/aws-blocks/api/<name>`, so the upgrade updates the rule's path to `/cdk-blocks/api/<name>` in place rather than replacing it.
+
+- f133ff8: On the `apiFrontDoor: 'cloudfront'` tier, CloudFront now routes an API namespace on a `container` compute straight to the container's load balancer, instead of through the shared API gateway — from the backend's managed distribution, or from `Hosting`'s default CloudFront door when it fronts the API. A call can run up to 60 seconds (CloudFront's origin read timeout) instead of the gateway's ~29, and skips a hop.
+
+  - Each container namespace path (`/cdk-blocks/api/<export name>`) gets its own CloudFront behavior, ahead of the `/cdk-blocks/api/*` gateway behavior, all on one VPC origin per distribution for the backend's load balancer listener (whose path rules pick the compute) — so a distribution uses one of the account's VPC origins (25 by default) however many containers serve API traffic. Namespaces on Lambda computes, auth routes and `RawRoute`s still go through the gateway.
+  - A viewer-request CloudFront Function stamps the viewer's host on those requests, so `ctx.request.url` in the container is the public URL, including a custom domain.
+  - The load balancer admits CloudFront's origin-facing prefix list on its listener ports; the prefix list is looked up at deploy time, so stacks stay environment-agnostic.
+  - A direct call skips the gateway's throttling and access logs; the distribution's web ACL (`apiWaf`, or Hosting's WAF) covers it, and synth warns when there is none.
+  - On the `apigateway` tier nothing changes: container namespaces go through the gateway, behind `Hosting` too.
+  - A container namespace whose load balancer's VPC has no public subnets (an isolated VPC; a CloudFront VPC origin needs an internet gateway) stays on the gateway, and synth warns naming it.
+  - `Hosting`'s `stacked` door keeps container namespaces on the gateway, through its ALB router.
+  - Synth fails with a clear message when the direct behaviors take a distribution past its cache-behavior quota (CloudFront's default of 75, or `Hosting`'s `quotas.cacheBehaviors`), naming the container namespaces.
+  - The CloudFront Function also drops a client-sent `X-Forwarded-Host`, so it cannot change `ctx.request.url`.
+
+- 9ebf67a: An API namespace can run on a `container` compute:
+
+  ```ts
+  const renderCompute = new Compute(scope, 'render', { type: 'container', size: { vcpu: 2, memory: 4096 } });
+  export const render = new ApiNamespace(scope, 'render', (context) => ({ … }), { compute: renderCompute });
+  ```
+
+  The container's tasks serve the namespace with the same dispatch as the Lambda handler (CORS, cookies, error envelopes), so clients call it exactly as before at `/cdk-blocks/api/render`.
+
+  - The shared API gateway reaches the tasks through a VPC link to an internal Application Load Balancer that the compute provisions in the app's VPC: one load balancer and one listener per backend, with a path rule per namespace forwarding to its container's target group, health-checked on the task's readiness port. A container that only runs jobs gets no target group.
+  - The tasks admit the load balancer on a security group of their own; the shared compute security group stays closed to inbound traffic.
+  - The load balancer drops request headers that aren't valid HTTP before they reach a task.
+  - API calls to a container keep the gateway's ~29-second cap. A stopping task finishes its in-flight requests (up to 35 s) before it shuts down.
+  - A `Scope` with a container `compute` now places its `ApiNamespace`s on that container too, instead of failing synth.
+  - A container that serves API namespaces needs a running task: `scaling.minInstances: 0` fails synth. Without a `scaling.strategy`, one that also runs an `AsyncJob` scales on CPU, and its queue backlog adds tasks too.
+  - Moving a namespace that already serves traffic onto a container: during that deploy, its calls can get 503s for the minute or two the new tasks take to start.
+  - `runContainer()` takes the backend module (`runContainer({ backend })`) and serves its API on port 8080, with readiness on port 8081; called without it, the container answers a health check on port 8080 as before. A container compute passes it only when the compute serves API traffic.
+  - The container compute's dashboard section gains API request, 5xx, latency and task-health widgets.
+
+- 5f55dac: feat(core): opt in to HTTP error statuses for an API namespace
+
+  `ApiNamespace` takes a new `httpErrorStatus` option. With `httpErrorStatus: true`, a call that throws an `ApiError` with a 4xx status — such as `requireAuth()`'s 401 — is answered with that HTTP status instead of 200, so API Gateway and CloudFront metrics, access logs, WAF rate rules and 4xx alarms can see rejected calls:
+
+  ```ts
+  export const api = new ApiNamespace(
+    scope,
+    "api",
+    (context) => ({
+      async getNote() {
+        const user = await auth.requireAuth(context); // signed out → HTTP 401
+        return notes.get(user.userId);
+      },
+    }),
+    { httpErrorStatus: true },
+  );
+  ```
+
+  The JSON-RPC body is unchanged, and the TypeScript client reads it whatever the status, so `isBlocksError()` and `error.status` behave exactly as before. 5xx and other failures stay HTTP 200. It applies in the local dev server and on AWS alike. The default is unchanged: every RPC response stays HTTP 200.
+
+  Two things to check before turning it on, both documented on the option: CloudFront error pages apply to the proxied API too, so on a `Hosting` distribution that maps 403 or 404 to a page, those responses would reach the client as HTML. CloudFront cannot scope error responses away from `/cdk-blocks/*`, so `Hosting` now fails synth for that combination with a `HostingError` named `HttpErrorStatusErrorPagesError`; remove the 4xx error pages or leave `httpErrorStatus` off for those namespaces. The hosting README describes the gap. (During review this was a synth warning, `@aws-cdk-blocks/hosting:HttpErrorStatusErrorPages`; it was never released as one.) And the Dart client, with an `authProvider`, refreshes its token and runs the method once more on any HTTP 401, so a method that throws 401 after a side effect can run twice for it: put the guard first (`requireAuth()` as the first statement, or `auth.protect`).
+
+- 4665f81: feat(core): `defaults.appIdentity` — an app identity for running many apps in one AWS account
+
+  For platforms that deploy many apps (often written by AI coding agents) into
+  one AWS account through one pipeline. All of it is opt-in: without
+  `defaults.appIdentity`, synthesized templates are unchanged. The core README section "Running many apps
+  in one AWS account" shows what a platform puts in its own project template, and
+  documents the IAM policies the platform writes and owns, all three shared by
+  every app in the account and keyed on the role's `app` tag
+  (`${aws:PrincipalTag/app}`): a permissions boundary, a CloudFormation execution
+  policy, and a deploy guard. Each app gets its own CDK bootstrap tagged with its
+  id. Runtime API calls (`execute-api:Invoke` and `ManageConnections`) aren't
+  isolated between apps; the README lists this under its limits. The app id comes
+  from the platform; to AWS Blocks it is just a string.
+
+  - **`defaults.appIdentity: { id, reportOnly? }`** (new, optional). AWS Blocks tags every
+    resource and every IAM role it creates `app=<id>` — including the CDK
+    custom-resource provider roles that `Tags.of()` doesn't reach — at a priority
+    above the default `Tags.of().add()`. It checks that every name it derives
+    starts with `<id>-` (name the stack `<id>` or `<id>-…`), including the
+    CloudFront Functions and KeyValueStores it creates. `Hosting` and the separate
+    `us-east-1` stacks it adds are tagged too. The id is 1–10 lowercase letters
+    and digits, starting with a letter; it is also the app's CDK bootstrap
+    qualifier. Some ids are reserved because their `<id>-…` / `<id>/…` names
+    would cover names other apps, CDK or AWS share (`cdk`, `blocks`, `secrets`,
+    `config`, `amplify`, `cf`, `sagemaker`, the region prefixes such as `us` and
+    `eu`, and any id starting with `aws` or `ssm`); synth rejects them, saying
+    why. Keep `.cdk-blocks/config.json`'s `stackId` equal to the id, so
+    Hosting's `secret()` / `config()` values (`blocks/<stackId>/…`) are the app's
+    own.
+  - **IAM report:** with `defaults.appIdentity` set, `cdk.out/<stack>.blocks-iam.json`
+    gains an `app` section and a `violations` list: a role without the
+    permissions boundary or the app tag, a grant on a name outside the app's
+    prefix, a wildcard or "everything except" grant on a data service (among
+    them SNS, SES, RDS and the RDS Data API, Aurora DSQL, Bedrock, Bedrock
+    AgentCore, S3 Vectors, ECS, CloudFront KeyValueStores, and IAM and STS role passing
+    or assuming, on `*` or on a
+    resource name that starts with `*`; AWS-owned Bedrock models, an Agent
+    invoking its AgentCore runtimes, and SES sending aren't flagged), a resource
+    the check can't resolve, a resource policy that opens up another app's
+    resource, a role that trusts anything but an AWS service, a broad AWS managed
+    policy, the CDK asset bucket of another bootstrap, an API Gateway stage,
+    route or deployment attached to an API outside the app's own template, or a
+    stack or block outside the prefix. Synth fails on any violation
+    unless `reportOnly: true`.
+  - **`HostingConstructProps.edgeStackId`** (new, optional, `@aws-cdk-blocks/hosting`):
+    the id of the `us-east-1` stack Lambda@Edge functions are hoisted into. AWS
+    Blocks' `Hosting` sets it to `<id>-edge` when the fronted backend has
+    `defaults.appIdentity`, so a shared platform's execution policy and deploy guard see it as
+    the app's own stack.
+
+- c1fabce: feat(core): honor `BLOCKS_LOG_LEVEL` and `BLOCKS_LOG_STREAM` in the lifecycle scripts
+
+  `deploy`, `destroy`, `startSandbox`, `destroySandbox` and `startDevServer` from `@aws-cdk-blocks/core/scripts` now read `BLOCKS_LOG_LEVEL`:
+
+  - unset (or any unrecognised value): output is unchanged.
+  - `quiet`: errors and final results only.
+  - `normal`: short progress steps; CDK output is condensed into milestones and a resource count, and failure and rollback lines still print.
+  - `verbose`: the raw CDK output, as today.
+  - `debug`: `verbose` plus stack traces for errors the scripts catch and report as warnings.
+
+  The `BLOCKS_DEPLOYED …` line, the deployment-target summary, the API and frontend URLs and error messages print at every level. At `quiet` and `normal` the last 500 lines of hidden CDK output are kept, and when a deploy, destroy or `cdk watch` deploy fails they are printed to stderr before the error, so the failure never needs a re-run to diagnose. A `cdk watch` deploy that fails during synth, which CDK reports without a `❌` line, counts as failed too.
+
+  The external-database migration step and the dev server's `secret()`/`config()` type generation follow the level as well: at `quiet` the migration's output and warnings (its stdout and stderr) are hidden, and printed to stderr only if the migration fails; type-generation notices are hidden at `quiet` and `normal`.
+
+  `BLOCKS_LOG_STREAM=stderr` moves progress to stderr: progress steps, CDK milestones, raw CDK output, streamed CloudFormation events, migration output and type-generation notices go to stderr, and stdout keeps only the results (the deployment target, `BLOCKS_DEPLOYED` and the final URLs). `blocks-generate-spec` follows it too: its progress lines go to stderr, and stdout keeps the `✅ OpenRPC spec written to …` line. Without the variable, the streams are unchanged. `@aws-cdk-blocks/core/scripts` exports `log`, the logger these scripts print progress with.
+
+- 41968b7: **Breaking: `AWS_BLOCKS_DISABLE_TEMPLATE_METADATA` is renamed to `CDK_BLOCKS_DISABLE_TEMPLATE_METADATA`.** The old name is no longer read and nothing falls back, so a script or CI job that sets it has to be updated.
+
+  `AWS_BLOCKS_FRAMEWORK_SINK` is renamed to `CDK_BLOCKS_FRAMEWORK_SINK` for consistency. It is an internal handshake between the CLI and the `cdk` process it spawns on deploy and sandbox, so it needs no action.
+
+- 8894669: **Breaking: telemetry now follows your CDK CLI telemetry setting, and the AWS Blocks opt-out is removed.** `AWS_BLOCKS_DISABLE_TELEMETRY`, the `cdk-blocks telemetry` command, the `blocks-telemetry` binary and the `telemetry.enabled` key in `.blocks/config.json` are gone, with no fallback and no migration, so if you opted out that way you are opted back in until you opt out through CDK.
+
+  Opt out with `CDK_DISABLE_CLI_TELEMETRY` set to `1` or `true`, with `cdk cli-telemetry --disable`, or with `cli-telemetry: false` in the `context` of `cdk.json` or `~/.cdk.json`. CDK documents those settings at https://docs.aws.amazon.com/cdk/v2/guide/cli-telemetry.html#telemetry-opt-out. The values are matched exactly as the CDK CLI matches them, so `TRUE` and `yes` are not an opt-out. `CDK_BLOCKS_DISABLE_TEMPLATE_METADATA`, which governs the `AWSToolsMetrics` entry in the CloudFormation template, is a separate switch and is unchanged.
+
+- 5f55dac: The OpenRPC spec generator describes every schema under a type name with the right shape, and gets an experimental tag for Building Block authors.
+
+  - **One name, two shapes.** Two different schemas under one type name used to share one `components.schemas` entry, the first one winning silently, so a native client decoded the other with the wrong shape. The first one (the same one as before) keeps the name, so an app's native type `X` stays `X`. Each other one is now described where it is used, and native generators name it by method and field (Dart `ApiListKeysOptions`, Swift and Kotlin `Api.ListKeys.Options`), so only the uses that were decoded with the wrong shape before get a new native name. That covers instantiations of one generic type, such as the `AuthenticatedUser` of two differently configured `Auth` blocks, and two declarations that share a name, such as two Building Blocks' `ScanOptions`; the latter also prints a warning naming both, with how to keep one native type. Spec generation never fails on a name.
+  - **Depth.** The six-level depth limit is counted from the nearest named type, so a named type nested deep below a method (a sign-in step's `CodeDeliveryDetails`) no longer loses its leaves to `{ type: 'object' }` in one place and not another. Past the limit, an unnamed object is an object with any fields (`additionalProperties`, which native clients decode as a map) and an array of unnamed objects or arrays is an array of any values, with a warning naming the field (the method parameter or result, or the nearest named type, and the path from it); strings, numbers, booleans, named types and arrays of them keep their types. Everything past the limit used to be `{ type: 'object' }`, strings and numbers included, so a native client dropped the data or could not decode it: a `KVStore` query's `where` conditions (`equals`, `greaterThan`, …) on a sort key now have the key's type, and a JSON value such as `MessageMetadata.toolInput` keeps one more typed level, then the open map. A recursive type (`interface Comment { replies: Comment[] }`) keeps four typed levels (it had three), a mutually recursive pair five (both types count), and a generic that holds a new instantiation of itself (`interface Nest<T> { inner?: Nest<T[]> }`) nine; past that comes the object with any fields, and a warning names the field. A named type reached by many paths is converted once, and one schema is capped at 5,000 named types (with a warning). A method whose types cannot be described is reported by name, and every other method keeps its types.
+  - **Mutually recursive types.** With both `getA(): A` and `getB(): B` for `interface A { b?: B }` and `interface B { a?: A }`, `A.b` and `B.a` are described inside each component instead of as `$ref`s to each other. That `$ref` cycle never generated in Swift (a struct cannot contain itself) or Kotlin (the generator overflowed its stack), so only Dart clients see a change: `A.b` is the new class `AB` instead of `B`, and `B.a` the new class `BA` instead of `A`.
+  - `@blocksCodegenDefaultTypeArgs` (experimental, for Building Block authors) on an exported generic type alias or interface describes every instantiation at its default type arguments, so a type a block narrows per instance for TypeScript keeps one native shape. A misplaced tag is an error, not a silent fallback. `Auth` uses it for its sign-in state API, sign-in steps and MFA preferences.
+
+- d46dfaf: fix(core,blocks,create-blocks-app): a deploy no longer points the local dev loop at AWS
+
+  Every deploy rewrote `.cdk-blocks-sandbox/config.json` with its AWS `apiUrl`. The Node.js client reads that file, while the browser gets its config from the running dev server, so after `npm run deploy` or `npm run sandbox:deploy` with `npm run dev` running, `npm run test:e2e` signed up users and wrote items in the deployed stack, production included, and a Next.js Server Component rendered from the production Lambda, with nothing pointing at it.
+
+  - `deploy()` records its API URL in `.cdk-blocks-sandbox/config.production.json`, and a sandbox deploy in `.cdk-blocks-sandbox/config.sandbox.json`, both `{apiUrl, environment}`. Neither writes `config.json` any more: only a dev server does, with its own local URL.
+  - The dev server sets `BLOCKS_API_URL` to its own front door on the frontend command it runs (Vite, `next dev`), so server-side frontend code calls the local server. In sandbox mode that is the local front door, which proxies to the sandbox.
+  - The template e2e tests set `BLOCKS_API_URL` to the dev server on `blocks.dev.port` before they load the client. Set `TEST_URL` to the URL a deployed app's API is under to run them against it; they then start no dev server.
+  - `npm run spec` takes the spec's `servers` entry from the dev server's `config.json`, or from `config.<stage>.json` when `BLOCKS_SPEC_STAGE` is `sandbox` or `production`.
+  - `npm run destroy` and `npm run sandbox:destroy` also remove the destroyed stage's `config.<stage>.json`.
+  - An app deployed before this release still has the deploy's AWS URL in `config.json`. The Node.js client refuses such a file (`environment` `production`, or `sandbox` with an `https:` URL, which no dev server writes) with an error that says to start the dev server or set `BLOCKS_API_URL`, instead of calling the deployed stack. `npm run dev` rewrites the file, and `deploy`, `sandbox deploy` and both destroys first move it to `config.<stage>.json`.
+  - The Admin UI's RPC playground falls back to the stage's `config.<stage>.json` when the stack publishes no `ApiUrl` output. It no longer reads `config.json`, which now holds a dev server's local URL.
+
+  Scripts that read a deployed URL from `config.json` after a deploy should read `config.sandbox.json` or `config.production.json`, or `npm run -s sandbox:deploy -- --query apiUrl`.
+
+  **After upgrading:** an app that was deployed with an earlier version may still have a deployed URL in `.blocks-sandbox/config.json`. A Node.js script, an e2e test or an SSR host that reads that file then fails with the error above, until you run `npm run dev`, `npm run deploy`, `npm run sandbox:deploy` or a destroy once, or set `BLOCKS_API_URL`. The client itself can't move the file: it is also the browser and React Native entry, and it reads the file only.
+
+- 81113a3: Hardening for the local dev server (`npm run dev`, including sandbox mode, where it forwards API requests to the deployed sandbox API) only; deployed APIs are unchanged. A page on another site could send a `text/plain` `POST` to `http://localhost:3000/cdk-blocks/api`, which the browser sends without a CORS preflight, and run an API method against your local data. The dev server now refuses such requests, before it runs them locally or forwards them to a sandbox:
+
+  - A `POST`, `PUT`, `PATCH` or `DELETE` request whose `Origin` names another site gets `403 Forbidden`, for JSON-RPC calls and RawRoutes alike. Loopback origins on any port (a frontend dev server such as `http://localhost:5173`), the dev server's own address and the host set in `BLOCKS_DEV_HOST` are still allowed, and so are requests with no `Origin` header (`curl`, server-side rendering, native clients).
+  - A JSON-RPC call must send `Content-Type: application/json` (parameters such as `; charset=utf-8` are fine), or it gets `415 Unsupported Media Type`. The AWS Blocks clients already send it; with `curl`, pass `-H 'Content-Type: application/json'`. RawRoutes keep accepting any content type.
+
+- 2c9005f: fix(core): reject malformed native declarations instead of dropping them
+
+  An `aws-blocks` key that is present but not an object dropped every declaration
+  inside it; it is now `"aws-blocks" must be an object (declared by <block>)`. A
+  `null` key is an error rather than an absence, and an absent key still skips. An
+  unrecognized field on a binding with a usable `id` is rejected rather than
+  silently stripped, both generic-arity errors now name the binding and the
+  declaring block, and a registration, platform entry or package entry carrying a
+  non-enumerable field is rejected too.
+
+  Behavior change (0.x minor = breaking channel): generation now exits 1 where it
+  wrote a spec before, for a `null` or non-object `aws-blocks` key and for an
+  unrecognized binding field. Remove the offending key or field.
+
+- ebfe2ed: Constructing a `Scope` whose `fullId` is already used by a different scope path now logs a warning that names both paths. Scope ids are joined with `-`, so paths such as `'user-service' > 'sessions'` and `'user' > 'service-sessions'` resolve to the same `fullId` and share the same resource names and local `.cdk-blocks/local/data` directory. At `cdk synth` the warning is a CDK annotation with the id `blocks:scope:fullIdCollision`. Rename one of the scopes: a future release will reject the collision. Constructing the same path again is still accepted, and `fullId` values are unchanged.
+- 99660fd: `cdk synth` fails when a scope or block id puts a character into a resource name that the resource's service rejects. Ids are joined, unescaped, into the name of each resource under them, so `new Scope('@acme/shop')` with a `KVStore` under it synthesizes a DynamoDB table named `<stack>-@acme/shop-<id>`, which the deploy rejects after the stack has started to create, and the stack rolls back. The error names the id, the characters, the resource names and what the service accepts. It covers the names of DynamoDB tables, SQS queues, EventBridge Scheduler schedules, Cognito user pools, Secrets Manager secrets and Bedrock knowledge bases and data sources that are literal strings in the synthesized template, after any `addPropertyOverride`, so an override that sets a valid name is honored. An id is not rejected on its own: `'@acme/shop'` still synthesizes when the blocks under it name nothing from it or name only resources that accept `@` and `/`, and local development is unchanged. This changes what fails, not only what deploys: a CI step that only runs `cdk synth` or `cdk diff`, and unit tests that call `Template.fromStack`, now throw for these names. The check runs when the app is synthesized, so in an app with several stacks a bad name in one stack fails synth of the whole app, including `cdk deploy` of another stack. Use lowercase letters, digits and hyphens in ids: every service accepts them.
+- c1fabce: feat(core): read the deploy identity and credentials without deploying
+
+  `@aws-cdk-blocks/core/scripts` adds functions for tools that show what a deploy would use before running it:
+
+  - `readAwsIdentity()` returns the AWS account, caller ARN, credentials and Region that a deploy would use, verified with STS GetCallerIdentity, without deploying. Missing, expired or rejected credentials throw the same guidance the deploy prints. When no Region is set, it returns the credentials without an AWS request.
+  - `describeDeploymentCredentials()` returns the credentials label that the deploy prints and the Region, from local configuration only and without an AWS request. When environment access keys take precedence over an exported `AWS_PROFILE`, the label says so (`access keys in AWS_ACCESS_KEY_ID (used instead of AWS_PROFILE)`) and `keysOverrideProfile` is `true`.
+  - `resolveDeploymentTarget()` is now exported.
+
+  `runSecretCli` and `runConfigCli` take the `interactive` and `yes` options of `@aws-cdk-blocks/hosting`'s value CLI and pass them through.
+
+- 5f55dac: The OpenRPC spec generator describes a TypeScript tuple as a JSON array of positional elements, and a rest parameter typed as a tuple as one parameter per element.
+
+  **Tuples.** A tuple such as `[number, number]`, like `KVStore`'s `where.between`, used to be described as an object with the properties `"0"`, `"1"`, `length` and every array method. The generator now uses JSON Schema's `prefixItems`:
+
+  - **A fixed tuple** (`[A, B]`, `readonly [start: T, end: T]`) is `{ type: 'array', prefixItems: [A, B], minItems: 2, maxItems: 2 }`; `maxItems` closes it. An optional element (`[string, number?]`) counts in `maxItems` only and is nullable (`T | null`), as an optional property is. A named element type is a component, as it is anywhere else.
+  - **A tuple with a rest element** (`[string, ...number[]]`) has no fixed shape. It is an array of the union of its element types, with `minItems` for its required elements.
+  - **The empty tuple** (`[]`) is an array with `maxItems: 0`.
+
+  Native clients generated for an app whose API uses tuples change:
+
+  - **Swift and Kotlin:** the old output didn't compile. The value is now a type with properties `item0`, `item1`, and so on, which reads and writes the JSON array when the generators of this release produce it.
+  - **Breaking for Dart clients:** tuple-typed params and results were `dynamic` (a `List`) and are now records, e.g. `(num, String)`; one-element tuples are `List<T>`. Update call sites.
+
+  **Rest parameters typed as tuples.** The server calls a method with its params spread (`method(...params)`). A method such as `async tablePut(...args: Parameters<typeof table.put>)`, or one declared `(...args: [label: string, count?: number])`, used to be described as one parameter holding the tuple. A native client then sent `[["x", 2]]`, and the method received `args = [["x", 2]]`.
+
+  Each tuple element is now a parameter of its own. It is named by its tuple label (`item`, `options`; `Parameters<typeof f>` keeps `f`'s parameter names), otherwise `arg0`, `arg1`, and so on. It is optional where the element is. A native client sends `["x", 2]`, and the method receives `args = ["x", 2]`. A rest element inside the tuple (`[level: string, ...messages: string[]]`) takes a variable number of arguments, which positional parameters can't describe. The parameters stop before it, and spec generation prints a warning naming the method. A rest parameter typed as a plain array (`...ids: string[]`) is still one array parameter. Spec generation now warns, naming the method: a native client sends the arguments as one nested array, so the method receives that array as its only argument. An element named like an earlier parameter of the method is renamed (`id_2`).
+
+  Native clients generated for such a method take its elements as their own arguments: `tablePut(item, options)`, not `tablePut(args)`. That changes the source for code that called the old signature, which never reached the method with the right arguments.
+
+  Specs without tuples are unchanged.
+
+- 44c7377: feat(core): `defaults.strictNamespacePlacement` serves each API namespace only on the compute it is placed on
+
+  An `ApiNamespace` given its own `compute` is routed to that compute at `/cdk-blocks/api/{namespace}`, but the bare `POST /cdk-blocks/api` endpoint is served by the default compute and dispatches on the JSON-RPC body. A raw call such as `{ "method": "reports.build" }` to the bare endpoint therefore runs `reports` on the default compute, outside the VPC, container or sizing its placement was meant to give it.
+
+  - **New `BlocksDefaults.strictNamespacePlacement`** (`false` in both presets). Add `strictNamespacePlacement: true` to the stack's `defaults`, next to the preset you already use, and each compute's dispatcher serves only the namespaces placed on it, on any RPC path. A call to a namespace placed elsewhere gets the same `-32601` "method not found" error as an unknown namespace. Namespaces without a placement keep running on the default compute, on the bare endpoint and on their own path. The typed TypeScript client and the Kotlin, Swift and Dart clients already call each namespace at its own path, so they keep working. A raw HTTP caller, or a native client generated before per-namespace paths, that posts a placed namespace to the bare endpoint is refused once you turn it on. The option applies only to deployed computes: the local dev server keeps serving every namespace on every path.
+  - **Every API compute rolls on a change.** The placement map is set in the environment of every compute that serves an API namespace, the default one included, so turning the option on or moving a namespace to another compute updates each function and task definition and no running compute keeps an old map. Synth fails with a clear error if the encoded map is over 2 KB. A compute whose environment has its compute id but no readable map fails to start (a Lambda function retries on the next request) instead of serving every namespace.
+  - **New synth warning** `blocks:apigateway:bare-endpoint-serves-placed-namespaces` when some namespace runs on its own compute and `strictNamespacePlacement` is off. Turn the option on, or, if raw callers still need the bare endpoint, acknowledge the warning with `Annotations.of(stack).acknowledgeWarning('blocks:apigateway:bare-endpoint-serves-placed-namespaces')` on the stack or backend returned by `create()`.
+
+  The option keeps a namespace's code on its own compute and network. It doesn't split IAM: every compute still runs under the app's one execution role.
+
+- 072c3ff: An unrecognized `encryption` value on `KVStore` or `FileBucket` now fails the synth with an error that lists the valid values (`'aws-managed'`, `'customer-managed'`, or the block's `fromKmsKey(arn)`). Previously such a value (for example a typo like `'kms-managed'` in untyped JavaScript, or a value loaded from JSON or the environment) only emitted an `UnknownEncryption` warning and fell back to the AWS-managed key, so a request for a customer-managed key could be silently downgraded. Apps that pass a valid value, or omit `encryption`, are unaffected; an app that hits the new error was never getting the encryption it asked for and should correct the value.
+- c67048e: `VpcRequirements` gains `endpointClientSecurityGroups`, letting a Building Block register security groups of compute it provisions itself so they are admitted on the Blocks-managed interface-endpoint security group, and `endpointClientDependents`, so a construct that must not be created before that compute can reach the endpoints is ordered after them. When `provisionEndpoints: false` leaves the endpoints to you, Blocks warns (`blocks:vpc:endpoint-client-unadmitted`) for each registered group instead.
+- 227a856: `withAuth(fn, cookies, { allowAnonymous: true })` runs `fn` signed out when no cookies are found, instead of throwing a `401`. Use it for server-rendered pages that signed-out visitors can see: public API methods work, and methods gated with `auth.requireAuth` still answer `401`. A missing, `null`, empty or blank `cookies` argument all count as "no cookies", so the option works with Fetch `headers.get('cookie')`, Node `req.headers.cookie`, and the built-in Next.js detection (`withAuth(fn, undefined, { allowAnonymous: true })`). Explicit cookies, an existing request context, and registered providers still take precedence. Without the option, `withAuth` behaves as before. The `WithAuthOptions` type is exported from `@aws-cdk-blocks/core/server` and `aws-cdk-blocks/server`.
+
+  With the option, pages that answered an error for signed-out visitors now render with a `200`. Responses to requests without cookies can be edge-cached, so check that the anonymous HTML of these pages is safe to cache.
+
+- afad513: `defaults.allowedOrigins`: plain origins such as `https://app.example.com` now match exactly (case-insensitive), so their dots are literal. `http`/`https` plain origins are compared in the form the browser sends (default port dropped, internationalized hosts in punycode), and entries with user info, a path, a query or a fragment are rejected. Entries with regex syntax are still anchored regexes, but must compile on their own and escape `.` (unless followed by a quantifier, as in `.*`); glob-style entries such as `https://*.example.com` and patterns with nested quantifiers such as `(a+)+` are rejected, and brace quantifiers are limited to `{n}`. Invalid entries now fail `cdk synth` from `BlocksStack.create()` / `BlocksBackend.create()` with a message naming the entry, and are ignored (and logged) at runtime. The README examples now use plain origins, and suggest `https://[a-z0-9-]+\\.example\\.com` for subdomains.
+- f32185c: Add the `blocks dashboard` command, which starts the Blocks Admin UI against the app it is run from on a free loopback port and opens it with a session token. `blocks dashboard doctor` diagnoses the app and prints a report instead, for when the server will not start. Accepts `--port`, `--profile`, `--region`, `--project`, `--allow-origin` and `--json`, and rejects a flag whose value is another flag rather than silently accepting it.
+
+  The dashboard is opt-in: `@aws-cdk-blocks/admin-ui` is resolved from the app and offered for install when missing, so an app that never runs it carries none of its dependencies. The default template gains an `npm run dashboard` script.
+
+- f32185c: Record every deploy in `.cdk-blocks/deploy-history.jsonl`. A deploy appends one `IN_PROGRESS` record when it starts and one terminal record with the same id when it ends, so a reader merges by id with last-record-wins and a dangling `IN_PROGRESS` record means the process died mid-deploy. The region and stack name are captured at deploy time rather than resolved when the file is read, because ambient `AWS_REGION` and IMDS can point somewhere other than where the deploy actually went.
+
+  Writing is best-effort: a history file that cannot be written never fails the deploy it describes. The sandbox path records the explicit deploy only, since a later `cdk watch` hot-swap has no clean deploy boundary.
+
+- 9801a5b: fix(core): give each deploy stage its own CDK outputs file
+
+  `npm run deploy` and `npm run sandbox` both wrote `--outputs-file .cdk-blocks-sandbox/outputs.json`, and the CDK CLI replaces that file with the stacks of the one invocation that wrote it rather than merging into it. A production deploy therefore left only its own stack in the document the sandbox reads, and a deploy that failed on its first stack wrote an empty document, blanking the record of a stack that was still standing.
+
+  Each stage now writes its own document:
+
+  - the sandbox keeps `.cdk-blocks-sandbox/outputs.json`
+  - production writes `.cdk-blocks-sandbox/outputs.production.json`
+
+  Both stay in `.cdk-blocks-sandbox/`, which is already ignored, so neither can be committed by a missing ignore entry.
+
+  `npm run destroy` and `npm run sandbox:destroy` now forget the deleted stack in the document of the stage being destroyed, instead of always in `outputs.json`. A production destroy also clears its stack from a pre-split `outputs.json`, so an app that deployed production before upgrading is not left recording a stack that no longer exists.
+
+  **If you read `.cdk-blocks-sandbox/outputs.json` for production** (a script, a CI step, or a launcher), read `.cdk-blocks-sandbox/outputs.production.json` instead. `OUTPUTS_FILE` from `@aws-cdk-blocks/core/scripts` carries both paths. The next deploy of each stage writes its own document, and `npm run sandbox:console` derives the sandbox stack rather than naming one out of a pre-split `outputs.json`.
+
+  **If you call `openConsole({ outputsFile })` directly** (the Kotlin and Swift example apps, and any app scaffolded before AWS Blocks package tasks), it still opens the document's first stack. On an app that deployed production before upgrading, that is production's stack until one `npm run sandbox` refreshes `outputs.json`, so run it once or delete the stale file.
+
+- 93d533a: Add `allowPlainHttp`, an explicit opt-out for builders who need a plain-HTTP front door in production. A production synth fails for a door that would carry sign-in, session cookies or the router's origin-verify secret over plain HTTP; this option is the migration for an app that serves plain HTTP on a network path it trusts, such as an internal ALB reached only inside a private network, or TLS ended upstream by a proxy or another load balancer.
+
+  - **The option.** The `alb` and `custom` doors (`AlbDoorOptions`, `CustomDoorOptions`) and the stacked door (`CloudFrontOverRouterFrontDoor`) take `allowPlainHttp?: boolean` (default `false`). With `allowPlainHttp: true`, a production synth that would fail with `PlainHttpFrontDoorError` or `OriginSecretOverPlainHttpError` succeeds and warns instead.
+  - **The warning.** `@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction` names what travels in cleartext. Acknowledge it with `Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction')`.
+  - **Sessions.** For the `alb` and `custom` doors, `Hosting` also registers the config entry `BLOCKS_ALLOW_PLAIN_HTTP`. With it, `Auth` issues its same-origin session cookie without `Secure` instead of throwing `AuthErrors.InsecureTransport`. The cookie helpers in `@aws-cdk-blocks/auth-common/cookies` read it fail-closed, from loaded config only on deployed compute: a missing or malformed value still refuses.
+
+  To keep serving plain HTTP in production, add `allowPlainHttp: true` to the door and acknowledge the warning; the deploy and `Auth`'s sign-in then behave as they did before plain-HTTP doors were limited to sandbox deploys. Without the option nothing changes: a sandbox deploy, HTTPS doors and the `'none'` door behave as before.
+
+- adb6077: Front doors that would carry sign-in, session cookies or the router's origin-verify secret over plain HTTP now synthesize only in a sandbox deploy (the `sandboxMode` context the sandbox scripts pass). A production synth fails; a sandbox synth warns as before.
+
+  - **The ALB door without a certificate.** `{ kind: 'alb' }` with no `certificate` and `features.domain`, serving an app with an API, fails synth with `PlainHttpFrontDoorError`. So does a `{ kind: 'custom', door }` whose URL is `http://` with an API; serve it over HTTPS (return an `https://` url). To fix the ALB door, give it a `certificate` and `features.domain` (an HTTPS listener; port 80 redirects to 443), or use the CloudFront or stacked door. A sandbox deploy warns (`@aws-cdk-blocks/hosting:PlainHttpFrontDoor`). The `'none'` door is unchanged: it warns in every stage.
+  - **The stacked door's edge → router hop.** `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` requires an encrypted edge → router hop for the router's `x-blocks-origin-verify` header. With an internet-facing router and no router certificate, synth fails with `OriginSecretOverPlainHttpError`. To fix it, give the router a `certificate` and `features.router.domain` (the edge → router hop becomes HTTPS :443), or set `internal: true` (the edge reaches the router through a CloudFront VPC origin on the AWS network). A sandbox deploy warns (`@aws-cdk-blocks/hosting:OriginSecretOverPlainHttp`).
+  - **Sessions over plain HTTP.** `Auth` issues a session over a plain-HTTP front door only in a sandbox deploy, where its same-origin cookie omits `Secure` as before. Outside a sandbox it refuses: the cookie helpers in `@aws-cdk-blocks/auth-common/cookies` (`resolveCookieSecurity`, `buildCookieSecurityAttrs`) throw the new `AuthErrors.InsecureTransport` (`InsecureTransportException`, HTTP 500 from `Auth`), and no `Set-Cookie` line is written. `Auth` checks this before it stores a session, so a refused sign-in writes nothing and revokes the engine's tokens. Clearing cookies (`Max-Age=0`) are still written, so sign-out and `deleteUser` keep working; `CookieSecurityInput` gains an optional `clearing` flag for them. Deployed compute whose config doesn't name a sandbox counts as production. Cross-domain cookies, HTTPS doors and local development are unchanged.
+
+  Compatibility: these are behaviour changes for production apps on a plain-HTTP door. An app that deploys to production behind `{ kind: 'alb' }` without a certificate (with an API), or behind the stacked door with an internet-facing router and no router certificate, no longer synthesizes until it makes one of the changes above; that also covers `Auth` behind such a door, whose sign-in used to set a cookie without `Secure`. Every other front door is unchanged.
+
+  The `@aws-cdk-blocks/hosting` README also gains a table of where TLS ends on each front door (viewer hop, origin hop, and the secret header each door's origin requires), and a table of the plain-HTTP shapes that are sandbox-only.
+
+- dd1c554: The shared execution role's statements are now merged before CDK packs any overflow into managed policies: statements with the same effect and conditions (and no `Sid`, `NotAction` or `NotResource` differences) that share their actions or their resources are combined, never both lists at once, so no permission is added. The role's overflow managed policies now get logical IDs derived from their contents (`BlocksOverflowPolicy<hash>`), and the role's default policy depends on them, so when a deploy moves statements between the role's policies, a statement is not removed from its old policy before its new policy is attached (CloudFormation otherwise updates those policies in parallel; see aws/aws-cdk#35611). IAM is eventually consistent, so a newly attached policy can still take a few seconds to apply. Because the default policy depends on every overflow policy, making a resource depend on one specific grant to the role (for example `grant.applyBefore()` or a grant's `policyDependable`) while the role is also granted access to that resource can make CloudFormation report a circular dependency; make the resource depend on the whole role instead, or use a separate role.
+
+  Upgrading changes the overflow policies' logical IDs (from `...OverflowPolicyN` to `BlocksOverflowPolicy<hash>`) and their generated names once. Anything keyed on the old logical IDs, such as stack policies or template tests, must be updated. For an app whose role already overflows, the first deploy after upgrading replaces each overflow policy, creating the new one before deleting the old one.
+
+  When the role's grants are packed into overflow managed policies and the role would then carry more managed policies than the per-role quota allows, synth now fails with an error naming the role and the Building Blocks that grant the most (roles without overflow policies are not checked). The `@aws-cdk-blocks/core:managedPoliciesPerRoleQuota` context raises the limit (up to 25) for accounts with an increased quota. Synth also warns when the role is within the quota but a deploy that replaces every overflow policy would briefly exceed it, since the old and new copies are both attached during that deploy.
+
+- 8ece10a: fix(core,hosting): require source conditions on KMS key policies that name a service principal
+
+  The synth-time service-principal check now also reads the key policy of every KMS key in the scopes it covers. An `Allow` statement that names an AWS service principal must carry `aws:SourceAccount` or `aws:SourceArn`, or `kms:EncryptionContext:aws:logs:arn` for CloudWatch Logs. `events.amazonaws.com` is exempt for `kms:GenerateDataKey*` and `kms:Decrypt`, because Amazon SNS documents that these conditions stop EventBridge from publishing to an encrypted topic. A key AWS Blocks creates fails synth; a key your app creates gets a warning, which you can acknowledge with the id `@aws-cdk-blocks/core:kmsKeyPolicyWithoutSourceCondition`.
+
+  A condition now counts, for key policies and for role trust policies alike, only under a positive string or ARN operator (`StringEquals`, `StringLike`, `ArnLike`, …, or their `ForAnyValue:` forms) and with a value that names an account. `…IfExists`, negated (`StringNotEquals`, `ArnNotLike`, …), `Null` and `ForAllValues:` operators don't count. Neither does `*` alone, a wildcard `aws:SourceAccount`, or an ARN whose account segment is empty or a wildcard. A role or key your app creates that relied on one of these forms now gets the synth warning.
+
+  The `Hosting` alarm topic key (regional and `us-east-1` monitoring stacks) now grants `cloudwatch.amazonaws.com` with `StringEquals aws:SourceAccount` and `ArnLike aws:SourceArn` (`arn:<partition>:cloudwatch:<region>:<account>:alarm:*`) in place of `StringEqualsIfExists aws:SourceAccount`. Alarm notifications are still delivered.
+
+- c607deb: Behind a Blocks CloudFront front door, a Lambda handler's `ctx.request.url` is now the URL the client called: the distribution's domain, or the custom domain it was called at (`https://d111.cloudfront.net/cdk-blocks/api/orders`, not `https://<id>.execute-api.<region>.amazonaws.com/cdk-blocks/api/orders`). Links and redirects a handler builds from it stay on the public domain, where the app's cookies are scoped. A container namespace behind the same door already reported that URL; the two compute types now agree. `getRequestBaseUrl()` is unchanged: it stays the gateway's origin and stage, for code that must reach the gateway directly.
+
+  - Applies to the `apiFrontDoor: 'cloudfront'` distribution and to `Hosting`'s CloudFront door (on either tier). A viewer-request CloudFront Function on their API behaviors to the gateway stamps the viewer's host as `x-blocks-public-host`; each door registers its hosts under the backend's `BLOCKS_PUBLIC_HOSTS` config.
+  - A handler takes the stamped host only when it is one of the backend's front-door hosts (for a wildcard alias such as `*.example.com`, a subdomain at any depth, not the apex); any other value is ignored.
+  - Requests sent to the `execute-api` URL directly, and requests through `Hosting`'s other doors (ALB, API Gateway, stacked, bring-your-own), keep reporting the gateway's host.
+  - The sandbox dev server's loopback `X-Forwarded-Host` still takes precedence, so redirect-based sign-in in a sandbox keeps working through the CloudFront URL. In both the Lambda handler and the container, it now contributes only its host: a query, fragment or userinfo in it no longer reaches `ctx.request.url`, and a request path starting `//` or `/\` can't change the URL's host.
+  - A container namespace the gateway proxies to behind a Blocks CloudFront door (on the `apigateway` tier, or when CloudFront can't reach its VPC) also reports the public URL now, instead of the gateway's.
+  - `Auth`'s same-origin relay allowance follows: when a sign-in starts, a `relayTo` on the host the client called behind a Blocks CloudFront door counts as same-origin, where the gateway's `execute-api` host did before. When the IdP calls back, the relay re-check accepts a relay to any host the backend serves over HTTPS (each CloudFront door's hosts and the gateway's), so a sign-in that started on one of a door's hosts, or on the `execute-api` URL, still finishes when the callback arrives on another.
+  - Each CloudFront door adds one CloudFront Function to the account.
+
+- 2095f31: fix(core): `ctx.request.url.pathname` no longer includes the API Gateway stage when deployed
+
+  On AWS, a `RawRoute` handler's `ctx.request.url` had the API Gateway stage in front of the path (`/prod/bench/me`), while `npm run dev` gave the route path (`/bench/me`). A handler that sub-routed on `url.pathname` passed every local test and returned its own 404 for every request after deploy. Behind `Hosting`, the stage wasn't part of the browser's URL either.
+
+  `ctx.request.url.pathname` is now the route path in every environment, on Lambda and on a container compute, which took the stage from the front door's `x-blocks-forwarded-stage` header. The origin is unchanged: on AWS it is still the host the backend received, which behind a front door is the API Gateway host. An HTTP API `$default` stage is no longer prepended either, and a request path starting with `//` no longer changes the URL's host.
+
+  This is a `minor` bump because it changes an existing value. If you build an absolute link from `ctx.request.url.pathname` or `href` while clients call the API Gateway URL directly, add the stage yourself, or build the link from your app's configured origin. The likeliest such code resolves a relative path against the request URL: `new URL('next', ctx.request.url)` used to give `/prod/…/next` and now gives `/…/next`. Building Block authors who need the externally reachable base, stage included, can use the new `getRequestBaseUrl(ctx)` from `@aws-cdk-blocks/core/bb-utils`; every transport sets it for every request it dispatches.
+
+  `@aws-cdk-blocks/bb-auth` now takes the stage for its fallback callback URL (the direct engine's `redirect_uri` when no public origin is configured) and its stub IdP issuer from `getRequestBaseUrl()`, so those URLs are unchanged.
+
+  The `@aws-cdk-blocks/bb-container-compute` design notes now say that the stamped stage goes to `getRequestBaseUrl()`, not to the request path.
+
+- d354055: Add `secretsStore: 'ssm' | 'secrets-manager'` to `BlocksDefaults`. It sets where AWS Blocks stores the keys it generates for its own Building Blocks. `BlocksPresets.production` uses `'secrets-manager'` and `BlocksPresets.sandbox` uses `'ssm'`. Secrets you declare yourself are not affected.
+
+  The field is required. Apps that spread a preset are unaffected; a hand-written `BlocksDefaults` object must add it.
+
+  Also adds an internal `@aws-cdk-blocks/core/internal` entry point, for AWS Blocks' own Building Blocks only, with `refreshConfig()`: a rate limited reload of the deployed config file for code that finds its config out of date.
+
+- 58817b0: fix(core): add aws:SourceAccount/aws:SourceArn conditions to service-principal trust policies; add synth-time check
+
+  The IAM roles AWS Blocks creates for a backend now scope every service-principal trust to the stack's account:
+
+  - The `KnowledgeBase` Bedrock service role adds `aws:SourceArn` matching `arn:<partition>:bedrock:<region>:<account>:knowledge-base/*` beside its existing `aws:SourceAccount` condition.
+  - The waiter state machine roles of the `KVStore` index provider and the `Database` migration provider trust `states.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:states:<region>:<account>:stateMachine:*`.
+  - The `ContainerCompute` task execution role trusts `ecs-tasks.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:ecs:<region>:<account>:*`, the same scope as its task-role trust.
+  - The `Auth` SMS role (created for phone sign-in or SMS MFA) trusts `cognito-idp.amazonaws.com` only with `aws:SourceAccount` and `aws:SourceArn` matching `arn:<partition>:cognito-idp:<region>:<account>:userpool/*`, beside the `sts:ExternalId` it already had.
+  - The `@aws-cdk-blocks/hosting` API Gateway REST door no longer creates CDK's per-API CloudWatch role and `AWS::ApiGateway::Account` setting; its stage configures no logging.
+
+  Synth now checks the roles AWS Blocks covers for a backend for a service-principal trust with neither an `aws:SourceAccount` nor an `aws:SourceArn` condition. That is the same set of roles `defaults.permissionsBoundary` applies to: for a `BlocksStack` the whole stack, for an embedded `BlocksBackend` its subtree and the stack-level roles created on its behalf. Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`) are accepted as they are, as is the `apigateway.amazonaws.com` trust of an API Gateway CloudWatch Logs role: any role an `AWS::ApiGateway::Account` in the same stack names as its `cloudWatchRoleArn`, such as `BlocksApiGatewayCloudWatchRole` (created by `@aws-cdk-blocks/core` and `@aws-cdk-blocks/hosting` when access logging is on) or the default `cloudWatchRole` of a CDK `RestApi` the app adds. That trust stays unconditioned: API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with this role, so a condition stops log delivery.
+
+  - A role AWS Blocks creates (under an AWS Blocks Building Block or a compute, or at stack scope on a block's behalf) fails synth; the error names the role's construct path and the principal.
+  - A role the app creates gets a synth warning instead, and synth succeeds: one its backend module adds (on a `BlocksStack` or an embedded `BlocksBackend`, at stack scope, under a `Scope` namespace, or inside a custom block the app writes as a `Scope` subclass), one added to a `BlocksStack` after `create()`, and one a CDK construct creates inside any of these (for example the `EventsRole` of an `events.Rule` targeting a state machine).
+
+  Ownership follows who created the role: AWS Blocks' own blocks, computes and stack-level helpers mark the constructs they create, and every other covered role is the app's.
+
+  To resolve the warning, add both conditions to the role's trust statement. For a role a CDK construct creates with no prop for its trust, set them with `role.node.defaultChild.addPropertyOverride('AssumeRolePolicyDocument.Statement.N.Condition', { ... })`; the warning names `N`. To keep the trust as it is, acknowledge the warning with `Annotations.of(role).acknowledgeWarning('@aws-cdk-blocks/core:serviceRoleTrustWithoutSourceCondition')`, or on the stack for every role in it. See "Service-principal trust" in the `@aws-cdk-blocks/core` README.
+
+### Patch Changes
+
+- 63e571c: Use AWS CDK Blocks consistently in starter apps, CLI messages, package metadata, and documentation. Package imports and commands are unchanged.
+- cad7bb8: Fix the Agent on AgentCore Runtime failing every turn with `BLOCKS_RT_CALLBACK_URL not set` after a first deploy. The Runtime could start before the deployment uploaded the app config file, and then kept the empty config. The Runtime now loads the config again on each invocation until the file is readable, and imports the backend only after that. A turn that arrives earlier is rejected, so `stream()` throws instead of saving an error message.
+- d01c34c: Export types that public signatures already use
+
+  - **Exported types (type-only, additive).** `@aws-cdk-blocks/bb-agent` now exports `AgentBase` (the base class of `Agent`, as a type), `ConversationManagerConfig`, `MessageMetadata`, `GuardrailsConfig` and `InferenceConfig`; `@aws-blocks/bb-data` exports `WhereClause` (the type of `QueryOpts.where`) and `Operator` (its per-field operators); `@aws-cdk-blocks/bb-realtime` exports `InferMessage`; `@aws-cdk-blocks/core` exports `ApiNamespaceConstructor` (the type of `ApiNamespace`) and `AsyncAPI` (the type of an `ApiNamespace` instance). These already appeared in the packages' public signatures but could not be named by apps.
+  - **No type changes.** `registerSdkIdentifiers` and `getAllSdkIdentifiers` in `@aws-cdk-blocks/core` spell their identifier record as `Record<string, string>` instead of a private alias of the same type.
+
+- 75c5d98: fix(bb-auth): copies of `auth.admin` methods are never served over RPC
+
+  Each `auth.admin` method is registered as server-only, and the RPC dispatcher
+  refuses a server-only function by identity. Copying the methods into another
+  object (`{ ...auth.admin }`, `Object.assign({}, auth.admin)`, a destructured
+  method under any name) answers _method not found_, like exporting the handle
+  itself. The generated client has no proxy for an admin method exported on its
+  own, matching what the server serves. Calling `auth.admin` methods from server
+  code works as before, and
+  `Object.keys(auth.admin)` is unchanged. To serve an admin action, write your
+  own method that checks the caller and then calls `auth.admin`.
+
+- 5f55dac: Auth broadcasts are tagged per API, so `onAuthChange` for one API no longer receives another API's user. With two auth blocks on one page, signing in to one no longer hands its user to the other's listener (typed as the other's user), in this window or in another tab, and the other block's store no longer refetches.
+
+  `submitAuthAction` tags its sign-in and sign-out messages with the RPC namespace of the API it ran on (a generated client now answers `Symbol.for('aws-blocks.apiNamespace')` with it), and `broadcastAuthChange(user, api)` takes an optional `api` to do the same. An untagged message still reaches every API's listeners: `broadcastAuthChange(user)` without an `api`, and a message from a tab running an older `@aws-cdk-blocks/auth-common`. An API that is not a generated client (a hand-written `AuthStateApi`) has no namespace: `submitAuthAction` on it sends untagged broadcasts, and its listeners and store receive every message, tagged or untagged. The message format (the `blocks-auth` channel and the `blocks-auth-change` window event, `{ type: 'auth-change', user }`) only gains the optional `api` field, so tabs running an older bundle keep working.
+
+- 2eb62fa: The `hasAuthError` example in the `@aws-cdk-blocks/core` README and JSDoc now submits the action with `submitAuthAction` from `aws-cdk-blocks/ui` and imports `hasAuthError` from `aws-cdk-blocks/client`. The old example called `authApi.setAuthState()` directly, which signs the user in but never notifies `onAuthChange` or `AuthenticatedContent`, so a custom form built from it stayed on the sign-in screen. The `installCookieJar` documentation from `aws-cdk-blocks/utils` now shows up in editors, because it is attached to the function instead of an internal variable.
+
+  The `AGENTS.md` that `create-blocks-app` adds to new apps now says that `onAuthChange` fires for sign-ins and sign-outs made through `Authenticator` or `submitAuthAction`, lists `submitAuthAction` for custom auth forms, and warns that a direct `authApi.setAuthState()` call notifies nothing on the page.
+
+- 5f55dac: **Breaking: `AuthBasic`, `AuthCognito` and `AuthOIDC` are removed. Use `Auth`.** The `@aws-blocks/bb-auth-basic`, `@aws-blocks/bb-auth-cognito` and `@aws-blocks/bb-auth-oidc` packages are no longer part of AWS Blocks and receive no further releases. `Auth` (`@aws-cdk-blocks/bb-auth`, also exported from `aws-cdk-blocks`) replaces all three.
+
+  `aws-cdk-blocks` no longer exports `AuthBasic`, `AuthBasicErrors`, `AuthCognito`, `AuthCognitoErrors`, `AuthOIDC`, `AuthOIDCErrors`, `cognitoFederated`, `customOidc`, `google`, or the types `AuthBasicOptions`, `AuthBasicUser`, `AuthCognitoOptions`, `AuthFlowType`, `CognitoUser`, `MFAPreference`, `AuthOIDCErrorName` and `OIDCUser`. `getSdkIdentifiers()` no longer has overloads for `AuthCognito` and `AuthOIDC`; `getSdkIdentifiers(auth)` returns `{ userPoolId, clientId, region, hostedUiDomain, hostedUiClientId }`, every field optional: an `Auth` without a user pool (a `store: 'builtin'` block) registers none of them, and `hostedUiDomain` / `hostedUiClientId` are set only when a provider federates through Cognito.
+
+  **How to migrate.** From your app's root, run the codemod, then follow `MIGRATION.md` in `@aws-cdk-blocks/bb-auth`:
+
+  ```bash
+  npx @aws-cdk-blocks/bb-auth migrate --dry-run   # preview the changes
+  npx @aws-cdk-blocks/bb-auth migrate             # rewrite the files
+  ```
+
+  It rewrites imports, class names, options, renamed methods and error names, never changes a block's id, and leaves a `TODO(aws-blocks-auth-migrate)` comment wherever you have to decide something. Keep every block's id exactly as it is: the id names the deployed resources, and changing it replaces the user pool and deletes its users.
+
+  - **`AuthCognito`:** switching to `Auth` with the same id keeps your user pool, its users and their signed-in sessions.
+  - **`AuthOIDC`:** directly federated providers keep working and users keep their `userId`, but everyone signs in once more. A `cognitoFederated()` provider's user pool is replaced, so those users get a new `userId`; `MIGRATION.md` shows how to re-key their data.
+  - **`AuthBasic`:** there is no upgrade path for its users. Amazon Cognito can't import its password hashes, so every user signs up again. An existing `AuthBasic` session cookie is signed out and cleared on the next request, never an error.
+
+  **`BlocksAuth.requireRole(context, role)` is now required** (`@aws-cdk-blocks/auth-common`). It was optional only because `AuthBasic` and `AuthOIDC` had no roles. If you implement `BlocksAuth` yourself, add `requireRole`: throw 401 `NotAuthenticatedException` when there is no session and 403 `NotAuthorizedException` when the user isn't in `role`.
+
+  Telemetry: `@aws-cdk-blocks/core` no longer counts `AuthBasic`, `AuthCognito` and `AuthOidc` as official Building Blocks; `Auth` is.
+
+- 5f55dac: Add auth test helpers to `aws-cdk-blocks/utils`. Both are Node-only and are not reachable from any browser entry.
+
+  - `getLastAuthCode(username, { block?, purpose?, cwd? })` returns the verification code the local pool sent to a user, for e2e tests of sign-up, password-reset, MFA and attribute-verification flows. It finds the block's data under `.cdk-blocks/local/data/` itself, so renaming the scope or the block doesn't break the test. It reads the codes the pool still holds, so a user's code is still found after another user's code was sent. When there is nothing to read, it throws an error that names what each local block last sent. It is also exported from `@aws-cdk-blocks/bb-auth/testing`.
+  - `createTestClient(clients)` returns the app's typed clients (for example `createTestClient(await import('cdk-blocks'))`) with a cookie jar of their own. A test can now act as two users at once, such as an owner and an intruder, without signing out between steps. The shared jar from `installCookieJar()` is never involved.
+
+  To support this, the generated API client (`ApiNamespaceClient`) now sends a call with the `fetch` that the call's async context supplies, when there is one. Nothing changes for an app that doesn't use `createTestClient`.
+
+  `installCookieJar()` now keeps request headers passed as a `Headers` instance or an entry list; it used to send only its `cookie` header for those.
+
+- 5f55dac: A signed-in user can enrol an authenticator app (TOTP) through `auth.createApi()`, with no backend code: `setAuthState` takes `setUpTotp`, `verifyTotpSetup`, `getMfaPreference` and `updateMfaPreference` actions. `setUpTotp` returns a state whose `verifyTotpSetup` action carries the shared secret (`sharedSecret`) and an `otpauth://` URI (`otpauthUri`, the QR code's content) as hidden fields; the other actions return the user's MFA settings, one `updateMfaPreference` action per change they can make. A wrong code is `retriable`; a caller who is not signed in gets the `NotAuthenticatedException` state. Replacing an enrolled authenticator and setting a factor `'DISABLED'` need a recent sign-in (`session.freshAgeSeconds`); a stale session gets the `ReauthenticationRequiredException` state, so a stolen session cookie cannot swap the authenticator or turn MFA off. The actions follow the block's options, in the frontend too: `setUpTotp` / `verifyTotpSetup` need `mfa` on with `'TOTP'` in `mfa.types` (`TotpEnabled<O>`), the preference actions need `mfa` on and take only the factors in `mfa.types`; untyped callers get `MfaNotEnabledException` or `InvalidParameterException`. The new `mfa.totpIssuer` option sets the issuer authenticator apps show (default: the root `Scope` id).
+
+  `MfaSettings(authApi, options?)` (from `aws-cdk-blocks/ui`, `@aws-cdk-blocks/bb-auth/ui` or `@aws-cdk-blocks/auth-common/ui`) is the enrolment panel for an account page: the setup key, an `otpauth://` link and, with `renderQrCode`, a QR code from the library of your choice, then the code form and the preference buttons, each a `<form>` with stable `mfa-settings-*` test hooks. It leaves the shared auth-state store alone, so a mounted `Authenticator` is unaffected; the `Authenticator`'s signed-in card does not change.
+
+  Native clients: the `setAuthState` input union gains the four actions (additive). Code that matches exhaustively over that input needs the new cases: an exhaustive Swift `switch` over the `Input` enum, a Kotlin `when` over the sealed input class used as an expression, and a Dart `switch` over the sealed input class.
+
+  Dev-server logs redact `otpauth` fields (`otpauthUri` embeds the TOTP secret).
+
+- e529b00: docs: the README error examples now import the error constants and `isBlocksError` from `aws-cdk-blocks`, which every scaffolded app depends on. The same import works in backend and client code.
+- b2eb306: Run `npm run sandbox:preview` to deploy a hosted preview once and print its URL, or `npm run -s sandbox:preview -- --query url` for the recorded URL. `startSandbox` accepts `previewInvocation` to customize the recovery hint when a plain deploy would overwrite the preview.
+- aaf419f: Run the CDK commands of the sandbox, deploy and destroy scripts without a shell
+
+  The `cdk` children the lifecycle scripts start (`synth`, `deploy`, `watch`,
+  `destroy`) now always get their arguments as separate argv entries, never
+  through a shell. Only the sandbox's local dev-server command, which is a
+  configurable command line, still runs under a shell. `create-block` trims
+  trailing whitespace with `String.prototype.trimEnd()` when it wires a new
+  block's exports, with the same result.
+
+- 5938d8b: CLI output now names the project AWS CDK Blocks: `create-blocks-app` progress and help text, the `blocks` CLI errors, status lines and docs output, and the first-run telemetry notice. The `.gitignore` section that `create-blocks-app` adds to an existing project is headed `# AWS CDK Blocks`.
+- a5e754b: docs(core): name the `ApiNamespace` constructor's second parameter `label` and document it
+
+  The second `new ApiNamespace(scope, label, handler)` parameter is now named `label`, and its JSDoc says that
+  clients never send it: they call a namespace by the name it is exported under from the backend module, so
+  `export const api = new ApiNamespace(scope, 'todos', handler)` is called as `api.list()`.
+  `BlocksRequest.apiNamespace` now refers to the constructor's `label` argument. No runtime change.
+
+- 76fd75c: The container compute's default image, `public.ecr.aws/docker/library/node:24-slim`, is now pinned by its multi-arch index digest, as a digest-only `node@sha256:…` reference. Every task start pulls the same image, and a re-pushed tag no longer changes what runs under the stack's execution role. A custom `image` is still used exactly as written. The `image` docs now recommend pinning custom images by digest.
+- 3ae8592: fix(bb-container-compute): deploys no longer reset an autoscaled container's task count
+
+  A container `Compute` with autoscaling no longer declares a task count in its
+  CloudFormation template. Before, every deploy that changed the app's code reset
+  the running task count to `minInstances`, stopping tasks that were running jobs.
+
+  Running jobs also get longer to finish when a task is stopped by a deploy or by
+  scale-in: the container now waits up to 120 seconds (the AWS Fargate maximum),
+  up from 25 seconds. A job still running after that is stopped and retried.
+
+  The `bb-compute`, `bb-async-job` and `bb-cron-job` READMEs now say that a deploy
+  restarts a job still running after that window, and that the restart counts as
+  one of the job's attempts.
+
+- e5822ed: A container compute on the default image now runs as the image's unprivileged `node` user (uid/gid 1000) instead of root. It boots from `/home/node/app` and starts in `/home/node` (its working directory), both owned by that user. The API and readiness ports (8080/8081) aren't privileged, so most apps keep working unchanged. Code that relied on root no longer works on the default image: writing to `/app` (no longer created), to `/` or under `/usr/local`, or installing packages at boot. As in Lambda, write scratch files under `/tmp`; relative paths resolve under `/home/node`. A custom `image` is unaffected: it still runs as the image's own default user, in its own working directory, and boots from `/app`. If your app needs root on the stock Node image, set `image` to it explicitly.
+- 3ae8592: feat(bb-container-compute): scale a container compute to zero between jobs
+
+  A container `Compute` with `scaling: { minInstances: 0 }` now starts a task when
+  a job is waiting. Before, a service at zero tasks never woke for a backlog
+  smaller than `backlogPerInstance` (default 100), so its jobs were never run.
+
+  ```ts
+  const worker = new Compute(scope, "worker", {
+    type: "container",
+    scaling: { minInstances: 0, maxInstances: 2 },
+  });
+  ```
+
+  Use `minInstances: 0` only for long-running jobs that can tolerate high latency
+  before they start; most workloads should use `minInstances` of 1 or more. Waking
+  usually takes a few minutes (queue metrics, the scaling alarm, and the task's
+  start), and up to about 20 minutes when the job's queue has been idle for more
+  than six hours. Computes with `minInstances` of 1 or more deploy the same
+  autoscaling as before.
+
+  `minInstances: 0` also requires at least one `AsyncJob` or `CronJob` on the
+  compute and the default (or `queue-depth`) scaling strategy. Anything else fails
+  synth: with no job nothing would ever start a task, and a `cpu` or `memory`
+  strategy could scale in to zero while a job is still running.
+
+  Instance bounds are now checked at synth: `minInstances` must be an integer of
+  0 or more, `maxInstances` an integer of 1 or more, and `minInstances` must not
+  exceed `maxInstances`.
+
+- 9059918: Refactor the Lambda handler's HTTP request handling into a shared internal module, in preparation for container computes. Lambda responses are unchanged.
+- 1deb34b: fix(core): `defaults.appIdentity` reports more of what reaches outside the app
+
+  The IAM report's app-isolation check (`cdk.out/<stack>.blocks-iam.json`) now
+  also flags:
+
+  - a resource policy that lets in someone who isn't this app — everyone,
+    another account, another app's role, `NotPrincipal`, or a public Lambda
+    function URL — in a Lambda or layer permission, or a bucket, queue, topic,
+    secret, KMS key or replica key, REST API or EventBridge bus policy, in any of
+    the app's stacks, including Hosting's helper and edge stacks. A service
+    principal, the app's own roles and the account's root are fine, and everyone
+    only when a condition pins it to the app's own ARNs in this account
+    (`aws:SourceArn`, `aws:PrincipalArn`), to `aws:PrincipalTag/app` together
+    with `aws:PrincipalAccount`, or on a public REST API. A policy the check
+    can't read (an intrinsic, a string) is reported;
+  - a name-fenced resource (table, queue, bucket, function, layer, parameter,
+    log group, RDS cluster or instance, vector bucket, event rule or bus,
+    schedule, secret or state machine) that the app names outside its prefix, which the platform's
+    execution policy would refuse to create;
+  - a literal grant on another app's Lambda layer, RDS cluster or instance (also
+    through the RDS Data API) or S3 Vectors bucket, which was checked only for a
+    wildcard before.
+
+  Lambda layer names that `appIdentity` truncates to 140 characters now end in a
+  hash of the whole logical id, so two long logical ids no longer get the same
+  name. The core README's pipeline check also rejects a report written with
+  `reportOnly`, which the app's own code sets.
+
+- d46dfaf: fix(core): the CDK bootstrap command in the "not bootstrapped" message names the profile the deploy uses
+
+  `npm run deploy -- --profile prod` in an account and Region that CDK never bootstrapped printed `npx cdk bootstrap aws://<account>/<region> --app=` without `--profile prod`, so the command bootstrapped the default profile's account, or failed. The hint took its profile from the deployment target, which holds only the `cdk.json` profile or `AWS_DEFAULT_PROFILE`, while the task’s `--profile` sets `AWS_PROFILE`. It now names the profile CDK deploys with, `AWS_PROFILE` included, and still none when the deploy uses access keys from the environment.
+
+- b2eb306: fix(core): production destroy and deploy guidance for AWS Blocks package tasks
+
+  - The production `destroy()` loads `.env.production` and sets `BLOCKS_STAGE=production`, as `deploy()` does, so it deletes with the credentials and Region the deploy used. Before, an `AWS_PROFILE` or `AWS_REGION` set only in `.env.production` was ignored, and the destroy targeted the default profile or another Region.
+  - The production `destroy()` takes an optional `stackName`. When CloudFormation has no stack of that name in the target Region, it prints `There is no stack <name> in Region <region>; nothing to delete.` and runs no `cdk destroy`, which reported a missing stack as `✅ Production stack destroyed!`.
+  - `openConsole()` takes an optional `region`, the Region the stack is in, instead of always using the configured Region.
+  - The deploy guidance can name the command the user runs: `assertAwsCredentials()` takes an `invocation` (default `npm run <command>`) for its no-Region, network and credential messages and the CDK bootstrap message; `DeployOptions`, `DestroyOptions` and `SandboxOptions` take an `invocation` (the sandbox also a `destroyInvocation`, for its Ctrl-C and failure recovery lines), and `destroySandbox(backendPath, { invocation })` passes it on, also to the Lambda@Edge re-run hint. Without them the messages are unchanged.
+  - With a `stackName`, the production `destroy()` first lists the CDK app's stacks with `cdk ls`, and refuses, deleting nothing, when the app does not define that stack: `cdk destroy` acts on the stacks `index.cdk.ts` defines, not on the name the caller confirmed.
+  - The error for a missing `.cdk-blocks/config.json` or `stackId` says that, for an app already deployed, `<id>-prod` must be the name of its existing production stack; another id makes the next deploy create a second production stack.
+  - `getStackId()` says `.cdk-blocks/config.json is not valid JSON (<parse error>)` for a file that does not parse, instead of "not found or missing stackId".
+  - `readAwsIdentity()` reports a selected profile that is not in the AWS config files even when no Region is set, instead of returning no identity, which `npm run whoami -- --profile <typo>` reported as "no AWS Region is set".
+  - The production deploy no longer lists "Frontend hosting (S3 + CloudFront)" for an app without a frontend.
+  - The production `destroy()` reads only stack ids from `cdk ls`: the frontend build and CDK notices that synthesizing the app prints to stdout are no longer listed as stacks in its "the CDK app defines …" refusal.
+  - The `npx cdk bootstrap` command that the bootstrap check prints passes `--profile <profile>` when the deploy uses a profile, so it bootstraps the same account from a shell that does not export `AWS_PROFILE`.
+  - `SandboxOptions.onDeployed`, when set, is called with the sandbox stack, its API URL and frontend URL after the first deploy, in watch mode too (before `cdk watch` starts), and awaited.
+  - `deployedStackExists({ stackName, region?, env?, projectRoot? })` (from `@aws-cdk-blocks/core/scripts`) tells whether CloudFormation has a stack, with the credentials and Region CDK deploys with: `false` only when the stack does not exist, `undefined` when it cannot tell. The production `destroy()` uses it.
+
+- 0cf1aa2: The typed API client now rejects with an `ApiError` when a response is not a JSON-RPC envelope, such as a gateway's own `429`, `403`, `502` or `504` reply or an HTML error page, instead of resolving `undefined`. The error carries the HTTP status and the gateway's `message` when present.
+- 15e65b4: fix(client): `@aws-cdk-blocks/core/client` now bundles for React Native (Hermes)
+
+  The client's Node-only `.cdk-blocks-sandbox/config.json` fallback loaded `fs` with
+  `await import(/* webpackIgnore: true */ 'node:fs')`. Expo's Metro honors the
+  `webpackIgnore` comment and leaves a native dynamic `import()` in the bundle,
+  which Hermes cannot compile, so every Expo / React Native build that imported a
+  generated Blocks client failed at the `hermesc` step — even though that branch
+  never runs outside Node. The fallback now uses `process.getBuiltinModule('node:fs')`,
+  which bundlers leave alone and Hermes can parse. Reading the config file now
+  requires Node.js 22.3 or later. On Node.js 22.0 to 22.2 the file is not read:
+  set `BLOCKS_API_URL`, or upgrade Node.js. The "API URL not configured" error
+  names this requirement when it applies.
+
+- 3081521: The deployed Lambda handler now reads the `x-blocks-user-agent` request header in any letter case. Before, a client that sent the header in another casing over HTTP/1.1 lost its `client/<lang>/<version>` attribution. The Swift, Kotlin, and Dart clients were not affected.
+- d46dfaf: fix(core): keep the dev server, sandbox, deploy and destroy running when their output pipe or terminal closes
+
+  When stdout or stderr lost its reader, the next log line crashed the process with `write EPIPE` (a closed pipe) or `write EIO` (a closed terminal). That happened with `npm run sandbox 2>&1 | tee log` after a Ctrl-C, which also stops `tee`. It also happened with a background `npm run dev &` whose pipe went away, and when you closed the terminal mid-deploy. A piped `npm run sandbox` crashed before it reaped `cdk watch` and the dev server, so `cdk watch` kept deploying to AWS. A deploy whose terminal closed died with its CDK child, so nothing recorded the result.
+
+  - The dev server, `startSandbox`, `destroySandbox`, `deploy` and `destroy` now ignore those write errors and drop the output that can't be written. Any other stream error still ends the process. The shared helper is exported from `@aws-cdk-blocks/core/scripts` as `ignoreClosedOutput()`, and the error codes it drops as `CLOSED_OUTPUT_CODES`.
+  - On Ctrl-C, `npm run sandbox` reaps `cdk watch` and the dev server first and prints only after that. Its message is now `🛑 Stopped local processes.`
+
+- c1fabce: feat(core): report the deployed stack's outputs from `deploy()` before the liveness wait
+
+  `DeployOptions.onDeployed`, when set, is called with the stack name, API URL and frontend URL that `deploy()` read from `.cdk-blocks-sandbox/outputs.json`, right after the read and before the `--wait-live` wait. A sandbox deploy of the same app rewrites that file with only its own stack, so a launcher that reads the file after `deploy()` resolves can miss the production entry. Without the option nothing changes.
+
+- d46dfaf: fix(core): `destroy` and `sandbox destroy` stop at once on an error that a retry can't fix
+
+  - With no AWS Region set, both destroys now stop before running CDK and say to set `AWS_REGION` (or the profile's Region) to the Region the stack was deployed to. Before, the credential pre-check was skipped, and CDK's `UnresolvedAccount` failure was retried for about 3.5 minutes.
+  - A `cdk destroy` attempt that fails because the AWS account can't be resolved, the Region is missing, or the credentials are missing, expired or rejected is no longer retried. The destroy fails after that attempt.
+  - `sandbox destroy` now loads `.env.local` before the credential pre-check, as the sandbox deploy does, so an `AWS_PROFILE` or `AWS_REGION` set there is the target that gets checked.
+
+- d46dfaf: fix(core): with `--host <address>`, the dev server's URLs and CORS use that address instead of localhost
+
+  When the dev server bound one specific address (`npm run dev -- --host 10.0.0.5`, or `BLOCKS_DEV_HOST`), it still printed `http://localhost:<port>`, wrote `apiUrl: http://localhost:<port>/cdk-blocks/api` to `.cdk-blocks-sandbox/config.json`, and pointed the realtime WebSocket URL at localhost. A server bound to `10.0.0.5` isn't reachable at any of those. Its CORS fallback was also a hard-coded `http://localhost:3000`, whatever the port.
+
+  - The banner, `config.json` `apiUrl` and the realtime URL now use the bound host. Loopback and all-interfaces binds (`0.0.0.0`) keep using `localhost`.
+  - CORS still reflects localhost origins. It now also reflects origins on the specific host the server binds, on any port. The fallback is the server's own origin, `http://<host>:<port>`.
+  - New exports: `devUrlHost(host)`. `resolveDevCorsOrigin`, `buildDevCorsHeaders` and `buildBlocksConfig` take the bound host (and port) as an optional last argument.
+
+- d46dfaf: fix(core,data-common): the dev server closes its local databases when it stops
+
+  The local PGlite engines (bb-data, and the DSQL mock) close on Node's `beforeExit`, which `process.exit()` skips. The dev server ends with `process.exit()`, so every stop, Ctrl-C and `npm run dev:stop` included, left PostgreSQL's `postmaster.pid` in `.cdk-blocks/local/data`, and every start printed `Removed stale postmaster.pid`. A leftover lock therefore could not tell a crash from a stop.
+
+  - The dev server now closes those engines when it stops or reloads, while it stops the frontend, waiting at most 3 seconds. Only a crash or a SIGKILL leaves `postmaster.pid` behind.
+  - `closeOnProcessExit()` keeps its closers in one process-wide set (`Symbol.for('aws-blocks.local-engine-closers')`), shared by every copy of `@aws-blocks/data-common`, which the dev server runs. New export from core's dev-server module: `closeLocalEngines()`.
+
+- d46dfaf: fix(core): let an app keep its own `cdk-blocks/client.js` under the dev server
+
+  At every start in local mode, the dev server regenerated `cdk-blocks/client.js` from the backend. In the Amplify overlay that replaced the hand-written client, which reads the API URL from `amplify_outputs.json` and adds the Cognito token, with the generic one. The client is committed, so the next deploy could ship it without auth.
+
+  Set `"generateClient": false` in `package.json#blocks.dev` (or pass `startDevServer({ generateClient: false })`) to keep the existing `client.js`. When the option isn't passed, the dev server reads the setting from the app's `package.json`. The default is unchanged: the client is regenerated.
+
+- d46dfaf: fix(core): stopping `npm run dev` no longer leaves its pidfile behind
+
+  The dev server keeps its pidfile on the SIGTERM that `tsx watch` restarts it with, so a `dev stop` right after an edit still finds it. A stop sends the same SIGTERM: AWS Blocks package tasks signals the dev server and then its `tsx watch`, and `tsx watch` relays a SIGTERM it receives. Each of these stops left `.cdk-blocks-sandbox/dev-server.<port>.pid` naming a process that had exited.
+
+  - On that SIGTERM, the dev server now starts a small detached watcher. When `tsx watch` exits while the pidfile still names the old dev server, the watcher removes the pidfile.
+  - On a reload, the successor takes the pidfile over and the watcher exits. The watcher also exits after ten minutes at most.
+
+- d46dfaf: fix(core): the dev-server pidfile never goes missing while a reload takes it over
+
+  When `tsx watch` restarted the dev server after an edit, the new dev server took over the pidfile by moving the old one away and then creating its own, so for a moment there was no pidfile, and `npm run dev:stop` at that moment found no dev server to stop. The new dev server now replaces its predecessor's record in one step. A stale pidfile left by a session that has ended is still taken over as before.
+
+- d46dfaf: fix(core): a stop while the dev server starts, or a backend that fails to load, leaves no stale pidfile
+
+  - The dev server claims its pidfile before it loads the backend, but it installed its stop handling only once its server listened. A group SIGTERM in between (2–3 s into `npm run dev`, while the backend loaded) ended it by the default signal disposition and left its record behind. It now handles a stop from the moment it holds the record: it removes it (or leaves it to a `tsx watch` reload's successor, as a later stop does), closes any local database the backend opened, and exits.
+  - When the dev server died without removing the record it took over from `npm run dev`, for example because the backend threw while it loaded, the record outlived the session. The `release()` that `claimDevSession()` returns, which `npm run dev` calls once its dev server has ended, now also removes a record that nothing alive names. A live record is never removed.
+
+  Both were harmless, since the next `npm run dev` or `npm run dev:stop` cleared the record as stale, but `npm run dev:stop -- --all` listed the port meanwhile.
+
+- d46dfaf: fix(core): the dev server no longer kills other processes that hold its port or frontend port
+
+  At startup the dev server sent SIGTERM, then SIGKILL, to any process listening on its port or frontend port, on the assumption that it was a leftover of its own. That killed unrelated servers, and when two apps shared a frontend port, the second app's dev server killed the first app's frontend.
+
+  The dev server now records its frontend's process group in its pidfile. At startup it stops a listener only if that listener is in the frontend group recorded by this app's previous dev server, for example a Vite left behind when that dev server crashed. If anything else holds the port, the dev server stops nothing and exits with code 1, naming the process: `port 3100 is in use by pid 4242 (…)`. The message tells you to stop that process or choose another port with `--port` / `--frontend-port`. On Windows, where process groups aren't recorded, no listener is ever stopped.
+
+- c045273: Hardening for the local dev server: it now answers `403 Forbidden` to any request whose `Host` header isn't `localhost`, `127.0.0.1`, `[::1]` or the host configured with `BLOCKS_DEV_HOST` / `startDevServer({ host })`, before the request is dispatched or proxied. This blocks DNS rebinding, where a page on another site re-points its own DNS name at `127.0.0.1` to call the local API. With a wildcard bind (`0.0.0.0` / `::`), requests by IP address are still served; to open the app by a hostname, set `BLOCKS_DEV_HOST` to that hostname. The local `/cdk-blocks/settings` shortcut also checks each request now, and opens `.cdk-blocks/local/data/settings.json` only for a request from the address bar or the app itself; a request another site triggers gets `403`.
+- d46dfaf: fix(core,blocks): one `npm run dev` per app, whatever its port
+
+  A second `npm run dev` of the same app on another port (`npm run dev -- --port 42412` while one runs on 42411) used to start. Both opened the app's `.cdk-blocks/local/data`: the second PGlite removed the first one's live `postmaster.pid`, both ran PostgreSQL on one data directory, and the writes acknowledged by one of them were lost on the next start. A dev server in `npm run sandbox` and `npm run dev` of the same app split their configs the same way.
+
+  - A dev server, or a `npm run dev` claiming its session, that finds a live dev-server pidfile of the app on another port now refuses to start, removes the record it wrote, and exits 1 with `a dev server of this app is already running on :<port> (pid <pid>)`. The pidfiles stay per port, with the same exclusive claim; each start writes its record before it reads the others', so of two starts on two ports at the same moment at least one refuses.
+  - The hint names the running server's port, `npm run dev:stop -- --port <port>`, and no longer suggests another `--port`, which would not help.
+  - `claimDevPidfile()` and `claimDevSession()` return that port as `port` when they refuse. New export from the dev-server module: `devStopCommand(port)`.
+  - `npm run sandbox`, when it will start a dev server (neither `sandbox deploy` nor `sandbox preview`), refuses before the synth and the deploy while a dev session of the app runs or is starting on any port, with `A dev server of this app is already <running|starting> on :<port> (pid <pid>)` and the `dev stop --port` command. Before, it deployed, then its dev server was refused and the sandbox ended. New exports: `liveDevSession()` from `@aws-cdk-blocks/core/scripts/dev-pidfile`, and `assertNoRunningDevServer()` from the sandbox module.
+
+- d46dfaf: fix(core): a second dev server on the same port exits with an error instead of hanging, and two simultaneous starts no longer fight
+
+  - Starting a second `npm run dev` in an app whose dev server already runs on that port used to print "already running" and then hang under `tsx watch`, out of reach of `npm run dev:stop`. The same hang followed any startup failure, such as `EACCES` on the port or a port that stayed in use. Now the dev server prints the reason, stops its `tsx watch` parent, and exits with code 1. The message names `npm run dev:stop` (with `--port` when the port isn't 3000).
+  - When `BLOCKS_DEV_FAILURE_FILE` is set, the dev server also writes the one-line reason to that file, so a caller can tell a failed start from a requested stop.
+  - The per-port pidfile in `.cdk-blocks-sandbox/` is now created exclusively. When two dev servers start at the same moment on one port, exactly one runs and the other exits; before, both passed the check and the second killed the first. The pidfile also records each process's command line, so a pid the OS has reused no longer counts as a running dev server, and a dev server that is between two reloads still counts as running.
+  - A start that finds the record of an exited dev server removes it by token: it takes `<pidfile>.reap-<token>`, and removes the record only if the pidfile still holds it. Nothing moves the pidfile aside any more, so a running dev server's record is never moved or removed, even for a moment, by another start, by `npm run dev:stop` or by the clean-up after a stop. A reload and the `npm run dev` handover replace the record in one step, under the same reap file.
+  - On a file system without hard links (FAT, exFAT, some shared folders), a pidfile exists for a moment before its record is written. There, a start and `npm run dev:stop` leave an unreadable pidfile alone, because it may belong to a dev server that is starting, and the start is refused. If no dev server is starting, delete the file.
+
+- d46dfaf: fix(core): `npm run dev:stop` right after a backend edit stops the dev server
+
+  A backend edit makes `tsx watch` restart the dev server. The old process removed its pidfile before the new one had booted, so `npm run dev:stop` in the first second or so after the edit found no record, printed "nothing to stop" and left the server running. The pidfile now stays through the restart, and the new process takes it over. A Ctrl-C or SIGHUP still removes it, and so does a `dev stop` once the port is free.
+
+- d46dfaf: fix(core,blocks): `npm run dev:stop` stops `npm run dev` that is still starting
+
+  The dev server wrote its pidfile only once it had loaded, about a second after `npm run dev` started. A `npm run dev:stop` in that time reported `nothing to stop`, and the server then came up and kept running.
+
+  - `npm run dev` now claims the session in the pidfile before it starts `tsx watch`, with the same exclusive claim as the dev server, and the dev server it starts takes the record over. A `npm run dev:stop` during startup SIGTERMs the CLI, which stops what it started, and reports `via: "cli"`. `npm run dev` exits 0, and nothing is left running.
+  - A second `npm run dev` on the port is refused at once, before it starts anything.
+  - When a SIGTERM ends `tsx watch`'s runner before the runner handles signals, `tsx watch` never exits on its own SIGTERM. The CLI now SIGKILLs it once its runner is gone.
+  - New export `@aws-cdk-blocks/core/scripts/dev-pidfile`: the pidfile protocol (`claimDevSession`, `claimDevPidfile`, `releaseDevPidfile`, `DEV_SESSION_ENV`, …), which loads without the rest of core. `claimDevPidfile` takes the pid of the CLI whose record it may take over as an optional last argument, and `StopResult.via` can be `cli`.
+  - A `npm run dev:stop` reports such a stop as done only once the CLI has exited. A CLI still running after its SIGTERM and the wait keeps its record, and the stop exits 1 with `Signalled the npm run dev on :<port> (pid <pid>), but it has not ended yet`, even when the port is free.
+
+- d46dfaf: fix(core): `npm run dev:stop` makes sure the session ended when its runner was killed
+
+  When a signal killed the dev server's runner (the OOM killer, a `kill -9`), `tsx watch` waited forever for an exit it had already missed, and ignored SIGTERM. `npm run dev:stop` sent that SIGTERM, saw the port free, reported `Stopped`, and removed the pidfile, while `npm run dev` and `tsx watch` kept running out of reach of any command, and the frontend the runner had started kept its port.
+
+  - `stopDevServer()` now waits for the `tsx watch` it signalled to exit: up to 8 s while the runner is alive, and 2 s when the runner is already dead, after which it SIGKILLs the watcher. It never SIGKILLs a watcher whose runner is still shutting down. A watcher that is still running makes the stop a warning (`portFree: false`), and its record stays.
+  - A runner that died runs no cleanup, so the stop also stops the frontend group it recorded, as for a stale record.
+  - `StopResult` gains `killed: true` when the watcher was SIGKILLed, and the message says `its tsx watch had lost its runner and ignored SIGTERM, so it was killed`.
+  - Before that SIGKILL, the stop reads the pidfile again: when a reload has started a new runner since the stop read the record, that runner gets the 8 s too, and `tsx watch` is not SIGKILLed while it is alive, which would orphan it with its port.
+
+- d46dfaf: fix(core): clearer `dev stop` results when another process holds the port, and no stuck garbage pidfiles
+
+  - When no dev server of this app runs but another process holds the port, `dev stop` used to say "No dev server was running on :3000 (nothing to stop)". Now it says the port is held by another process that was not stopped, and names it by pid and command. `StopResult` has a new `holders` field with those processes.
+  - `dev stop` (and `dev stop --all`) now removes a pidfile it can't parse. Before, that pidfile stayed forever, so `--all` kept listing its port.
+  - A recorded dev-server pid that the OS has reused for another command now counts as stopped.
+  - The template `dev:stop` script prints its "port is still bound" warning to stderr instead of stdout. `isStopWarning(result)` is exported for callers that route the message themselves.
+
+- d46dfaf: fix(core): `npm run dev:stop` stops the frontend that a killed dev server left running
+
+  After a SIGKILL of the dev server's process group (a tool timeout, the OOM killer), its frontend dev server (Vite, `next dev`), which runs in a process group of its own, survives and keeps the frontend port. `npm run dev:stop` then found the dev server gone, reported `nothing to stop`, and deleted the pidfile, which recorded that frontend group: the next `npm run dev`, which could have reclaimed the port with it, failed with `port 3100 is in use by pid …` and no command to run. Stop, then start, the natural recovery, was the one that wedged.
+
+  - `stopDevServer()` stops the recorded frontend group when the dev server is gone and that group still holds the frontend port, with the same ownership test a start uses to reclaim it, then clears the record. It reports `via: "frontend"` with the group and port as `frontend`, and `The dev server on :3000 had already stopped; stopped the frontend that this app's dev server left running on :3100 (pid …)`. A frontend port held by any other process is left alone.
+  - When a port stays taken at startup, the message ends with an exact command: `Stop it with \`kill <pid>\`, then run \`npm run dev\` again, or choose another port with --frontend-port.` (`lsof -i :<port>`when the holder's pid can't be read). New export from the dev-server module:`portInUseHint()`.
+
+- d46dfaf: fix(core): a dev server bound to all interfaces (`--host 0.0.0.0` or `::`) gives a browser the API at the address it opened the app on
+
+  A browser that opened the app at the machine's address (`http://10.0.0.5:3000`) got `apiUrl: http://localhost:3000/cdk-blocks/api` from `/.blocks-sandbox/config.json`, so it called localhost: another origin on the same machine, and nothing at all from another machine. CORS answered such a page with `Access-Control-Allow-Origin: http://localhost:3000`.
+
+  - With an all-interfaces bind, the dev server now answers `/.blocks-sandbox/config.json` with the same-origin `apiUrl` `/cdk-blocks/api`, which the client resolves against the page. The `.cdk-blocks-sandbox/config.json` file keeps the absolute localhost URL, for Node.js readers.
+  - CORS also reflects the Origin of a same-origin request, the one that equals `http://<Host header>`.
+  - New export: `buildServedBlocksConfig(port, isSandbox, host)`. `resolveDevCorsOrigin` and `buildDevCorsHeaders` take the request's Host header as an optional last argument.
+
+- d46dfaf: fix(core): the dev server's stop, reload and port reclaim on Windows
+
+  - On Windows, the dev server finds a listener on an IPv6 address too (`[::1]`, where a `localhost` Vite binds), and on a Windows that does not say `LISTENING`: it reads `netstat -ano`, which lists TCP and TCPv6, instead of `netstat -ano -p tcp`, which lists IPv4 only. Before, a port that the frontend held was reported as `in use (its owner could not be found)`.
+  - On Windows, the dev server records its frontend too: the processes of the frontend's tree that listen on its port, with their creation times, since Windows has no process groups. A `tsx watch` restart on a backend save, or a hard kill of `npm run dev` (`Stop-Process`, Task Manager), leaves the frontend (Vite and esbuild) running, because a process that a shell started outlives its parent there. The next dev server now reclaims the port from that frontend, and `npm run dev:stop` stops it, instead of failing with `port 3100 is in use (its owner could not be found)`. A pid that Windows has since given to another process is never stopped.
+  - On Windows, `npm run dev:stop` and `npm run dev:stop -- --all` end the whole `npm run dev` session: the dev server records the `npm run dev` CLI at the top of its session, and the stop ends that CLI with its whole tree (`taskkill /T /F`), then waits for the ports to be free and removes the pidfile. Before, it ended only the dev server: the CLI and `tsx watch` kept running, and the next save started the dev server again. The CLI is ended only while the recorded `tsx watch` still descends from it (CIM's parent pids and creation times), else the `tsx watch` while the dev server descends from it, so a pid that Windows has given to another process is never ended. On POSIX the stop is unchanged.
+  - On Windows, a dev server that fails its first start (its port held, another dev server of the app running, a listen error) ends its `tsx watch` too, so `npm run dev` exits 1 after the error instead of hanging: `npm run dev` tells the dev server that it runs under `tsx watch` (`BLOCKS_DEV_UNDER_WATCH=1`), which it could not read from its parent's command line there.
+  - On Windows, the hints of a port that stays in use name Windows commands: ``Stop it with `taskkill /PID <pid> /T /F` `` and ``Find the process that holds it with `netstat -ano | findstr :<port>` ``, instead of `kill` and `lsof -i`.
+
+- 369b175: feat: add `escapeRegExp()` and `escapeHtml()` to `@aws-cdk-blocks/core/bb-utils`, and escape the working directory on the local settings page
+
+  `escapeRegExp(text)` makes any value match literally inside a `RegExp`, so a configured `example.com` no longer also matches `exampleXcom`. `escapeHtml(value)` makes a value safe as HTML text or a quoted attribute value. Use them when a Building Block builds a pattern or markup from configuration or request data.
+
+  The `GET /cdk-blocks/settings` page that the local dev server serves now escapes the file path it shows, so a project directory whose name contains markup can't inject it into the page.
+
+  On Windows, the local settings page now opens `.cdk-blocks/local/data/settings.json` with `explorer.exe` instead of `cmd /c start`, so a project directory name containing `&` or `|` can no longer be read by `cmd.exe` as a second command.
+
+- d7f62f3: Spec generation now bounds a binding's `export` at 64 characters, rejecting a longer one by path and naming the block that declared it, instead of interpolating it into generated source and diagnostics in the customer's app, where that block is no longer visible. The Kotlin parser rejects the same length when it reads the catalogs, so an export spec generation accepts is one Kotlin codegen will not reject later.
+
+  Only the `export` field gained this bound; a package's other fields are unaffected, and an export of 64 characters or fewer that already passed still passes.
+
+- 3be61fa: Registering a telemetry framework sink now also removes the process `exit` listener that was added to clean it up. Long-running processes that deploy repeatedly, such as watch and sandbox loops, no longer gain one `exit` listener per deploy, which eventually triggered `MaxListenersExceededWarning`. A sink that is never registered is still removed when the process exits.
+- 36888a1: Stabilize the core telemetry framework-sink test for opted-out runs: it now checks a private temporary directory, so other tests creating or removing their own sink directories at the same time can no longer make it fail.
+- fcf087d: `BlocksStack.create()` and `BlocksBackend.create()` without a `defaults` field now fail with an error that names the fix (`defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`, with its import) and links a new guide for apps scaffolded from older `create-blocks-app` templates. Before, they threw `TypeError: Cannot read properties of undefined (reading 'vpc')`, because `cdk` runs `cdk-blocks/index.cdk.ts` without type-checking. The guide, `docs/guides/upgrading-older-apps.md`, shows the `index.cdk.ts` edits for templates 0.1.0 to 0.1.19 (add `defaults`, drop the hand-written sandbox overrides) and 0.1.20 to 0.2.0 (remove `blocksStack.handler`).
+- 384827f: docs(core): document what a deployed `/.blocks-sandbox/config.json` holds, and why it is served in production
+
+  Every Hosting deploy serves `/.blocks-sandbox/config.json`, production included. The browser client needs it to find the API, and `--wait-live` polls it for the build id. The `@aws-cdk-blocks/core` README now lists exactly what it holds: `apiUrl` (the same-origin `/cdk-blocks/api`, or the absolute URL a `frontDoor: 'none'` page calls), `__blocksBuildId`, and your `backendConfig`. It never holds the account, the stack name or an ARN. New tests read the body each deploy uploads and fail if anything else appears in it.
+
+- 58daa51: The `RpcErrors` metric now publishes to the `CDKBlocks` CloudWatch namespace instead of `AWSBlocks`. If you deployed a preview build that wrote it to `AWSBlocks`, update any alarm or dashboard on `AWSBlocks` / `RpcErrors` to `CDKBlocks` / `RpcErrors` after upgrading: nothing writes to the old namespace any more, so an alarm left on it stops receiving data.
+- 6151940: Failed RPC calls on Lambda are now visible in CloudWatch. A failed call reaches the client as a JSON-RPC error inside an HTTP 200 response, so Lambda's `Errors` metric never counted it, and an alarm on it never fired. Each failed call (a method that throws, a call to an unknown API namespace or method, or the handler's 504 timeout) now writes one line in CloudWatch embedded metric format: the `CDKBlocks` / `RpcErrors` metric, with the dimensions `FunctionName` and `StatusClass` (`4xx` or `5xx`). The status, API namespace and method are in the same log line for CloudWatch Logs Insights. No SDK call or IAM permission is added, and the error message is never written to the metric line.
+- b7c262c: An API request whose body is the JSON literal `null` now gets a JSON-RPC Invalid Request (-32600) error instead of crashing the handler.
+- 73feb71: A method that resolves to `undefined` now answers `{"jsonrpc":"2.0","result":null,"id":1}`. This covers a `Promise<void>` method and any method that can resolve to `undefined`, such as one returning `Promise<T | undefined>`. The response used to leave out `result`, which a JSON-RPC 2.0 success response must carry, so the Kotlin and Swift native clients threw "Missing result field" on every such call. The fix is in the shared dispatcher, so the local dev server, the Lambda handler and the container server all send it. The TypeScript client now resolves such a call to `null` instead of `undefined`.
+- d46dfaf: fix(core): `sandbox destroy` deletes the database connection string that the sandbox deploy stored in SSM
+
+  - When `.env.local` sets a `*_DB_URL` or `*_CONNECTION_STRING`, the sandbox deploy writes it, password included, to the SSM SecureString `/<sandbox stack>-db-url`. CloudFormation never owned that parameter, so `sandbox destroy` left it in the account after the stack was gone.
+  - After the stack is deleted, `sandbox destroy` now deletes that parameter too. It derives only the sandbox's own name, never the production one, and skips a parameter that doesn't exist.
+  - If SSM refuses the delete (access denied, throttling), `sandbox destroy` still exits 0 once the stack is gone, and warns with the parameter name and the `aws ssm delete-parameter` command to run.
+
+- d46dfaf: fix(core): `npm run sandbox` ends with its dev server, and `npm run dev:stop` says it stopped the sandbox
+
+  `npm run dev:stop` (and `dev stop --all`) stopped the dev server of a running `npm run sandbox`, reported `Stopped the dev server`, and removed its pidfile, while `npm run sandbox` and its `cdk watch` kept running, hotswapping every save into the sandbox stack, out of reach of any command.
+
+  - `startSandbox()` now stops the session (its `cdk watch` included) when its dev server exits: exit code 0 when the dev server was stopped, 1 with `The local dev server exited (code N); stopping the sandbox session.` when it failed.
+  - The sandbox passes its pid to the dev server in `BLOCKS_SANDBOX_SESSION`, which records it in its pidfile record as `sandbox: { pid }` and keeps it out of the frontend's environment. `stopDevServer()` then waits for that session to end, returns it as `StopResult.sandbox`, and reports `Stopped the npm run sandbox session on :3000 …: its dev server and its cdk watch. Its AWS resources are still deployed; \`npm run sandbox:destroy\` deletes them.`, or a warning when the session has not ended.
+  - New exports: `SANDBOX_SESSION_ENV` from `@aws-cdk-blocks/core/scripts/dev-pidfile`, and `sandboxDevServerExitCode()` from the sandbox module.
+
+- d46dfaf: fix(core): a failed sandbox deploy suggests destroying the sandbox only when a stack is actually left failed
+
+  Every failed sandbox deploy used to print the same advice: destroy the sandbox and redeploy from a clean slate. Destroying a healthy sandbox throws its data away and fixes nothing. The hint now depends on the cause:
+
+  - the app failed to synthesize: no AWS resource was changed; fix the error and re-run;
+  - another CDK command is using the app's `.cdk-blocks-sandbox` output: let it finish, and run one sandbox command at a time;
+  - CloudFormation is still updating the stack, for example after an interrupted deploy: wait for it, then re-run, and don't destroy;
+  - the stack is left `*_FAILED` or `ROLLBACK_COMPLETE`, or its state can't be read: the destroy-and-redeploy advice, as before;
+  - otherwise: no stack is in a failed state, so there's nothing to destroy.
+
+- d46dfaf: fix(core): `npm run sandbox` and `sandbox deploy` work in a project path that contains a space
+
+  CDK runs the sandbox's `--app` command through a shell. The synth step, the deploy fallback and `cdk watch` passed the backend path unquoted, so a path such as `~/My Projects/app` split in two and synth failed. Only `sandbox destroy` quoted it. All four now share one `--app` command that names no path: the backend path goes to the cdk child in its environment (`BLOCKS_CDK_APP_ENTRY`), and the shell reads it inside double quotes, so a space, a quote, `$` or `%` in the path stays part of it.
+
+- d46dfaf: fix(core): a stray SIGTERM no longer orphans cdk during a sandbox deploy or a destroy
+
+  `npm run deploy` defers a first SIGTERM while CloudFormation converges, but the sandbox deploy (`npm run sandbox:deploy`, and the deploy before `npm run sandbox` watches) and the destroys ran cdk with no signal handling. One SIGTERM, which AWS Blocks package tasks forwards at once, killed the runner and left `cdk deploy` or `cdk destroy` running unwatched; the stack finished with nobody reporting it, and the immediate retry failed on the cdk lock that orphan still held.
+
+  - The sandbox synth and deploy, `destroySandbox()` and the production `destroy()` now run cdk as `deploy()` does: in its own process group, a first SIGTERM or a SIGHUP only prints `Ignoring SIGTERM: the deploy is still running …` (`the destroy …` for a destroy), and a second SIGTERM, or a Ctrl-C, stops the whole cdk tree.
+  - An operator stop throws `DeployProcessError` with `aborted: true` and the new `operatorSignal` (`SIGTERM` or `SIGINT`), so a launcher can exit 143 or 130 instead of reporting a failed deploy. A stopped sandbox deploy says `The sandbox deploy was stopped by SIGTERM.`, and a stopped destroy is not retried.
+  - `CdkOutput.run()` takes `deferSignals: true` for this; `decideSignalResponse()` takes the operation (`deploy` or `destroy`) as an optional last argument, and `runStreaming()` takes it as `operation`.
+
+- d46dfaf: fix(core,create-blocks-app): `npm run deploy` works while `npm run sandbox` watches the same app
+
+  `npm run deploy` failed every time `npm run sandbox` watch ran in the app, with `Another CLI (PID=…) is currently synthing to cdk.out`: the deploy regenerates `cdk-blocks/client.js`, the sandbox's `cdk watch` saw the change and started a synth, and both used `./cdk.out`. Nothing said that the other CLI was the sandbox.
+
+  - The sandbox's `cdk watch` now synthesizes into `.cdk-blocks-sandbox/cdk.out` (`--output`), as its first deploy does, never into the `./cdk.out` of `npm run deploy`.
+  - The templates' `cdk.json` `watch.exclude` lists `cdk-blocks/client.js`, which the deployed backend doesn't use, so regenerating it starts no watch deploy. Existing apps can add `"cdk-blocks/client.js"` to `watch.exclude` in their `cdk.json`.
+  - A sandbox deploy or a sandbox destroy (`npm run sandbox:deploy`, a second `npm run sandbox`, `npm run sandbox:destroy`) refuses to start while a `npm run sandbox` of the app is running, before it reaches AWS: `A \`npm run sandbox\` is running in this app (pid …, dev server on :3000), and its cdk watch deploys every change to the sandbox. Stop it first, with Ctrl-C in its terminal or \`npm run dev:stop -- --port 3000\`, then re-run …`. New exports: `assertNoRunningSandbox()`from the sandbox module, and`liveSandboxSession()`from`@aws-cdk-blocks/core/scripts/dev-pidfile`.
+
+- 5f55dac: The OpenRPC spec generator now honours `@blocksSkipCodegen` on methods of an `auth.protect()` namespace, in its `public` and `methods` handlers alike, as it already did for `new ApiNamespace(…)`. Before, a tagged method there, such as the `auth` template's local-only `getLastCode`, still reached the spec and so the generated Swift, Kotlin and Dart clients. The TypeScript client can call it as before.
+- cd533c0: A stack name that starts with `aws` in any letter case is now an error at synth, for `BlocksStack` and for a `BlocksBackend` inside such a stack. The message names the stack, the two AWS Resource Groups that AWS Blocks names after it, and the fix: use a name that does not start with `aws`; in a scaffolded app, change `stackId` in `.cdk-blocks/config.json`. Before, `cdk deploy` failed in CloudFormation with `Group name must not start with 'AWS'` after other resources were created. `cdk synth`, `cdk diff` and `cdk deploy` stop on the error. `cdk destroy` and `cdk ls` do not, so a stack that such a deploy left behind can still be removed. A `stackId` written by hand is never changed.
+
+  The `AGENTS.md` that `create-blocks-app` adds to new apps states the rule.
+
+- 1ec956f: Test temp directories are created with `mkdtempSync`, so two tests that start in the same millisecond no longer share a path.
+- c1fabce: fix(core): let a launcher choose the `tsx` loader for deploy client generation
+
+  The client-generation step of `deploy()` and `startSandbox()` loads the backend with `node --import tsx`, which Node resolves from the app's directory. `BLOCKS_TSX_IMPORT`, when set, replaces `tsx` with another specifier, such as the file URL of a `tsx` loader the app does not install itself. Without the variable nothing changes.
+
+- 4d81f11: The OpenRPC spec now records the name of a union declared as a type alias. An inline `oneOf` for `type AuthActionInput = ...` carries `"x-blocks-type-name": "AuthActionInput"`, so native code generators can name the union after the alias. Only a non-generic alias is recorded: an instantiation of a generic alias (`Result<string>`, or a TypeScript utility type such as `Partial<Action>`) carries no name, so two instantiations never share one. The union stays inline, and generators that don't read the key are unaffected.
+- 5f55dac: The deploy's wait for the new build to go live trims trailing slashes from the hosting URL in linear time. It used the regular expression `/\/+$/`, which takes quadratic time on a long run of `/` that isn't at the end of the string.
+- ba80bbd: Generated apps keep their existing npm lifecycle script names without generating `cdk-blocks/scripts/*.ts` wrappers. Backend-only templates default to port 3001 with `blocks.dev.frontend` disabled; frontend templates default to frontend port 3100 and detect their frontend from dependencies. Override the ports with `npm run dev -- --port 4000 --frontend-port 4100`. Existing `blocks.dev` settings are preserved when adding AWS Blocks to an existing project. Amplify keeps its own sandbox and client generation. Generated guidance documents npm scripts, structured results, and non-interactive confirmations. Scaffold next steps quote paths with spaces and give backend-only apps their correct API URL. `--template=<name>` and `--template <name>` are both accepted. `npm run cleanup` stops only dev sessions recorded for this app. Production destroy requires confirmation in a terminal or `npm run destroy -- --yes` in automation. End-to-end tests reuse the configured dev port. Generate hosting types with `npm run typegen` before enabling `npm run typegen -- --check` in CI. The local realtime WebSocket uses `BLOCKS_DEV_HOST` to opt into a different host.
+
+  Scaffold guidance redirects background dev-server output to a log, and generated gitignore files ignore `*.log`. Stop a server started on another port with `npm run dev:stop -- --port <n>`, or stop the app's recorded sessions with `npm run cleanup`. Sandbox destruction prompts in a terminal; `npm run sandbox:destroy -- --yes` skips that prompt, while non-interactive sandbox destruction retains its existing behavior. The backend README identifies the JSON-RPC namespace by its exported variable and uses `http://localhost:3001/cdk-blocks/api`. SQL guidance uses `npm run db -- types --block <id>` and `npm run db -- status --block <id>`.
+
+- 05a88e1: When AWS denies the credential check before `npm run deploy` and `npm run sandbox`, for example when a profile's role cannot be assumed, the warning now says so instead of reporting an unverified check, and says whether an AWS Organizations policy (a service control policy or a resource control policy) explicitly denied the request. It still does not stop the command, and it never includes the error's account IDs, ARNs or policy IDs.
+
+  A credential failure message now names the profile and the deployment Region. When the fix is `aws login` and the profile has no Region or a different one, the message first prints `aws configure set region <region> --profile <name>`, so that the sign-in uses the Region you deploy to, and says to sign in again after a later Region change. If the profile's Region is set in the AWS credentials file, which overrides the config file that `aws configure set` writes, the message asks you to change it there instead. When `AWS_REGION` or `AWS_DEFAULT_REGION` names another Region than the deployment, which the AWS CLI would use instead, the `aws login` command includes `--region <region>`.
+
+- a86bccb: `sandbox:destroy` and production `destroy` now recognise a throttled teardown
+  even when the throttle check itself is throttled. After a failed delete attempt,
+  the retry reads the stack's events to decide whether AWS throttled it. When
+  several stacks in one account are torn down at once, that `DescribeStackEvents`
+  call often fails with `Rate exceeded` too. The retry then printed
+  `could not tell whether the delete was throttled`, fell back to the short 60s
+  and 120s waits, and gave up on a delete that only needed to back off. A throttle
+  check that fails with a throttling error (`Throttling`, `Rate exceeded`,
+  `TooManyRequestsException`, HTTP 429) now counts as a throttle, so the delete
+  gets the longer throttle backoff.
+
+  At `BLOCKS_LOG_LEVEL=quiet` or `normal`, where the CDK output of each attempt is
+  kept, a failed attempt whose output already names a throttle
+  (`Too Many Requests`, `Status Code: 429`, `Rate exceeded`) is treated as
+  throttled without the extra CloudFormation call.
+
+  A throttle check that fails for any other reason (for example, missing
+  `cloudformation:DescribeStackEvents` permission) keeps the 60s and 120s retry
+  schedule, as before.
+
+- b2eb306: fix(core): the dev server exits only after its whole frontend has
+
+  When it stops, the local dev server now waits, within its existing 1.5 s grace, for every process its frontend command started, not only the first, then SIGKILLs any that remain. `npx next dev` exits on SIGTERM before Next, which can go on writing `.next` after the dev server has exited.
+
+  A second Ctrl-C or SIGTERM during that wait no longer ends the dev server before its frontend has stopped. A Ctrl-C, or a SIGTERM to the process group, reaches the dev server twice: directly, and again as `tsx watch` relays it. On the second one, tsx ended the dev server, because the dev server had already removed its own signal listeners.
+
+- df25d97: `npm run dev:stop` and `npm run cleanup` now stop a dev server that was started at the same time as another one, such as `npm run dev &` followed at once by `npm run test:e2e`. Both starts passed the singleton check before either held the port, and the server that bound the port after the other one exited served without a pidfile, so `dev:stop` reported that nothing was running. The dev server now records itself again once it is listening.
+- 201e59e: The local dev server now handles API and raw-route requests through the same dispatcher as deployed handlers, so cookie and error responses match. Handlers in local dev can now read the request cookies and client user agent through the request context, API and raw-route responses carry the same no-store cache headers, `ctx.request.url` formats the query string the same way as in a deployment, handlers receive `ctx.request.signal`, `ctx.request.url` takes its host from a loopback `X-Forwarded-Host`, and a request without a `Host` header reads as `http://localhost/...`.
+- 5f55dac: The local dev server no longer exits on an unhandled promise rejection from request handling, which left `npm run dev` down until the next file change. The usual cause is a guard called without `await`, such as `auth.requireRole(context, 'admin')`: the method returns before the guard rejects. The dev server now logs `[unhandled-rejection] <namespace.method>: <error>` with a hint about the missing `await`, whether the response had already been sent, and the stack, and keeps serving. A rejection outside any request still ends the process, as before. Deployed (Lambda) behaviour is unchanged.
+- a5f39c3: docs: KVStore's 409 and local data file, AppSetting's local data file, and RawRoute params locally
+
+  - `KVStore`: a failed condition is status 409 in the JSON-RPC error, and HTTP 409 only with `httpErrorStatus: true`. The Local development section says that the mock reads `store.json` only when it constructs the store, so two processes on one `.cdk-blocks/local/data` folder can write over each other.
+  - `AppSetting`: its mock keeps values in the shared `.cdk-blocks/local/data/settings.json`, not `.cdk-blocks/local/data/settings/{fullId}/value.json`.
+  - Core: a `RawRoute` fills `params` the same way under `npm run dev` and deployed.
+
+- 0b422ee: docs: corrected five statements. A production `allowedOrigins` entry is matched exactly and an invalid one fails synth (it is not a regex). The local port is 3001 in the templates without a frontend. JSON-RPC `params` that is neither an array nor an object, `null` included, fails with `-32602`. The `ApiUrl` output is `publicApiUrl`. IAM report statements have a `condition` field. The shared-account platform guide is now `SHARED-ACCOUNT.md`.
+- d01c34c: docs: state guarantees and helpers in the words people search for
+
+  - KVStore "Conditional writes" now says that a conditional `put` / `delete` is atomic for its item (one DynamoDB conditional write on AWS; no interleaving between the check and the write in the local mock), that there is no transaction across items (a batch call can partially succeed on AWS), and that `Database` / `DistributedDatabase` `transaction()` is the option for one.
+  - The `withAuth` section of the core README names what the built-in detection uses: `cookies()` from `next/headers` (server components, route handlers, server actions) and Nuxt's Nitro request context.
+  - The guide's Reference section lists the Node test helpers in `aws-cdk-blocks/utils` (`installCookieJar`, `createTestClient`, `getLastAuthCode`, `totpCodeFor`, `isServerRunning`) with their signatures.
+  - `TROUBLESHOOTING.md` explains the dev server's `Frontend server unavailable` (502) response and its startup messages, the messages for a second dev server and a port in use, and the 403 / 404 / 415 responses for a disallowed `Host`, a cross-origin call, a non-`POST` RPC call and a non-JSON `Content-Type`.
+
+- 5f55dac: Docs and editor hover text now point at `Auth`, the single authentication Building Block, instead of the removed `AuthBasic`, `AuthCognito` and `AuthOIDC`. The `aws-cdk-blocks` README adds a "Choosing a sign-in method" table comparing email + password, social, OIDC verified by your backend (`store: 'builtin'`), OIDC through Cognito, and SAML by Cognito free tier, offline support and user-pool features. The `hasAuthError` example in `@aws-cdk-blocks/core` now matches `AuthErrors.NotAuthorized`.
+- 0ff1e1f: docs: the core README describes the installed version
+
+  The `BLOCKS_LOG_LEVEL` table states what an unset level prints.
+
+- d01c34c: docs: check the code samples of every shipped doc against the packages
+
+  A new test in `aws-cdk-blocks` reads every doc shipped in `docs/`, changelogs included, and fails when a code sample imports a name its `@aws-cdk-blocks/*` entry doesn't export, uses a missing member or constructor of a Blocks name, or uses an undeclared Blocks-looking name no entry exports (a removed block). Samples that are complete files (a first-line `// path/file.ts` comment and an import) are typechecked in full. Samples labelled as browser files (`// src/…`, `// test/…`, `// frontend/…`) also have their value imports resolved under the `browser` condition, where the root `aws-cdk-blocks` has none. Intentional exceptions are marked in the doc itself, with a reason: `<!-- doc-snippet: skip — reason -->` or `<!-- doc-snippet: fragment — reason -->` above a sample, or `<!-- doc-snippet: skip-file — reason -->` for a whole doc.
+
+  Fixed what it found: the bb-auth README's "Protect every method" frontend file imported `AuthErrors` / `isAuthError` from `aws-cdk-blocks`, which a browser build doesn't export; it now matches with `isBlocksError(e, 'NotAuthenticatedException')` from `aws-cdk-blocks/client`.
+
+  The bb-data `USE_CASES.md` backend example built `new Database<DB>(…)` and called Kysely methods on it. It now reads through `createKyselyAdapter<DB>(…)`, as the bb-data README does, and inserts with ``queryOne(sql`INSERT … RETURNING …`)``, because the types `bb-data generate-types` emits list a `SERIAL` id as a required column. Its setup steps now agree with the code: the migration is applied with `bb-data migrate`, the types are generated where the API file imports them from, and the `Database` passes `migrationsPath`. The `AuthCognito` / `AuthOIDC` / `AuthBasic` "before" code in the bb-auth migration guide, a few samples that name the app's own classes, and the `aws-cdk-blocks` and `@aws-cdk-blocks/core` changelogs (whose release notes show the removed auth blocks) are marked.
+
+- f7e28b4: The Astro, Nitro (Nuxt, SolidStart, Analog, TanStack Start) and SvelteKit adapters run the app's build without the `cdk` export condition. A deploy or destroy synthesizes with `NODE_OPTIONS=--conditions=cdk`, and the app's build inherited it, so a build or `prebuild` script that loads `@aws-cdk-blocks/*` (such as `npm run generate-client`) failed with `Scope at '...' should be created in the scope of a Stack`. Only the `cdk` condition is removed: other `NODE_OPTIONS` entries, such as `--max-old-space-size`, still reach the build.
+
+  `Hosting`'s `buildCommand` now removes the `cdk` condition the same way. Before, it removed only the exact entry `--conditions=cdk`, so `--conditions cdk`, `-C cdk` or a quoted value such as `--conditions="cdk"` still reached the build.
+
+- 60360c1: `Hosting` no longer rebuilds the frontend on a synth that doesn't need it:
+
+  - **Destroy:** `npm run destroy` and `npm run sandbox:destroy` reuse the frontend build output already on disk instead of running `buildCommand` and the framework build (OpenNext, Nitro, Astro, SvelteKit). On a Next.js app this removes a multi-minute build from every destroy. When there is no build output, the destroy builds as before; a Next.js destroy reuses the `.open-next/` output of an earlier deploy. `BLOCKS_SKIP_FRONTEND_BUILD=1` doesn't apply to a destroy.
+  - **Opt-in deploy reuse:** `BLOCKS_SKIP_FRONTEND_BUILD=1` makes a deploy use the existing build output without building. A missing build output (the output directory, or the output the framework adapter deploys, such as Next.js's `.open-next/`) fails the synth with the adapter's error (same code and resolution) plus a line naming the variable. The build bakes in `BLOCKS_API_URL`, so a deploy never reuses a build on its own.
+
+  The framework adapters read the decision from the build profile (`reuseBuild: 'if-present' | 'required'`); an explicit `skipBuild` option still wins.
+
+- 4e92168: On the Lambda functions AWS Blocks runs through `createLambdaHandler` (the backend API and its event handlers), every `Logger` line now carries `awsRequestId`, the invocation's request id, so you can correlate everything one request logged (for example `filter awsRequestId = "<id>"` in CloudWatch Logs Insights). Core's `createLambdaHandler` runs each invocation with its `awsRequestId` in scope, and overlapping invocations on one container each see their own id. `awsRequestId` is reserved, so context can't replace it, and your own context fields such as `requestId` are kept as is. Building Block authors can read the same id with `currentRequestId()` from `@aws-cdk-blocks/core/bb-utils`. Local dev, SSR hosting web functions and container compute set no request id, so the field is absent there.
+- bfdd06f: Spec generation now rejects a malformed Swift or Android native package field, naming the block that declared it, as it already did for the Dart fields. A `swift.module`, `android.group`, `android.artifact`, or `android.kotlinPackage` outside its own package manager's grammar previously passed validation and was written into `x-blocks-native-packages`. A malformed `module` or `kotlinPackage` then failed in the customer's own codegen run, naming no block; no generator validates `group` or `artifact`, so a malformed value in them went undetected. `swift.identity` and `swift.product` stay non-blank only: SwiftPM derives an identity from the dependency's location and imposes no grammar on either.
+- 6d3077e: docs: refer to `KVStore` as the one NoSQL block
+
+  Docstrings, READMEs and design notes that pointed at `DistributedTable` now describe `KVStore` with a `schema` and a `key`. No code changes.
+
+- e1e4844: Run AWS Blocks tasks with your app's package manager. New apps define tasks in `package.json` without generating launcher files or installing the `cdk-blocks` executable. Look up documentation with `npm run docs KVStore`, read the API signatures with `npm run docs:api KVStore`, or search with `npm run docs:search "partition key"`.
+
+  Structured task results print text in a terminal and JSON on a pipe or redirect. Use `npm run -s docs KVStore` for clean JSON without npm's banner, or `npm run -s docs -- KVStore --output text` to pipe Markdown. Scripts that previously invoked `cdk-blocks` must switch to package tasks; scripts calling the programmatic `aws-cdk-blocks/scripts` entry remain supported.
+
+  If your app's scripts call `cdk-blocks`, upgrade `aws-cdk-blocks` first. From the app directory, preview the migration without relying on the removed executable:
+
+  ```sh
+  node --input-type=module -e "import 'aws-cdk-blocks/run'" -- migrate --dry-run
+  ```
+
+  Review the plan, then run the same command without `--dry-run` from a clean Git working tree. The migration rewrites recognized generated scripts and reports custom wrappers that need manual changes.
+
+- 6d3077e: fix(core): an optional argument that the client leaves out stays absent on the server
+
+  The RPC client no longer sends trailing `undefined` arguments. JSON has no `undefined`, so `api.list(2)` on a method `list(limit, cursor?)` reached the server as `list(2, null)`: a default parameter value did not apply, and the method saw `null` where its type says `undefined`. The client now leaves trailing `undefined` arguments out of `params`, so the server calls the method with the arguments the caller passed.
+
+  An `undefined` before a later argument still arrives as `null`, because the later argument must keep its position. An explicit `null` is sent as before.
+
+- 80ce128: `npm run sandbox` now deploys infrastructure changes made while it watches. Its `cdk watch` ran with CDK's default `--hotswap`, which applies code-only changes but silently ignores any change it can't hotswap. Adding a Building Block that needs new infrastructure, such as a `Database` or `Realtime`, therefore updated the Lambda code that uses it and never created it, with no message. The watch now passes `--hotswap-fallback`: a code-only change still hotswaps in seconds, and any other change runs a full deploy of the stack.
+- 23692f1: Every CLI command now sends one usage event. `sandbox deploy` and `sandbox preview` report under their own names instead of `sandbox`. `generate types --watch` now stops cleanly on Ctrl-C or SIGTERM. A telemetry failure never changes a command's exit code or output, and the CDK CLI telemetry opt-out still turns all of it off.
+- e286b16: docs(telemetry): make the first-run telemetry notice describe exactly what is collected
+
+  The notice printed the first time the CLI or `create-blocks-app` collects usage data said the data was anonymous and that no personal data was collected. It now lists what an event can include: random installation and project IDs, and an event ID and timestamp; the command, its outcome, duration and error category (never the error message); your OS, Node.js version and package manager user agent; whether it ran in CI or under a coding agent; the AWS Blocks and CDK versions, the framework, and the template name and version; and the names and versions of the official Building Blocks the app uses, how many Building Blocks it uses, and how many of them are custom (custom Building Block names are never sent). It says that events never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code, and that, as with any HTTPS request, the collection endpoint also receives your IP address.
+
+  The notice names the opt-out, which is CDK's. The `aws-cdk-blocks` README describes the same in its CLI section.
+
+  What is collected and when has not changed.
+
+- c00ab16: docs(telemetry): state the retention periods in the first-run notice
+
+  The first-run telemetry notice printed by the CLI and `create-blocks-app`, and the `aws-cdk-blocks` README, now say that the collection endpoint does not store your IP address, except in logs of requests that its firewall blocks, and that events are kept for up to 1 year and logs of all requests, blocked or not, for up to 10 years.
+
+- 58980c7: fix: `sandbox:destroy` works on Windows
+
+  On Windows, `npm run sandbox:destroy` always failed and left the sandbox stack deployed. The CDK `--app` path was
+  wrapped in single quotes, which `cmd.exe` keeps as part of the path (`Cannot find module '...index.cdk.ts'`). Listing
+  the stacks to empty their buckets also failed with `spawnSync npm ENOENT`, because `npm` is a `.cmd` shim there. The
+  path is now double-quoted on Windows (single-quoted elsewhere), and stack listing for `destroy`
+  uses the same cross-platform spawn as the rest of the CLI. `sandbox` deploy, synth, and watch now quote the path
+  the same way, so they also work when the project path contains a space.
+
+- Updated dependencies [63e571c]
+- Updated dependencies [d01c34c]
+- Updated dependencies [c42ba42]
+- Updated dependencies [703238f]
+- Updated dependencies [45a05d1]
+- Updated dependencies [1de6ea4]
+- Updated dependencies [5f55dac]
+- Updated dependencies [4665f81]
+- Updated dependencies [0ff1e1f]
+- Updated dependencies [8fbbeca]
+- Updated dependencies [d01c34c]
+- Updated dependencies [f7e28b4]
+- Updated dependencies [93d533a]
+- Updated dependencies [668227b]
+- Updated dependencies [1f565bd]
+- Updated dependencies [52dd5e6]
+- Updated dependencies [5f55dac]
+- Updated dependencies [adb6077]
+- Updated dependencies [c6a59f4]
+- Updated dependencies [1e4d08d]
+- Updated dependencies [5f55dac]
+- Updated dependencies [e6c989d]
+- Updated dependencies [b2eb306]
+- Updated dependencies [b2eb306]
+- Updated dependencies [fb29c06]
+- Updated dependencies [60360c1]
+- Updated dependencies [40d25ec]
+- Updated dependencies [e3b5949]
+- Updated dependencies [184df0b]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [b2eb306]
+- Updated dependencies [b2eb306]
+- Updated dependencies [8ece10a]
+- Updated dependencies [e1e4844]
+- Updated dependencies [e50b9e9]
+- Updated dependencies [58817b0]
+- Updated dependencies [23692f1]
+  - @aws-cdk-blocks/hosting@1.0.0
+  - @aws-cdk-blocks/pipeline@1.0.0
+
 ## 1.0.0-rc.2
 
 ### Patch Changes

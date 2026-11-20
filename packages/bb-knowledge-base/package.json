@@ -1,6 +1,6 @@
 {
   "name": "@aws-cdk-blocks/bb-knowledge-base",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0",
   "keywords": [
     "aws-blocks",
     "knowledge-base",
@@ -44,8 +44,8 @@
     "test": "node --test --test-concurrency=1 dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-cdk-blocks/bb-logger": "^1.0.0-rc.1",
-    "@aws-cdk-blocks/core": "^1.0.0-rc.1",
+    "@aws-cdk-blocks/bb-logger": "^1.0.0",
+    "@aws-cdk-blocks/core": "^1.0.0",
     "@aws-sdk/client-bedrock-agent": "^3.1156.0",
     "@aws-sdk/client-bedrock-agent-runtime": "^3.1156.0",
     "zod": "^4.6.7"

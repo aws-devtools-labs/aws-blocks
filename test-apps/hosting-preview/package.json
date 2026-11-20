@@ -22,8 +22,8 @@
     "vendorize": "node --input-type=module -e \"import 'aws-cdk-blocks/run'\" -- vendorize"
   },
   "dependencies": {
-    "@aws-cdk-blocks/bb-auth": "1.0.0-rc.1",
-    "aws-cdk-blocks": "1.0.0-rc.2"
+    "@aws-cdk-blocks/bb-auth": "1.0.0",
+    "aws-cdk-blocks": "1.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

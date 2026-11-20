@@ -15,8 +15,8 @@
     "test:e2e": "tsx --test test/e2e.test.ts"
   },
   "dependencies": {
-    "aws-cdk-blocks": "1.0.0-rc.2",
-    "@aws-cdk-blocks/core": "1.0.0-rc.2",
+    "aws-cdk-blocks": "1.0.0",
+    "@aws-cdk-blocks/core": "1.0.0",
     "@aws-sdk/client-sqs": "^3.1156.0"
   },
   "devDependencies": {

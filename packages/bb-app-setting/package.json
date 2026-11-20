@@ -1,6 +1,6 @@
 {
   "name": "@aws-cdk-blocks/bb-app-setting",
-  "version": "1.0.0-rc.2",
+  "version": "1.0.0",
   "keywords": [
     "aws-blocks",
     "configuration",
@@ -46,8 +46,8 @@
     "test": "node --test --test-concurrency=1 dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-cdk-blocks/core": "^1.0.0-rc.2",
-    "@aws-cdk-blocks/bb-logger": "^1.0.0-rc.2",
+    "@aws-cdk-blocks/core": "^1.0.0",
+    "@aws-cdk-blocks/bb-logger": "^1.0.0",
     "@aws-sdk/client-ssm": "^3.1156.0",
     "@standard-schema/spec": "^1.1.0"
   },
