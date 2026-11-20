@@ -4250,7 +4250,7 @@ describe('OllamaModels presets', () => {
 
 import { Agent as DeployedAgent } from './index.aws.js';
 import { createDeployedSnapshotStorage, Agent as AwsAgent } from './agent.aws.js';
-import { handleInvocation } from './agentcore-invocation.js';
+import { backendLoader, ConfigNotReadyError, handleInvocation } from './agentcore-invocation.js';
 import { errorCauseShape } from './agent.js';
 import { SessionManager } from '@strands-agents/sdk';
 import type { Snapshot, SnapshotStorage, SnapshotManifest, SnapshotLocation, LocalAgent } from '@strands-agents/sdk';
@@ -6203,5 +6203,49 @@ describe('AgentCore: a turn without a conversation never runs in another session
 		assert.deepStrictEqual(ack, { channelId: ownerConv, status: 'accepted' });
 		assert.strictEqual(turns[0].conversationId, undefined);
 		assert.strictEqual(turns[1].conversationId, 'conv-1');
+	});
+
+	// The Runtime process can start before the deployment has uploaded the config file.
+	test('the AgentCore entry runs no turn until the app config is readable, then loads the backend once', async () => {
+		const turns: string[] = [];
+		const agent = { invokeTurn: async (payload: { message: string }) => { turns.push(payload.message); } };
+		const tasks = { addAsyncTask: () => 1, completeAsyncTask: () => true };
+		let configReadable = false;
+		let configLoads = 0;
+		let backendImports = 0;
+		const loadAgent = backendLoader({
+			loadConfig: async () => { configLoads++; },
+			configMissing: () => !configReadable,
+			loadBackend: async () => { backendImports++; return agent; },
+		});
+		const invoke = async (prompt: string) => handleInvocation(await loadAgent(), tasks, { prompt, channelId: 'chan-1' }, {});
+
+		// Process start, and an invocation, before the config file exists.
+		await assert.rejects(loadAgent(), ConfigNotReadyError);
+		await assert.rejects(invoke('too early'), ConfigNotReadyError);
+		assert.strictEqual(backendImports, 0, 'the backend must not be imported against an empty config');
+		assert.deepStrictEqual(turns, []);
+
+		configReadable = true;
+		assert.deepStrictEqual(await invoke('first'), { channelId: 'chan-1', status: 'accepted' });
+		await invoke('second');
+		assert.deepStrictEqual(turns, ['first', 'second']);
+		assert.strictEqual(backendImports, 1);
+		assert.strictEqual(configLoads, 3, 'the config is loaded again only until it is readable');
+	});
+
+	test('the AgentCore entry loads the config again after a failed load, and does not import a failed backend twice', async () => {
+		let configFails = true;
+		let backendImports = 0;
+		const loadAgent = backendLoader({
+			loadConfig: async () => { if (configFails) throw new Error('S3 unavailable'); },
+			configMissing: () => false,
+			loadBackend: async () => { backendImports++; throw new Error('backend does not import'); },
+		});
+		await assert.rejects(loadAgent(), /S3 unavailable/);
+		configFails = false;
+		await assert.rejects(loadAgent(), /backend does not import/);
+		await assert.rejects(loadAgent(), /backend does not import/);
+		assert.strictEqual(backendImports, 1);
 	});
 });
