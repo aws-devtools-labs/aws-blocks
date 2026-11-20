@@ -18,7 +18,7 @@ The templates do not define an `npm run dashboard` script. The launcher:
 1. resolves `@aws-cdk-blocks/admin-ui` from the app, offering a one-time `npm install --save-dev` in an interactive terminal if it is missing (the package is not a dependency of core),
 2. generates a crypto-random session token for the process,
 3. boots this package's server (`src/server/start.ts`): a Next.js handler wrapped in a `node:http` server bound to `127.0.0.1`, rejecting any `/api` request without the token, and
-4. opens `http://127.0.0.1:4400/#token=…` in the browser (the first free port from 4400, or `--port <n>`). The SPA reads the token from the fragment (never sent to the server) and presents it as an `Authorization` header.
+4. opens `http://127.0.0.1:4400/#token=…` in the browser (the first free port from 4400, or set `await dashboard({ port: 5000 })` in the launch command). The SPA reads the token from the fragment (never sent to the server) and presents it as an `Authorization` header.
 
 ## Architecture
 

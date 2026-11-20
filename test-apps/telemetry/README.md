@@ -109,8 +109,8 @@ random ID, and asserts it was created correctly.
 - **Schema forward-compatibility**: payload is JSON-serializable with all
   required fields.
 - **Environment metadata**: nodeVersion, os, ci fields validated.
-- **CDK opt-out**: `CDK_DISABLE_CLI_TELEMETRY` set to `1`, `true` or `0`, and
-  `cli-telemetry: false` in the app's `cdk.context.json`.
+- **CDK opt-out**: `CDK_DISABLE_CLI_TELEMETRY=1` or `true` disables telemetry, as does
+  `cli-telemetry: false` in the app's `cdk.context.json`. Setting the environment variable to `0` leaves telemetry on.
 
 ## Design
 

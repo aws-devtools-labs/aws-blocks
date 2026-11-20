@@ -50,7 +50,7 @@ point `BENCH_AGENT_USER` at another unprivileged account.
 | `BENCH_ROLE_ARN` | `agent-bench` environment secret | The OIDC role the `bench` and `summary` jobs assume (see *Security*). |
 | `BENCH_BUCKET` | `agent-bench` environment variable | The bucket that holds per-cell results and the baseline. |
 | `BENCH_MODEL` | `bench` job `env` in `agent-bench.yml` | Builder model id. Default `us.anthropic.claude-opus-4-8`. |
-| `BENCH_JUDGE_MODEL` | `bench` job `env` and `summary` roll-up step in `agent-bench.yml` | Both default to `us.anthropic.claude-opus-4-8`. Change both settings to use the same model for judging and analysis. |
+| `BENCH_JUDGE_MODEL` | `bench` job `env` and `summary` roll-up step in `agent-bench.yml` | Default `us.anthropic.claude-opus-4-8` in each location. Set both so judging and roll-up analysis use the same judge model. Use a different id from `BENCH_MODEL` to limit same-model self-evaluation bias. |
 | `BENCH_MIN_SCORE`, `BENCH_MAX_REGRESSION`, `BENCH_MAX_HARNESS_ERRORS` | repo/org variables | Optional thresholds. An upstream failure with no artifacts can still fail the summary (see *Gating*). |
 | `BLOCKS_TELEMETRY_CANARY_ID` | workflow secret | Optional. Step 1 seeds the telemetry canary from it; unset skips the seed with a warning. |
 | `BENCH_AGENT_USER` | local env | The unprivileged account agent code runs as. Default `benchagent`. |
@@ -58,7 +58,7 @@ point `BENCH_AGENT_USER` at another unprivileged account.
 
 ## Architecture
 
-Ten steps per cell, all on the GitHub runner (4b, 4c and 6b are best-effort auxiliaries).
+Ten steps per cell, all on the GitHub runner. 4b and 6b are best-effort auxiliaries; 4c fails closed and gates uploads.
 The runner is the sandbox; Bedrock provides the model.
 
 0. **Init result.** Writes a baseline `result.json` before any AWS call, so
@@ -83,6 +83,7 @@ The runner is the sandbox; Bedrock provides the model.
    - records build / dev-server / playwright / test signals.
 4. **Judge.** Strands + Bedrock; one vended `bash` tool rooted at a
    spec-blinded, disposable source-only copy of the workspace.
+   Its shell runs as the credential-free `benchagent` user, like the builder's.
    Writes it makes to the copy can't affect scoring.
    Scores source only; objective signals are applied as caps afterward, not
    shown to it.

@@ -21,6 +21,7 @@ npm run dev
 
 - In the installed app, `npm run docs` lists Building Blocks, `npm run docs KVStore` opens a block’s guide, and `npm run help` lists tasks.
 - Start from a specific template with `--template <name>`. `npx @aws-cdk-blocks/create-blocks-app --help` lists the templates and describes each.
+- The `auth` template was formerly named `auth-cognito`; the old name still works.
 - Run the command inside an existing project (omit the directory, or pass `.`) to add a `cdk-blocks/` backend to it. The CLI auto-detects an AWS Amplify Gen 2 project and integrates with it.
 
 For a full walkthrough, see [Getting started with AWS CDK Blocks](https://docs.aws.amazon.com/blocks/latest/devguide/getting-started.html).
@@ -74,6 +75,8 @@ cdk-blocks/
 ```
 
 ## Building from source
+
+Requires Node.js 22 or later and npm 10 or later.
 
 ```bash
 npm install
