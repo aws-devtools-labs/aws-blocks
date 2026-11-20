@@ -6,11 +6,11 @@ Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB.
 
 **When NOT to use:** If you need request-response APIs, use `ApiNamespace`. If you need durable message queuing with guaranteed delivery, use `AsyncJob`.
 
-**Scaling envelope:** Best suited for channels with tens to low-thousands of concurrent subscribers. Publish latency scales linearly with subscriber count (~100ms for 1,000 subscribers). For channels with 10K+ subscribers, use explicit fan-out patterns (e.g., sharded `AsyncJob`). For 100K+ broadcast audiences, consider a dedicated WebSocket fleet.
+**Scaling envelope:** Best suited for channels with tens to low-thousands of concurrent subscribers. Publish latency scales linearly with subscriber count (about 100–200 ms for 1,000 subscribers). For channels with 10K+ subscribers, use explicit fan-out patterns (e.g., sharded `AsyncJob`). For a broadcast audience of 100K+, consider a dedicated WebSocket fleet.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 
-## Quick Start
+## Quick start
 
 ```typescript
 import { Realtime } from '@aws-cdk-blocks/bb-realtime';
@@ -26,24 +26,30 @@ const rt = new Realtime(scope, 'collab', {
 
 ## API
 
-### Namespaces
-
-Define typed namespaces using `Realtime.namespace(schema)`. The schema provides both the TypeScript type (inferred) and runtime validation on publish.
-
-The `Realtime` instance exposes three methods, all keyed by namespace name (type-checked with full autocomplete):
+`new Realtime(scope, id, options)`. The methods take a namespace name, type-checked against the `namespaces` option:
 
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `rt.publish(namespace, channel, data)` | `Promise<void>` | Broadcast data to all subscribers (best-effort). Validates against schema. |
-| `rt.getChannel(namespace, channel, { scope?, principal? })` | `Promise<RealtimeChannel<T>>` | Get a channel handle (async — `await` it). Return from API methods for client hydration. By default the handle also opens every `/`-separated sub-channel of `channel`; pass `{ scope: 'exact' }` to limit it to `channel` (see [Sub-channels and access](#sub-channels-and-access)). Pass `{ principal: user.userSub }` for a channel that belongs to a user (see [Binding a handle to a user](#binding-a-handle-to-a-user)). |
-| `rt.revokeAccess(principal)` | `Promise<void>` | End a user's access: handles minted for `principal` before this call stop working, and open subscriptions end on the connection's next keep-alive ping. See [Binding a handle to a user](#binding-a-handle-to-a-user). |
+| `rt.getChannel(namespace, channel, { scope?, principal? })` | `Promise<RealtimeChannel<T>>` | Returns a subscribe-only channel handle to return from an API method. `scope` is `'subtree'` (default) or `'exact'`: see [Sub-channels and access](#sub-channels-and-access). `principal` is the user id the handle belongs to: see [Binding a handle to a user](#binding-a-handle-to-a-user). |
+| `rt.revokeAccess(principal)` | `Promise<void>` | Revokes the principal's existing handles. For delivery and notification timing, see [Binding a handle to a user](#binding-a-handle-to-a-user). |
 | `rt.subscribe(namespace, channel, handler)` | `() => void` | Server-side subscribe. Returns unsubscribe function. |
 
-**Runtime only.** These methods (`publish`, `subscribe`, `getChannel`) run at request time — call them inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, **not** at the top level of your `cdk-blocks/index.ts`. Top-level code runs during CDK synth, where the block resolves to its infrastructure construct, whose data methods are guards: a top-level call throws an `Error` reading `Realtime.<method>() cannot be called during CDK synth. Data methods run at request time — …`. To publish seed data, do it from inside a handler or a separate runtime script. Constructing the block at module scope is fine; only method calls must move into handlers.
+**Runtime only.** Call `publish`, `subscribe`, `getChannel` and `revokeAccess` inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, **not** at the top level of your `cdk-blocks/index.ts`.
 
-### Channel Handle
+- Top-level code runs during CDK synth, where a call throws an `Error` reading `Realtime.<method>() cannot be called during CDK synth. Data methods run at request time — …`.
+- Constructing the block at module scope is fine.
 
-`getChannel()` returns a `Promise<RealtimeChannel<T>>` — `await` it to get a subscribe-only handle that serializes via `toJSON()` for client transfer:
+### Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `namespaces` | `Record<string, NamespaceConfig>` | (required) | Namespace name to `Realtime.namespace(schema)`. The schema (any StandardSchemaV1: Zod, Valibot, etc.) gives the message type and validates `data` on every `publish()`. |
+| `logger` | `ChildLogger` | — | Accepted, but does not redirect delivery warnings. The AWS runtime writes those warnings to the console. |
+
+### Channel handle
+
+`RealtimeChannel<T>`, the subscribe-only handle `getChannel()` resolves to. It serializes via `toJSON()` for client transfer:
 
 | Method | Returns | Description |
 |--------|---------|-------------|
@@ -65,108 +71,112 @@ Returned by `subscribe()` on a channel handle:
 
 Always `await sub.established` before relying on the subscription — this ensures the WebSocket handshake and server-side authorization have completed.
 
-## Usage Patterns
+## Channel names
 
-### Server-Side Publish via API
+Channel names are scoped by the Realtime instance and namespace: `{fullId}/{namespace}/{channel}`. The `channel` argument you pass to `publish()`, `subscribe()`, and `getChannel()` is the user-facing portion.
+
+- `/` separates segments (`tenants/acme/billing`). There is no limit on the number of segments or on segment length.
+- `publish()`, `subscribe()` and `getChannel()` throw `ValidationFailedException` for a channel name that is empty, starts or ends with `/`, contains an empty segment (`a//b`), or has a `.` or `..` segment.
+- They throw the same error for a `channel` that isn't a string (`undefined`, `null`, an object). A number is accepted and validated as its string form.
+- Any other characters are allowed.
+- The full channel path (including the `{fullId}/{namespace}/` prefix) must fit in 1024 bytes. A longer path throws `ValidationFailedException`, in local dev and on AWS.
+- The full path is stored with every subscription and sent in every message, and API Gateway meters messages in 32 KB increments. Use short identifiers: `room-123`, `user-456`, `game-abc`.
+
+### Sub-channels and access
+
+The token inside a channel handle decides which channels a client can subscribe to with it:
+
+| `getChannel()` call | Token authorizes |
+|---------------------|------------------|
+| `rt.getChannel('events', 'tenants/acme')` (default, `scope: 'subtree'`) | `tenants/acme` **and every channel under it**: `tenants/acme/billing`, `tenants/acme/x/y`, … |
+| `rt.getChannel('events', 'tenants/acme', { scope: 'exact' })` | `tenants/acme` only |
+
+So giving a client a handle for a channel is an access decision for that channel's whole subtree. The match is by `/`-separated segment, not by string prefix: a handle for `tenants/acme` never opens `tenants/acme-corp`.
+
+**The pitfall:** the default is wrong for nested names that belong to different principals. Say each tenant gets `tenants/<tenantId>` and each user gets `tenants/<tenantId>/users/<userId>`. With the default scope, a tenant-wide handle given to any member of `acme` also lets that member subscribe to every user's channel under `tenants/acme/users/`. To prevent it:
+
+- Use `{ scope: 'exact' }` for the tenant-wide handle, or keep per-principal channels out of each other's subtrees (for example `tenant-users/<tenantId>/<userId>` beside `tenants/<tenantId>`).
+- Keep user-supplied ids from adding segments: `encodeURIComponent(id)` encodes `/`.
 
 ```typescript
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async sendMessage(roomId: string, text: string) {
-    const user = await auth.requireAuth(context);
-    await rt.publish('chat', roomId, { sender: user.id, text });
-    return { sent: true };
-  },
-}));
+async getTenantFeed(tenantId: string) {
+  const user = await auth.requireAuth(context);
+  if (!isMember(user, tenantId)) throw new Error('Forbidden');
+  return rt.getChannel('events', `tenants/${encodeURIComponent(tenantId)}`, { scope: 'exact' });
+},
 ```
 
-### Returning a Channel Handle (Authorization Gate)
+Use the default `'subtree'` only when a client that may read a channel may read everything under it.
 
-The recommended pattern for client subscriptions. Authorization happens in your API method — the channel handle is only returned if the user is allowed:
+### Binding a handle to a user
+
+A handle's tokens are bearer credentials: whoever holds them can subscribe until they expire. Pass `principal` (the signed-in user's id, at most 256 characters) so the tokens are tied to that user:
 
 ```typescript
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async joinRoom(roomId: string) {
-    const user = await auth.requireAuth(context);
-    if (!canAccessRoom(user, roomId)) throw new Error('Forbidden');
-    return rt.getChannel('chat', roomId, { principal: user.userSub });
-  },
-}));
+return rt.getChannel('chat', roomId, { principal: user.userSub });
 ```
 
-Client side:
-```typescript
-const channel = await api.joinRoom('room-1');
-const sub = channel.subscribe((msg) => {
-  console.log(msg.sender, msg.text); // fully typed
-});
-await sub.established; // wait for server confirmation
-```
+What `principal` does:
 
-> **A handle also opens the channel's sub-channels by default.** The token in a handle for `tenants/acme` authorizes `tenants/acme` and every channel under it, such as `tenants/acme/billing`. If a name under the channel can belong to someone else, pass `{ scope: 'exact' }`. See [Sub-channels and access](#sub-channels-and-access).
+- The id is signed into the handle's connect token and channel token. The server accepts a channel token only on a connection opened with a connect token for the same user, so a channel token cannot be used on a connection opened for another user or for no user.
+- The handle as a whole (both tokens) is still a bearer credential until it expires or `revokeAccess()` is called. Whoever holds it can open a connection and subscribe, and the same handle can be used on several sockets. Treat it like a session token.
+- A handle without a `principal` works for any holder and cannot be revoked.
+- A connection belongs to one user. The client keeps one socket per Realtime endpoint and user, so handles for different users (or a user's handle and an unbound one) on one page each use their own socket, and signing in as someone else on the same page needs no reload.
 
-### Server-Side Subscribe
+When access ends:
 
-The server can subscribe to channels too — useful for aggregation, logging, or triggering side effects:
+- On AWS, publish checks channel-token expiry before delivery. The local WebSocket server checks expiry on a keep-alive ping, not on publish.
+- The deployed client sends a keep-alive ping about every 9 minutes. The server re-checks open subscriptions on each ping. An ended subscription reports `onDisconnect('error')`, except an expired one on a channel subscribed with `refresh`, which renews in place (see [Outliving the token TTLs with `refresh`](#outliving-the-token-ttls-with-refresh)).
+- During an in-place renewal, messages published between the server ending the subscription and the renewal completing (one API round trip, about once an hour per channel) are not delivered to that channel.
+- Pass `refresh` for subscriptions that should outlive the 1-hour channel token.
 
-```typescript
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async monitorRoom(roomId: string) {
-    const ch = await rt.getChannel('chat', roomId);
-    const sub = ch.subscribe((msg) => {
-      console.log(`[${roomId}] ${msg.sender}: ${msg.text}`);
-    });
-    await sub.established;
-    return { monitoring: true };
-  },
-}));
-```
+`revokeAccess()`:
 
-On AWS, server-side subscribe uses a real WebSocket connection, so it receives messages regardless of which Lambda invocation published them. Locally, it uses an in-process EventEmitter.
+- `await rt.revokeAccess(user.userSub)` ends a user's access, for example on sign-out, a role change or a removed account.
+- Handles minted for that user before the call are refused on connect and subscribe right away. A handle minted in the same second as the call counts as older.
+- On AWS, publish checks revocation using an eventually consistent read. An already-open subscription can still receive a message just after revocation; the client learns that access ended when a keep-alive ping observes it. The local dev server ends affected subscriptions immediately.
+- AWS stores each user's revocation record in the existing connections table with a TTL of 2 hours and 5 minutes, long enough for all previously issued tokens to expire.
+- A handle minted after the call works, so also make your `refresh` endpoint refuse that user.
 
-### Multiple Subscriptions Share a Connection
+### Rate limits
 
-When a client subscribes to multiple channels, they share a single WebSocket connection:
+API Gateway throttles the WebSocket stage in messages per second (the stack-wide `throttling` default), shared by all connections on the stage. It has no per-connection limit, and Realtime does not add one, so a single connection can use up to the stage rate. Keep client-sent frames to what the client library sends (subscribe, unsubscribe, ping).
+
+## Errors
 
 ```typescript
-const ch1 = await api.joinRoom('room-1');
-const ch2 = await api.joinRoom('room-2');
+import { isBlocksError, RealtimeErrors } from 'aws-cdk-blocks';
 
-const sub1 = ch1.subscribe(handler1);
-const sub2 = ch2.subscribe(handler2);
-
-await sub1.established;
-await sub2.established;
-
-// sub1.connection === sub2.connection (same WebSocket)
-```
-
-Messages are routed to the correct handler — room-1 messages only go to `handler1`, room-2 only to `handler2`.
-
-### Handling Auth Failures
-
-If a channel's token is invalid, expired, bound to a different user, or revoked, `established` rejects:
-
-```typescript
-const sub = channel.subscribe(handler);
 try {
-  await sub.established;
-} catch (err) {
-  if (err.name === 'ConnectionFailedException') {
-    // token was rejected — re-fetch the channel from the API
+  await rt.publish('chat', 'room-1', { sender: 123 }); // wrong type
+} catch (e: unknown) {
+  if (isBlocksError(e, RealtimeErrors.ValidationFailed)) {
+    // data failed schema validation
   }
 }
 ```
 
-A failed subscribe does **not** kill other subscriptions on the same connection.
+| Constant | `error.name` | Thrown when |
+|----------|--------------|-------------|
+| `RealtimeErrors.ValidationFailed` | `ValidationFailedException` | `publish()`: `data` fails the namespace schema, or the message exceeds 128 KiB. `publish()`, `subscribe()`, `getChannel()`: an invalid channel name or a channel path over 1024 bytes. `getChannel()`: a `scope` other than `'exact'` or `'subtree'`, or an invalid `principal`. `revokeAccess()`: a missing or invalid `principal`. |
+| `RealtimeErrors.ConnectionFailed` | `ConnectionFailedException` | The server refuses a subscribe, or the deployed client exhausts its connection retries while `sub.established` is pending. `getChannel()` also throws it on AWS when the token signing secret is unavailable. |
+| `RealtimeErrors.PublishFailed` | `PublishFailedException` | AWS only: the WebSocket callback URL or the connections table is not available to the running code. A failed delivery to one connection is logged, not thrown. |
+| `RealtimeErrors.UnsupportedCompute` | `UnsupportedComputeException` | Synth time: the backend's default compute is not Lambda. |
 
-### Handling Disconnects & Reconnects
+A namespace name that is not in `namespaces` throws an error named `InvalidNamespace`.
 
-API Gateway caps a WebSocket at a 2-hour max connection duration and a 10-minute idle
-timeout, so a long-lived subscription **will** be dropped and re-established over its
-lifetime. The client transport handles this for you: on an unexpected drop it
-**transparently reconnects with exponential backoff and resubscribes every active channel**
-(replaying its stored token), so you do not need to re-subscribe manually. A ~9-minute
-keep-alive ping avoids the idle timeout.
+## Delivery guarantees
+
+- **Subscribe before you publish.** Realtime has no message buffering (local dev and AWS alike): a subscriber only receives messages published *after* its subscription registers (await `sub.established`).
+- If a server-side publisher (e.g. an AsyncJob or Agent stream) may fire before the client subscribes, the client must subscribe first, then trigger the publisher, and backfill any earlier messages from a durable source (DB/history).
+- **Delivery is best-effort.** `publish()` sends to all connected subscribers in parallel. If delivery to an individual connection fails, the failure is logged and the rest continue. Stale connections are cleaned up automatically.
+- **`publish()` awaits delivery to all subscribers before returning.** For channels with tens of subscribers, this adds negligible latency. For larger audiences, publish from an `AsyncJob` so the API response isn't blocked.
+- **Above 10K subscribers** a single Lambda invocation hits API Gateway TPS limits (~10K default): shard the fan-out across several `AsyncJob` invocations. [USE-CASES.md](./USE-CASES.md) shows both patterns.
+- **Message size:** at most 128 KiB (131,072 bytes) per published message, including the wire envelope.
+
+## Disconnects and reconnects
+
+API Gateway closes a WebSocket after 2 hours, or after 10 minutes idle, so a long-lived subscription is dropped and re-established over its lifetime. On an unexpected drop the client reconnects with exponential backoff and resubscribes every active channel with its stored token. A keep-alive ping about every 9 minutes avoids the idle timeout.
 
 Use the options form of `subscribe()` to observe the lifecycle:
 
@@ -187,15 +197,10 @@ const sub = channel.subscribe({
 });
 ```
 
-`onDisconnect` fires for all disconnects, including user-initiated `unsubscribe()` (reason
-`'client'`), and on every subsequent drop of the same logical subscription.
+If the stored channel token has expired or the user's access was revoked, the server can reject the resubscribe and the client reports `onDisconnect('error')`. A reconnect can also fail before resubscription: without `refresh`, the client reuses its stored connect token, which expires after 2 hours. After five failed reconnect attempts, the client gives up and reports a final `onDisconnect('error')`.
+Without a `refresh` callback, re-fetch the channel from your API and subscribe again if the user still has access.
 
-If a resubscribe is ultimately rejected (a stored token that has passed its ~1h/~2h TTL, or a
-revoked channel) or retries are exhausted, the transport surfaces it as `onDisconnect('error')`.
-Without a `refresh` callback (below), that is the fallback point to re-fetch the channel and
-re-subscribe manually.
-
-#### Outliving the token TTLs with `refresh`
+### Outliving the token TTLs with `refresh`
 
 To keep a subscription alive past the token TTLs **without** hand-rolling re-subscription, pass
 a `refresh` callback:
@@ -211,80 +216,95 @@ const sub = channel.subscribe({
 });
 ```
 
-`refresh: () => Promise<RealtimeChannelDescriptor>` is invoked before the socket is reopened on
-each reconnect; the fresh connect token builds the new socket URL and the fresh channel token is
-replayed on resubscribe, so a drop crossing the ~1h/~2h boundary recovers transparently instead
-of giving up. Each channel multiplexed on the connection re-mints its own token in parallel; a
-`refresh` that rejects (or exceeds an internal timeout) falls back to the stored token, and only
-an all-channels-failed outcome surfaces `onDisconnect('error')`. The server method behind
-`refresh` re-issues a channel token, so it must apply the same authorization as the method that
-issued the original channel.
+- `refresh: () => Promise<RealtimeChannelDescriptor>` runs before the socket is reopened on each reconnect, once for each channel on the connection.
+- A `refresh` that rejects or takes longer than 15 seconds falls back to the stored token if another channel refreshed successfully. If none did, the client retries with backoff and fires `onDisconnect('error')` for each failed attempt (up to five). Only the deployed client fires a final `'error'` when it gives up.
+- The server method behind `refresh` re-issues a channel token, so it must apply the same authorization as the method that issued the original channel.
+- `refresh` also renews a live subscription in place. The server re-checks open subscriptions on every keep-alive ping and ends one whose channel token has expired; a channel with `refresh` then calls it and subscribes again on the same socket, with no `onDisconnect` and no `onReconnect`.
+- A channel without `refresh`, or whose `refresh` fails, gets `onDisconnect('error')`.
+- A subscription ended because access was revoked is not renewed.
 
-`refresh` also renews a live subscription in place. The server re-checks open subscriptions on every keep-alive ping and ends one whose channel token has expired; a channel with `refresh` then calls it and subscribes again on the same socket, with no `onDisconnect` and no `onReconnect`. A channel without `refresh`, or whose `refresh` fails, gets `onDisconnect('error')`. A subscription ended because access was revoked is not renewed.
+## Examples
 
-> **Reconnect without `refresh` spans only the connect token's ~2h life.** With no `refresh`,
-> the reconnect replays the *stored* connect token (~2h TTL, matching API Gateway's 2h max
-> connection); past 2h the `$connect` handshake is rejected and reconnect gives up with a
-> terminal `onDisconnect('error')`. Provide `refresh` (above) to re-mint fresh tokens on each
-> reconnect and outlive that window; otherwise treat the terminal `onDisconnect('error')` as the
-> cue to re-fetch a fresh channel handle and re-subscribe manually.
-
-## Schema Validation
-
-Every `publish()` validates against the schema at runtime:
+### Server-side publish via API
 
 ```typescript
-import { isBlocksError, RealtimeErrors } from 'aws-cdk-blocks';
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async sendMessage(roomId: string, text: string) {
+    const user = await auth.requireAuth(context);
+    if (!await canWriteRoom(user, roomId)) throw new Error('Forbidden');
+    await rt.publish('chat', roomId, { sender: user.userSub, text });
+    return { sent: true };
+  },
+}));
+```
 
-try {
-  await rt.publish('chat', 'room-1', { sender: 123 }); // wrong type
-} catch (e: unknown) {
-  if (isBlocksError(e, RealtimeErrors.ValidationFailed)) {
-    // data failed schema validation
+### Returning a channel handle (authorization gate)
+
+Authorization happens in your API method — the channel handle is only returned if the user is allowed:
+
+```typescript
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async joinRoom(roomId: string) {
+    const user = await auth.requireAuth(context);
+    if (!await canAccessRoom(user, roomId)) throw new Error('Forbidden');
+    return rt.getChannel('chat', roomId, { scope: 'exact', principal: user.userSub });
+  },
+}));
+```
+
+Client side:
+```typescript
+const channel = await api.joinRoom('room-1');
+const sub = channel.subscribe((msg) => {
+  console.log(msg.sender, msg.text); // fully typed
+});
+await sub.established; // wait for server confirmation
+```
+
+### Server-side subscribe
+
+In a trusted server-side worker, subscribe for the duration of the work and close the subscription before the worker exits:
+
+```typescript
+async function monitorRoom(roomId: string) {
+  const ch = await rt.getChannel('chat', roomId);
+  const sub = ch.subscribe((msg) => console.log(`[${roomId}] ${msg.sender}: ${msg.text}`));
+  try {
+    await sub.established;
+    await runRoomWorker(roomId);
+  } finally {
+    sub.unsubscribe();
   }
 }
 ```
 
-## Error Constants
+On AWS, server-side subscribe uses a real WebSocket connection, so it receives messages regardless of which Lambda invocation published them. Locally, it uses an in-process EventEmitter.
+
+### Handling auth failures
+
+If a channel's token is invalid, expired, bound to a different user, or revoked, `established` rejects:
 
 ```typescript
-import { RealtimeErrors } from 'aws-cdk-blocks';
-
-RealtimeErrors.ValidationFailed  // data failed schema validation on publish, or an invalid channel name / getChannel() scope
-RealtimeErrors.PublishFailed     // Publish fan-out failed (AWS only)
-RealtimeErrors.ConnectionFailed  // WebSocket connection or subscribe rejected
-RealtimeErrors.UnsupportedCompute // default compute is not Lambda (thrown at synth time)
+const sub = channel.subscribe(handler);
+try {
+  await sub.established;
+} catch (err) {
+  if (err.name === 'ConnectionFailedException') {
+    // token was rejected — re-fetch the channel from the API
+  }
+}
 ```
 
-## Best Practices
+A failed subscribe does **not** kill other subscriptions on the same connection.
 
-- **Await `established`** before publishing or relying on a subscription — don't race the WebSocket handshake.
-- **Subscribe before you publish.** Realtime is fire-and-forget with no message buffering (local dev and AWS alike): a subscriber only receives messages published *after* its subscription registers (await `sub.established`). If a server-side publisher (e.g. an AsyncJob or Agent stream) may fire before the client subscribes, the client must subscribe first, then trigger the publisher, and backfill any earlier messages from a durable source (DB/history).
-- **Publish through the API**, not the channel handle — keeps authorization logic in one place.
+## Best practices
+
 - **Use channels for dynamic scoping** — `room-123`, `user-456`, `game-abc`. One namespace, many channels.
-- **Scope handles to the channel when names nest** — a handle for `a` also opens `a/b` unless you pass `{ scope: 'exact' }` to `getChannel()`. See [Sub-channels and access](#sub-channels-and-access).
-- **Keep payloads small** — large messages increase latency and cost. Max 128 KiB (131,072 bytes) per published message (including wire envelope).
-- **One `Realtime` instance per domain** — use multiple namespaces within it for different message types (cursors, chat, presence).
 - **Unsubscribe when done** — especially in components that mount/unmount. Leaked subscriptions hold the WebSocket open.
-- **Delivery is best-effort** — `publish()` sends to all connected subscribers in parallel. If delivery to an individual connection fails, the failure is logged and the rest continue. Stale connections are cleaned up automatically. This is similar to UDP: fire-and-forget per connection.
-- **Large fan-out** — `publish()` awaits delivery to all subscribers before returning. For channels with tens of subscribers, this adds negligible latency. For larger audiences, offload to `AsyncJob` so the API response isn't blocked:
 
-  ```typescript
-  const broadcast = new AsyncJob(scope, 'broadcast', {
-    schema: z.object({ channel: z.string(), data: cursorSchema }),
-    handler: async ({ channel, data }) => { await rt.publish('cursors', channel, data); },
-  });
+## Scaling and cost (AWS)
 
-  // In your API method:
-  await broadcast.submit({ channel: roomId, data: cursor }); // returns immediately
-  ```
-
-- **Broadcast scale (10K+ subscribers)** — a single Lambda invocation hitting `postToConnection` for every subscriber will hit API Gateway TPS limits (~10K default). For this scale, shard the fan-out across multiple AsyncJob invocations, each responsible for a slice of subscribers. This bridges the gap while you evaluate a dedicated WebSocket fleet for true broadcast workloads.
-- **Test auth flows in sandbox** — use `npm run test:e2e:sandbox` to validate the full deployed auth flow end-to-end.
-
-## Scaling & Cost (AWS, US East)
-
-Cost scales linearly with messages delivered. The API Gateway message fee dominates.
+Cost scales linearly with messages delivered. The API Gateway message fee dominates. Prices are for US East.
 
 ### Per-Publish Cost (to N subscribers)
 
@@ -294,13 +314,7 @@ Cost scales linearly with messages delivered. The API Gateway message fee domina
 | API Gateway: deliver message × N | N × $0.000001 |
 | **Total per publish** | **≈ N × $0.000001** |
 
-The publish call itself is a Lambda invocation, not a WebSocket message — no API Gateway charge for the inbound side. DynamoDB lookup is <0.01% of cost.
-
-| Subscribers | Cost per publish | Cost per 1M publishes |
-|-------------|------------------|-----------------------|
-| 1 | $0.000001 | $1.00 |
-| 10 | $0.00001 | $10.00 |
-| 100 | $0.0001 | $100.00 |
+The publish call itself is a Lambda invocation, not a WebSocket message — no API Gateway charge for the inbound side.
 
 ### Connection Cost
 
@@ -314,15 +328,7 @@ The publish call itself is a Lambda invocation, not a WebSocket message — no A
 
 ### Publish Latency
 
-`publish()` delivers messages in parallel, limited by the SDK's HTTP connection pool (50 concurrent sockets by default). Each `postToConnection` takes ~5-10ms with TCP keep-alive within the same region.
-
-| Subscribers | Estimated publish latency |
-|---|---|
-| 10 | ~5-10ms (single wave) |
-| 50 | ~5-10ms (single wave) |
-| 200 | ~20-40ms |
-| 500 | ~50-100ms |
-| 1,000 | ~100-200ms |
+`publish()` delivers messages in parallel, limited by the SDK's HTTP connection pool (50 concurrent sockets by default). Each `postToConnection` takes ~5-10ms with TCP keep-alive within the same region: about 100-200ms per 1,000 subscribers.
 
 The AWS SDK retries throttled requests automatically (3 retries with exponential backoff).
 
@@ -337,77 +343,14 @@ The AWS SDK retries throttled requests automatically (3 retries with exponential
 | Account-level API TPS | 10,000/sec | No — API Gateway hard limit | Shared across all API Gateway usage; raisable |
 | New connections | 500/sec | No — API Gateway hard limit | Per account per region; raisable |
 
-## Local Development
+## Local development
 
-In local dev (`npm run dev`), Realtime uses an in-process EventEmitter with a WebSocket bridge to browser clients. The local WebSocket server sends `subscribe_success` on valid subscribes and `error` on invalid tokens. Schema validation runs identically to AWS.
+In local dev (`npm run dev`), Realtime uses an in-process EventEmitter with a WebSocket bridge to browser clients. Schema validation runs identically to AWS, and a subscribe with an invalid token is rejected.
+
+The local client does not send periodic keep-alive pings, so a live subscription does not automatically renew when its token expires. If the local server is unreachable, `established` can remain pending after the retry limit.
 
 Messages are ephemeral — no persistence across restarts.
 
-## Channel Names
-
-Channel names are scoped by the Realtime instance and namespace: `{fullId}/{namespace}/{channel}`. The `channel` argument you pass to `publish()`, `subscribe()`, and `getChannel()` is the user-facing portion.
-
-**Recommended limits:**
-- Keep channel names under **256 characters**. The full channel path (including instance ID and namespace) is stored as a DynamoDB sort key and included in every WebSocket message.
-- Use short, descriptive identifiers: `room-123`, `user-456`, `game-abc`.
-- Avoid embedding large payloads or UUIDs longer than necessary in channel names.
-
-**Hard limits:**
-- The full channel path (including `{fullId}/{namespace}/` prefix) must fit within a DynamoDB sort key (1024 bytes). This is enforced at runtime in both local dev and AWS — exceeding it throws `ValidationFailedException`.
-- Published messages (including the wire envelope with channel path) must fit within API Gateway's 128 KiB logical WebSocket message limit. API Gateway's separate 32 KB quota is a *frame* limit — the service reassembles fragmented frames, so it is not the per-message cap. This is enforced at runtime in both environments.
-- There is no enforced character limit on the user-facing channel name, but excessively long names increase DynamoDB item sizes (affecting read/write costs) and WebSocket message sizes (affecting delivery latency and billing, since messages are metered in 32 KB increments).
-
-There is no limit on the number of segments or on segment length.
-
-**Grammar:** `/` separates segments (`tenants/acme/billing`). `publish()`, `subscribe()` and `getChannel()` throw `ValidationFailedException` for a channel name that is empty, starts or ends with `/`, contains an empty segment (`a//b`), or has a `.` or `..` segment, and for a `channel` that isn't a string (`undefined`, `null`, an object). Any other characters are allowed. A number is accepted and validated as its string form.
-
-### Sub-channels and access
-
-The token inside a channel handle decides which channels a client can subscribe to with it:
-
-| `getChannel()` call | Token authorizes |
-|---------------------|------------------|
-| `rt.getChannel('events', 'tenants/acme')` (default, `scope: 'subtree'`) | `tenants/acme` **and every channel under it**: `tenants/acme/billing`, `tenants/acme/x/y`, … |
-| `rt.getChannel('events', 'tenants/acme', { scope: 'exact' })` | `tenants/acme` only |
-
-So giving a client a handle for a channel is an access decision for that channel's whole subtree. The match is by `/`-separated segment, not by string prefix: a handle for `tenants/acme` never opens `tenants/acme-corp`.
-
-**The pitfall:** the default is wrong for nested names that belong to different principals. Say each tenant gets `tenants/<tenantId>` and each user gets `tenants/<tenantId>/users/<userId>`. With the default scope, a tenant-wide handle given to any member of `acme` also lets that member subscribe to every user's channel under `tenants/acme/users/`. Use `{ scope: 'exact' }` for the tenant-wide handle, or keep per-principal channels out of each other's subtrees (for example `tenant-users/<tenantId>/<userId>` beside `tenants/<tenantId>`), and keep user-supplied ids from adding segments (`encodeURIComponent(id)` encodes `/`):
-
-```typescript
-async getTenantFeed(tenantId: string) {
-  const user = await auth.requireAuth(context);
-  if (!isMember(user, tenantId)) throw new Error('Forbidden');
-  return rt.getChannel('events', `tenants/${encodeURIComponent(tenantId)}`, { scope: 'exact' });
-},
-```
-
-Use the default `'subtree'` only when a client that may read a channel may read everything under it.
-
-
-
-### Binding a handle to a user
-
-A handle's tokens are bearer credentials: whoever holds them can subscribe until they expire. Pass `principal` (the signed-in user's id, at most 256 characters) so the tokens are tied to that user:
-
-```typescript
-async joinRoom(roomId: string) {
-  const user = await auth.requireAuth(context);
-  if (!canAccessRoom(user, roomId)) throw new Error('Forbidden');
-  return rt.getChannel('chat', roomId, { principal: user.userSub });
-},
-```
-
-- The id is signed into the handle's connect token and channel token. The server accepts a channel token only on a connection opened with a connect token for the same user, so binding keeps a channel token from being used on a connection opened for another user or for no user. The handle as a whole is still a bearer credential until it expires or `revokeAccess()` is called, so treat it like a session token: whoever holds the whole handle (both tokens) can open a connection and subscribe, and the same handle can be used on several sockets until it expires. Handles without a `principal` keep working for any holder.
-- A connection belongs to one user. The client keeps one socket per Realtime endpoint and user, so handles for different users (or a user's handle and an unbound one) on one page each use their own socket, and signing in as someone else on the same page needs no reload.
-- Expiry and revocation are enforced when a message is published: a subscription whose channel token has expired, or whose access was revoked, receives nothing more, whether or not the client keeps sending pings. Open subscriptions are also re-checked on every keep-alive ping (about every 9 minutes), and the client is told why a subscription ended. A channel subscribed with `refresh` renews an expired token in place, with no `onDisconnect`; messages published between the server ending the subscription and the renewal completing (one API round trip, about once an hour per channel) are not delivered to that channel. Any other ended subscription, including a revoked one, reports `onDisconnect('error')`. Pass `refresh` for subscriptions that should outlive the 1-hour channel token.
-- `await rt.revokeAccess(user.userSub)` ends a user's access, for example on sign-out, a role change or a removed account. Handles minted for that user before the call are refused on connect and subscribe right away, and messages published after the call no longer reach subscriptions that are already open (the client learns the subscription ended on the connection's next ping, within about 9 minutes). A handle minted after the call works, so also make your `refresh` endpoint refuse that user, and a handle minted in the same second as the call counts as older. Revocation is stored in the existing connections table for 2 hours 5 minutes, the longest a token lives, and can't revoke a handle that was minted without a `principal`.
-- Tokens from a version without this format are refused. Clients that pass `refresh` recover on their next reconnect; others must call your API method again.
-
-### Rate limits
-
-API Gateway throttles the WebSocket stage in messages per second (the stack-wide `throttling` default), shared by all connections on the stage. It has no per-connection limit, and Realtime does not add one, so a single connection can use up to the stage rate. Keep client-sent frames to what the client library sends (subscribe, unsubscribe, ping). Per-connection limiting is a known gap.
-
-## See Also
+## See also
 
 - [USE-CASES.md](./USE-CASES.md) — Common use cases, scaling patterns, and industry examples
