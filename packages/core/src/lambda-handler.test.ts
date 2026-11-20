@@ -799,6 +799,41 @@ describe('createLambdaHandler — unmatched RawRoute diagnostics', () => {
     );
   });
 
+  it('answers 404 for the root path, which the REST API root sends to the handler', async () => {
+    let result: any;
+    await captureErrors(async () => {
+      result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/', body: null }));
+    });
+    assert.strictEqual(result.statusCode, 404);
+    assert.deepStrictEqual(JSON.parse(result.body), { error: 'Not Found' });
+  });
+
+  it('answers 404 for the root path without calling a `GET /*` handler, which still serves other paths', async () => {
+    // A `/*` wildcard compiles to `^/(.*)$`, which also matches `/` with an
+    // empty capture. The root is not a route, so it must not reach the handler.
+    const calls: string[] = [];
+    registerRoute({
+      method: 'GET',
+      path: '/*',
+      handler: async (ctx) => {
+        calls.push(ctx.request.url.pathname);
+        ctx.response.send({ ok: true });
+      },
+    });
+
+    let root: any;
+    await captureErrors(async () => {
+      root = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/', body: null }));
+    });
+    assert.strictEqual(root.statusCode, 404);
+    assert.deepStrictEqual(JSON.parse(root.body), { error: 'Not Found' });
+    assert.deepStrictEqual(calls, [], 'the catch-all handler is not called for /');
+
+    const example = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/example', body: null }));
+    assert.strictEqual(example.statusCode, 200);
+    assert.deepStrictEqual(calls, ['/example'], 'the catch-all handler still serves /example');
+  });
+
   it('does not log when a RawRoute matches', async () => {
     registerRoute({ method: 'GET', path: '/known', handler: async (ctx) => ctx.response.send({ ok: true }) });
 

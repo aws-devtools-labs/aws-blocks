@@ -163,8 +163,7 @@ describe('createSharedGateway — single shared REST API', () => {
 		const template = Template.fromStack(stack);
 		// Every Lambda (AWS_PROXY) integration carries TimeoutInMillis: 29000 — the
 		// function timeout (up to 900s for async work) is unreachable on the
-		// synchronous HTTP path, so the integration pins the real boundary. The
-		// root MOCK method CDK auto-creates has no Lambda and no timeout.
+		// synchronous HTTP path, so the integration pins the real boundary.
 		const methods = template.findResources('AWS::ApiGateway::Method');
 		const proxyIntegrations = Object.values(methods)
 			.map((m) => (m.Properties as { Integration?: { Type?: string; TimeoutInMillis?: number } }).Integration)
@@ -209,6 +208,32 @@ describe('createSharedGateway — single shared REST API', () => {
 		// ANY on {prefix}/{proxy+} and {prefix}/api/{proxy+} for both prefixes, the root
 		// /{proxy+}, and / itself (a root proxy also adds ANY to the root so `/` is reachable).
 		assert.strictEqual(methods.filter((m) => m === 'ANY').length, 6, 'six ANY proxy methods');
+	});
+
+	test('integrates the root path with the default function, not a MOCK integration', () => {
+		// A proxy mounted on the root also adds its method to the root; without an
+		// integration of its own that method was a MOCK with no request template, so
+		// `GET /` on the stage answered 500 ("Unable to parse statusCode").
+		const { stack, compute } = setup('SharedGwRoot');
+		createSharedGateway(stack, {
+			defaultCompute: compute,
+			defaults: BlocksPresets.production,
+		});
+		const resources = Template.fromStack(stack).toJSON().Resources as CfnResources;
+		const methods = Object.values(resources).filter((r) => r.Type === 'AWS::ApiGateway::Method');
+		const mock = methods.filter(
+			(m) => (m.Properties.Integration as { Type?: string } | undefined)?.Type === 'MOCK',
+		);
+		assert.deepStrictEqual(mock, [], 'no method has a MOCK integration');
+		const apiId = Object.keys(resources).find((id) => resources[id].Type === 'AWS::ApiGateway::RestApi');
+		const root = methods.filter(
+			(m) => JSON.stringify(m.Properties.ResourceId) === JSON.stringify({ 'Fn::GetAtt': [apiId, 'RootResourceId'] }),
+		);
+		assert.strictEqual(root.length, 1, 'one method on the root resource');
+		assert.strictEqual(root[0].Properties.HttpMethod, 'ANY');
+		const integration = root[0].Properties.Integration as { Type?: string; Uri?: unknown };
+		assert.strictEqual(integration.Type, 'AWS_PROXY');
+		assert.ok(JSON.stringify(integration.Uri).includes('Handler'), 'the root integrates the default function');
 	});
 
 	test('builds under the given scope with the per-compute gateway construct ids', () => {

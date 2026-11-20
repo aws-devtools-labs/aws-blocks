@@ -306,6 +306,15 @@ describe('wildcard empty path matching', () => {
     const result = matchRoute('GET', '/files');
     assert.strictEqual(result, null);
   });
+
+  it('/* does NOT match the root path, which is never a route', () => {
+    registerRoute({ method: 'GET', path: '/*', handler: noop });
+    assert.strictEqual(matchRoute('GET', '/'), null);
+    assert.strictEqual(matchRoute('GET', '//'), null, 'a root that collapses to / is not matched either');
+    const result = matchRoute('GET', '/example');
+    assert.ok(result);
+    assert.strictEqual(result.params['*'], 'example');
+  });
 });
 
 // ── FIX 3: Registry lock ────────────────────────────────────────────────────
