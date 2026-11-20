@@ -1,7 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { randomUUID } from 'node:crypto';
 import type { Stats } from 'node:fs';
 import {
 	copyFileSync,
@@ -9,11 +8,10 @@ import {
 	linkSync,
 	lstatSync,
 	mkdirSync,
+	mkdtempSync,
 	readdirSync,
-	readFileSync,
-	renameSync,
+	rmSync,
 	statSync,
-	unlinkSync,
 	writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -77,12 +75,14 @@ function entries(dir: string): string[] {
 }
 
 /**
- * Copy `source` to `target` through a staging name, so an interrupted copy
- * leaves no partial file. A partial file at the final path would be treated as
- * the migrated copy by the next run, which skips any entry that already exists.
+ * Stage the copy next to `target` so it can be hard-linked on the same filesystem.
+ * Keep the staging name independent of the destination basename: a name that
+ * fits on disk might be too long with a temporary suffix. An interrupted copy
+ * must not leave a partial file at the final path, which the next run would skip.
  */
 function copyFileAtomically(source: string, target: string): void {
-	const staged = `${target}.${randomUUID()}.tmp`;
+	const stagingDir = mkdtempSync(join(dirname(target), '.carry-'));
+	const staged = join(stagingDir, 'copy');
 	try {
 		copyFileSync(source, staged);
 		// `linkSync` REFUSES an existing target (EEXIST) where `renameSync` would
@@ -97,7 +97,7 @@ function copyFileAtomically(source: string, target: string): void {
 		}
 	} finally {
 		try {
-			unlinkSync(staged);
+			rmSync(stagingDir, { recursive: true, force: true });
 		} catch {}
 	}
 }
