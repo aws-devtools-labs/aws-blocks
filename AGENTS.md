@@ -27,7 +27,7 @@ You're an engineer working **on CDK Blocks itself** — the framework and its Bu
 10. Every change to a published package **ships a changeset** covering all changed packages (its text becomes the public changelog).
 11. Keep docs **runnable** — every README/JSDoc snippet, command, package name, and relative link is correct at HEAD; a dead link in a published `packages/*/README.md` is a defect. Without this → users copy-paste broken code and lose trust in the framework.
 12. **No root `/` route**, and a route wildcard must be the last path segment. Violating this → API Gateway rejects the route or swallows all traffic into one handler.
-13. On each customer-facing page, use **AWS CDK Blocks** on first mention and **CDK Blocks** thereafter. Everywhere else, including code comments, use **CDK Blocks**. Use the project name without an article. Keep individual block names such as **Auth Block** and **KVStore Block**, and leave technical identifiers (package names, paths, commands, and symbols) unchanged.
+13. Use consistent naming: on each customer-facing surface, use **AWS CDK Blocks** on first mention and **CDK Blocks** thereafter. Everywhere else, including code comments, use **CDK Blocks**. Use the project name without an article. Keep individual block names such as **Auth Block** and **KVStore Block**.
 
 ---
 
