@@ -4,7 +4,7 @@
 // A Database whose every statement carries one user's identity, for Row Level Security policies (DESIGN §4.5).
 import type { TransactionHandle } from '../common/engine.js';
 import type { SqlQuery } from '../common/sql.js';
-import { CLAIMS_SETTING } from '../constants.js';
+import { APP_ROLE_PLACEHOLDER, CLAIMS_SETTING, quoteIdent } from '../constants.js';
 import {
 	CountedEngine,
 	type CountedRows,
@@ -42,13 +42,19 @@ interface Identity {
 // does not exist (22023). Both are setup mistakes, the same on every call, so they are not the caller's 403.
 const PG_INVALID_PARAMETER_VALUE = '22023';
 
+// The fix is a migration, not a statement the app can run: the app role cannot grant itself a role, and in a
+// migration CURRENT_USER is the cluster admin. `${app_role}` names the app role in every place a file runs.
+// The grant gives the right to switch only (INHERIT FALSE): with a plain grant the app role would inherit the
+// role, and the role's policies would apply to statements outside asRole() as well.
 function roleRefused(fullId: string, role: string): (e: unknown) => unknown {
 	return (e) => {
 		const code = sqlStateOf(e);
 		if (code !== PG_INSUFFICIENT_PRIVILEGE && code !== PG_INVALID_PARAMETER_VALUE) return e;
 		console.error(
 			`[Database] ${fullId}: asRole('${role}') was refused by PostgreSQL (SQLSTATE ${code}). The role must ` +
-				`exist and the connection role must be a member of it: GRANT "${role}" TO CURRENT_USER;`,
+				`exist and the role the app connects as must be a member of it. Add a migration file with ` +
+				`GRANT ${quoteIdent(role)} TO ${APP_ROLE_PLACEHOLDER} WITH INHERIT FALSE, SET TRUE; (the migration runner ` +
+				`replaces ${APP_ROLE_PLACEHOLDER} with that role; before PostgreSQL 16, leave out the WITH clause).`,
 		);
 		return configError(
 			`Database '${fullId}': the connection role cannot switch to the role given to asRole(). ` +

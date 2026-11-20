@@ -221,7 +221,7 @@ function analyze(block: Block): Analysis {
 			if (nb && ts.isNamespaceImport(nb)) declared.add(nb.name.text);
 			if (nb && ts.isNamedImports(nb)) for (const el of nb.elements) declared.add(el.name.text);
 			// In a browser file, each value it imports must exist under the `browser` condition too (a namespace
-			// import of an empty module is not an error, so only named and default imports are checked).
+			// import never fails to link, so only named and default imports are checked).
 			const file = fileAt(sf.getLineAndCharacterOfPosition(node.getStart(sf)).line);
 			if (isBlocksSpecifier(spec) && clause && !clause.isTypeOnly && file && BROWSER_FILE.test(file)) {
 				const names = [
@@ -481,7 +481,8 @@ export function checkDocs(
 		}
 
 		// Browser files again, resolved as a browser bundle (and `tsx -C browser`) resolves them: the root
-		// `aws-cdk-blocks` is an empty module there, so a value import from it is undefined at runtime.
+		// `aws-cdk-blocks` is its browser build there, which has only the client-safe values, so a value import of
+		// anything else from it fails at runtime.
 		const browserProgram = ts.createProgram(
 			[...browserFiles.keys()],
 			{ ...COMPILER_OPTIONS, customConditions: ['browser'] },

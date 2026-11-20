@@ -1,5 +1,18 @@
 # @aws-blocks/bb-tracer
 
+## 1.0.0-rc.1
+
+### Patch Changes
+
+- fbe48c5: Local data moved from `.bb-data/{fullId}/` to `.cdk-blocks/local/data/{fullId}/`. Existing data is copied over on first use. The `@aws-cdk-blocks/core` changelog has the upgrade steps.
+- Updated dependencies [e529b00]
+- Updated dependencies [fbe48c5]
+- Updated dependencies [c42ba42]
+- Updated dependencies [3081521]
+- Updated dependencies [23692f1]
+  - @aws-cdk-blocks/core@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.1
+
 ## 1.0.0-rc.0
 
 ### Major Changes

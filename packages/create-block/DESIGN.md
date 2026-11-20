@@ -43,7 +43,8 @@ what already landed. Each JSON/text edit records whether it actually changed
 anything (`… (already present)` otherwise). The touchpoints:
 
 1. `packages/blocks/src/index.ts` — runtime/mock re-export (via HTML markers)
-2. `packages/blocks/src/index.cdk.ts` — CDK re-export (via HTML markers)
+2. `packages/blocks/src/index.cdk.ts` — CDK re-export (via HTML markers), and
+   `packages/blocks/src/index.browser.ts` — the error constants for client code (via HTML markers)
 3. `packages/blocks/package.json` — `dependencies` + the `aws-blocks.vendorize` map
 4. `packages/blocks/tsconfig.json` — a project reference
 5. root `package.json` `workspaces` — append `packages/bb-<name>`

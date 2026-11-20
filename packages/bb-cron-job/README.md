@@ -169,7 +169,7 @@ The handler receives a `CronJobEvent<T>` with:
 ## Error Constants
 
 ```typescript
-import { CronJobErrors } from '@aws-cdk-blocks/bb-cron-job';
+import { CronJobErrors } from 'aws-cdk-blocks';
 
 CronJobErrors.InvalidSchedule  // schedule expression is not a valid cron or rate format
 CronJobErrors.InvalidTimezone  // timezone string is not a valid IANA timezone

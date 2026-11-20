@@ -154,7 +154,7 @@ In local dev (`npm run dev`), the Logger BB:
 ## Errors
 
 ```typescript
-import { LoggingErrors } from '@aws-cdk-blocks/bb-logger';
+import { LoggingErrors } from 'aws-cdk-blocks';
 
 LoggingErrors.SerializationFailed // 'SerializationFailedException'
 ```

@@ -150,8 +150,7 @@ On AWS, `isSynced()` reports the latest ingestion job of the data source, for lo
 Match an error by name with `isBlocksError(e, KnowledgeBaseErrors.<Name>)`:
 
 ```typescript
-import { isBlocksError } from '@aws-cdk-blocks/core';
-import { KnowledgeBaseErrors } from '@aws-cdk-blocks/bb-knowledge-base';
+import { isBlocksError, KnowledgeBaseErrors } from 'aws-cdk-blocks';
 ```
 
 | Constant | `error.name` | Thrown when |
