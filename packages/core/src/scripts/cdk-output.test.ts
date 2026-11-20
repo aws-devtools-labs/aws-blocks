@@ -212,6 +212,28 @@ describe('createCdkProgressReporter', () => {
     );
   });
 
+  it('ends a warning at a `❌` failure line, prints the failure, and keeps a construct path that names an error', () => {
+    const out = collectingSink();
+    const err = collectingSink();
+    const reporter = createCdkProgressReporter(out, err);
+    for (let synth = 0; synth < 2; synth++) {
+      reporter.line('WARNING Plain HTTP front door.', 'stderr');
+      reporter.line('   app-sandbox/error-pages/Hosting', 'stderr');
+      reporter.line(' ❌  app-sandbox failed: Error: boom', 'stderr');
+    }
+    reporter.finish(false);
+    assert.strictEqual(
+      err.text(),
+      [
+        'WARNING Plain HTTP front door.',
+        '   app-sandbox/error-pages/Hosting',
+        '❌  app-sandbox failed: Error: boom',
+        '❌  app-sandbox failed: Error: boom',
+        '',
+      ].join('\n'),
+    );
+  });
+
   it("drops OpenNext's expected wrapper/converter ERROR on a Next.js build, and keeps other OpenNext errors", () => {
     const out = collectingSink();
     const err = collectingSink();
@@ -415,6 +437,23 @@ describe('attachCdkWatchOutput', () => {
       ['error', '[CDK Watch] WARNING Plain HTTP front door.'],
       ['error', '[CDK Watch]    app-sandbox/Hosting/Hosting'],
     ]);
+  });
+
+  it('at normal, ends a warning at a `❌` failure line and still prints the failure and dumps the retained lines', async () => {
+    const calls = captureConsole();
+    const err = collectingSink();
+    const child = fakeWatch();
+    attachCdkWatchOutput(child, { level: 'normal', stderr: err });
+    child.err.write('WARNING Plain HTTP front door.\n   app-sandbox/error-pages/Hosting\n');
+    child.err.write(' ❌  app-sandbox failed: Error: boom\n');
+    await tick();
+    assert.deepStrictEqual(calls, [
+      ['error', '[CDK Watch] WARNING Plain HTTP front door.'],
+      ['error', '[CDK Watch]    app-sandbox/error-pages/Hosting'],
+      ['error', '[CDK Watch] ❌  app-sandbox failed: Error: boom'],
+    ]);
+    assert.match(err.text(), /──── cdk watch output \(3 lines, retained because BLOCKS_LOG_LEVEL=normal\) ────/);
+    assert.ok(err.text().includes(' ❌  app-sandbox failed: Error: boom\n'));
   });
 
   it('at quiet, prints nothing until cdk watch exits non-zero, and not when the sandbox is stopping', async () => {

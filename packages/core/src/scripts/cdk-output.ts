@@ -153,6 +153,14 @@ const WARNING_LOCATION_LINE = /^(?:(?:or )?\S+:\d+:\d+|\(and \d+ more\.\.\.\))$/
 /** A continuation of a warning: its construct path and `Acknowledge with '…'` line, indented. */
 const WARNING_CONTINUATION_LINE = /^\s+\S/;
 
+/**
+ * CDK's indented stack failure line (` ❌  <stack> failed: …`). It ends a
+ * warning, so it reaches the failure handling instead of joining the block.
+ * Only the `❌` marker counts, not every {@link isCdkFailureLine} match: a
+ * construct path such as `app/error-pages/Hosting` must stay in its warning.
+ */
+const CDK_STACK_FAILURE_LINE = /^\s*❌/;
+
 /** Collects synth warning blocks out of a CDK child's lines; see {@link createSynthWarningCollector}. */
 interface SynthWarningCollector {
   /**
@@ -194,7 +202,12 @@ function createSynthWarningCollector(
     line(raw: string, from: 'stdout' | 'stderr'): boolean {
       const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
       const state = streams[from];
-      if (state.warning && WARNING_CONTINUATION_LINE.test(line) && !parseCdkEventLine(line)) {
+      if (
+        state.warning &&
+        WARNING_CONTINUATION_LINE.test(line) &&
+        !parseCdkEventLine(line) &&
+        !CDK_STACK_FAILURE_LINE.test(line)
+      ) {
         state.warning.push(line.trimEnd());
         return true;
       }
