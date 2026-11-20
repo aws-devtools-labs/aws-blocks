@@ -5,7 +5,7 @@
 // Replays the E2E Hosting matrix's REST API deletes through API Gateway's
 // delete quota, to check how long they wait on each other or to evaluate a
 // per-leg `teardown-at` schedule or `account-offset` layout.
-// .github/workflows/pr-checks.yml sets no `teardown-at` today (a leg's
+// .github/workflows/pr-e2e-hosting.yml sets no `teardown-at` today (a leg's
 // missing value counts as 0, no wait): fixed delays went stale as the suites
 // changed. It spreads the legs over the E2E accounts with `account-offset`
 // instead (a missing value counts as 0, the PR's own account).
@@ -13,8 +13,9 @@
 //   node scripts/ci/hosting-teardown-replay.mjs [--search[=budget]] [--holdout]
 //     [--schedule=JSON] [--offsets=JSON] [runId ...]
 //
-// Inputs, read with the gh CLI for each PR Checks run (latest attempt;
-// default: RUNS below, the runs the earlier values were searched on):
+// Inputs, read with the gh CLI for each run (latest attempt; default: RUNS
+// below, the runs the earlier values were searched on, which are PR Checks
+// runs from before the matrix moved to pr-e2e-hosting.yml):
 // - each E2E Hosting job's start (jobs API `started_at`);
 // - from its log, for the last deploy (a Playwright retry deploys again):
 //   the start of the destroy after it (the last "Destroying sandbox" line
@@ -41,13 +42,14 @@
 // DELETE_FAILED
 // (the report lists the ones the logs show, with their modeled wait). Other
 // runs in the same account cause most of those (see the matrix comment in
-// pr-checks.yml), which is why spreading over accounts helps more than
+// pr-e2e-hosting.yml), which is why spreading over accounts helps more than
 // a schedule. It
 // reports, per schedule: total, p90 and max modeled queue wait, deletes
 // waiting over 270 s (CloudFormation gives up after about 4.5 minutes), the
 // runner time the waits cost (mean per run), and how far the end of the
 // Hosting matrix and of the run's slowest E2E job move. The latter holds for
-// full runs; in a run that selects only Hosting, Hosting is the slowest job.
+// full PR Checks runs; in a PR E2E Hosting run, or one that selects only
+// Hosting, Hosting is the slowest job.
 //
 // --search: a coordinate search (15 s steps) for teardown-at values that
 // minimise the total wait without moving the end of any run's slowest E2E
@@ -57,8 +59,8 @@
 // local minimum, so try other starts too. Round its result.
 // --holdout: the same search, from no wait, on the even-indexed runs,
 // evaluated on the odd ones, and the other way round.
-// --schedule: evaluate a teardown-at JSON object instead of pr-checks.yml's.
-// --offsets: evaluate an account-offset JSON object instead of pr-checks.yml's.
+// --schedule: evaluate a teardown-at JSON object instead of pr-e2e-hosting.yml's.
+// --offsets: evaluate an account-offset JSON object instead of pr-e2e-hosting.yml's.
 // Every report also shows the matrix with no wait in one account, the
 // layout before the legs were spread.
 //
@@ -74,7 +76,7 @@ import { parse } from 'yaml';
 
 const exec = promisify(execFile);
 const REPO = process.env.GITHUB_REPOSITORY ?? 'aws/cdk-blocks';
-const WORKFLOW = fileURLToPath(new URL('../../.github/workflows/pr-checks.yml', import.meta.url));
+const WORKFLOW = fileURLToPath(new URL('../../.github/workflows/pr-e2e-hosting.yml', import.meta.url));
 const CACHE = join(tmpdir(), 'hosting-teardown-replay');
 
 // Successful PR Checks runs with all nine Hosting legs, 2026-10-17 to 2026-10-22.
@@ -342,7 +344,12 @@ async function main(argv) {
 	print('one account', oneAccount);
 	const none = summary(runs, {}, offsets);
 	print('no wait', none, oneAccount, 'one account');
-	print(value('schedule') ? 'schedule' : 'pr-checks', summary(runs, current, offsets), oneAccount, 'one account');
+	print(
+		value('schedule') ? 'schedule' : 'pr-e2e-hosting',
+		summary(runs, current, offsets),
+		oneAccount,
+		'one account',
+	);
 	console.log(`teardown-at: ${JSON.stringify(current)}`);
 	console.log(`account-offset: ${JSON.stringify(offsets)}`);
 	const failed = runs.flatMap((r) => {

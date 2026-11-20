@@ -14,11 +14,12 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PR_WORKFLOWS } from './_pr-workflows.mjs';
 import { partition, readWorkspaces, workspaceNames } from './unit-test-shard.mjs';
 
 const SCRIPT = fileURLToPath(new URL('./unit-test-shard.mjs', import.meta.url));
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
-const WORKFLOW = fileURLToPath(new URL('../../.github/workflows/pr-checks.yml', import.meta.url));
+const WORKFLOWS = fileURLToPath(new URL('../../.github/workflows/', import.meta.url));
 
 function rootWith(workspaces) {
 	const dir = mkdtempSync(join(tmpdir(), 'unit-test-shard-'));
@@ -142,15 +143,18 @@ describe('unit-test-shard.mjs', () => {
 });
 
 describe('pr-checks.yml', () => {
-	const yml = readFileSync(WORKFLOW, 'utf8');
-	// Each top-level job, from its `  id:` line to the next one.
-	const jobs = Object.fromEntries(
-		yml
-			.split(/^(?=  [a-z][\w-]*:$)/m)
-			.slice(1)
-			.map((block) => [block.slice(2, block.indexOf(':')), block]),
-	);
-	const parts = Object.keys(jobs).filter((id) => id.startsWith('local-'));
+	// Each top-level job of a PR workflow, from its `  id:` line to the next one.
+	const jobsOf = (file) =>
+		Object.fromEntries(
+			readFileSync(join(WORKFLOWS, file), 'utf8')
+				.split(/^(?=  [a-z][\w-]*:$)/m)
+				.slice(1)
+				.map((block) => [block.slice(2, block.indexOf(':')), block]),
+		);
+	const jobs = jobsOf('pr-checks.yml');
+	// The local-* jobs of every PR workflow: the aggregator can need only the
+	// ones in its own workflow.
+	const parts = PR_WORKFLOWS.flatMap((file) => Object.keys(jobsOf(file))).filter((id) => id.startsWith('local-'));
 	const aggregator = jobs['build-and-test-local'];
 
 	it('has the parts of the local check', () => {

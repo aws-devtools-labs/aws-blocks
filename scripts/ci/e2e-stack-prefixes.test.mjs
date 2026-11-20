@@ -184,8 +184,8 @@ describe('deployed test apps', () => {
 // the job's last steps delete what the checkout deployed. Compute Smoke needs
 // it most: a leaked stack keeps its VPC endpoints in the shared compute test
 // VPC and every later run in that account fails to deploy.
-describe('pr-checks.yml e2e-compute-smoke', () => {
-	const yml = read('.github/workflows/pr-checks.yml');
+describe('pr-e2e-compute.yml e2e-compute-smoke', () => {
+	const yml = read('.github/workflows/pr-e2e-compute.yml');
 	const job = yml.split(/^(?=  [a-z][\w-]*:$)/m).find((block) => block.startsWith('  e2e-compute-smoke:'));
 	const steps = job.slice(job.indexOf('    steps:\n')).split(/^(?=      - )/m).slice(1);
 	const ifOf = (step) => step.match(/^ {8}if: (.+)$/m)?.[1];

@@ -27,6 +27,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
+import { PR_WORKFLOWS } from './_pr-workflows.mjs';
 
 const SCRIPT = fileURLToPath(new URL('./secret-to-env.sh', import.meta.url));
 const WORKFLOWS = fileURLToPath(new URL('../../.github/workflows/', import.meta.url));
@@ -289,8 +290,8 @@ describe('workflow secrets', () => {
 
 	it('finds the steps that fetch a secret', () => {
 		assert.ok(
-			fetchers.some(({ file }) => file === 'pr-checks.yml'),
-			'expected the Supabase secret fetch in pr-checks.yml',
+			fetchers.some(({ file }) => file === 'pr-e2e.yml'),
+			'expected the Supabase secret fetch in pr-e2e.yml',
 		);
 	});
 
@@ -316,7 +317,7 @@ describe('workflow OIDC scope', () => {
 
 	it('covers the pull request workflows that assume AWS roles', () => {
 		const names = prWorkflows.map(({ file }) => file);
-		for (const file of ['pr-checks.yml', 'native-sdk-e2e.yml', 'e2e-amplify-interop.yml']) {
+		for (const file of [...PR_WORKFLOWS, 'native-sdk-e2e.yml', 'e2e-amplify-interop.yml']) {
 			assert.ok(names.includes(file), `expected ${file} to run on pull requests`);
 		}
 	});

@@ -1,0 +1,308 @@
+name: PR E2E Compute Smoke
+
+# The E2E Compute Smoke matrix and the E2E Teardown Verify for its stacks.
+# Split out of pr-checks.yml so a failed leg can be re-run as soon as this run
+# finishes, without waiting for the other E2E workflows. pr-checks.yml has the
+# notes on the trigger, the checkout and the concurrency group.
+
+on:
+  pull_request:
+    branches: ['*']
+
+concurrency:
+  group: pr-e2e-compute-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Jobs that assume an AWS role grant themselves id-token: write.
+permissions:
+  contents: read
+
+env:
+  # Use the 'spec' reporter for node:test — produces a clean, hierarchical
+  # pass/fail summary instead of verbose TAP output with per-test YAML blocks.
+  NODE_OPTIONS: '--test-reporter=spec'
+
+jobs:
+  # Picks the E2E jobs to run. By default that is every E2E job when the PR
+  # changes packages/ or test-apps/, and none otherwise. An E2E trailer on the
+  # PR's head commit overrides it, so a PR that only changes CI (this workflow,
+  # .github/actions/) or one E2E suite can run just the jobs it affects:
+  #
+  #   git commit --trailer 'E2E: all'               every E2E job
+  #   git commit --trailer 'E2E: sandbox, hosting'  only these (job ids without the e2e- prefix)
+  #
+  # Only the head commit counts: a later commit without the trailer goes back
+  # to the default. Each PR uses a fixed E2E account from the pool (PR number
+  # mod the pool size, see .github/actions/e2e-slot), so parallel PRs spread
+  # across it. The E2E Hosting legs spread one run over the pool too, each at
+  # a fixed offset from the PR's account (see e2e-hosting).
+  #
+  # A job the changes call for is never skipped: if the trailer leaves it out,
+  # or names an unknown job, it fails in its first step instead. E2E Sandbox
+  # and E2E Production are required checks, and GitHub counts a skipped job as
+  # passing, so a skip would let the trailer merge a PR past E2E. Push a
+  # commit without the trailer before merging. For the same reason those two
+  # also start when this job fails or is cancelled, and fail in their first step.
+  #
+  # E2E VPC Smoke is left out while test-apps/vpc-smoke's tests are switched
+  # off (its test:e2e:sandbox script only echoes), since it would test nothing.
+  #
+  # The logic lives in scripts/ci/e2e-selection.sh, tested by
+  # scripts/ci/e2e-selection.test.mjs (in Local Build and Checks).
+  # scripts/ci/required-checks.test.mjs checks that no required check passes
+  # when a job it depends on fails or is cancelled.
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      # E2E account for this PR (see .github/actions/e2e-slot).
+      e2e-index: ${{ steps.e2e-slot.outputs.index }}
+      # JSON array of the E2E jobs to run, e.g. ["sandbox","hosting"]
+      e2e: ${{ steps.check.outputs.e2e }}
+      # JSON array of the E2E jobs the changes call for but the trailer left
+      # out. Each fails in its first step.
+      e2e-blocked: ${{ steps.check.outputs.blocked }}
+      # e2e + e2e-blocked: the E2E jobs that start. Each E2E job's `if:` checks
+      # this one, so a blocked job can't be skipped by checking only `e2e`.
+      e2e-run: ${{ steps.check.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The head commit, not the merge commit: its E2E trailer counts.
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - id: e2e-slot
+        uses: ./.github/actions/e2e-slot
+      - id: check
+        env:
+          E2E_ACCOUNT: ${{ steps.e2e-slot.outputs.account }}
+        run: scripts/ci/e2e-selection.sh origin/main
+
+  e2e-compute-smoke:
+    # The compute suite: one app (test-apps/compute-smoke) with a scenario module
+    # per compute kind and workload — container AsyncJobs, an API namespace on
+    # its own serverless compute, an API namespace on a container compute —
+    # deployed once per leg. The legs vary the API front door
+    # (COMPUTE_API_FRONT_DOOR), as E2E Hosting's legs vary the app or its compute
+    # type: a container namespace is reached through the gateway's VPC link on
+    # `apigateway`, and straight from CloudFront (a VPC origin) on `cloudfront`.
+    name: E2E Compute Smoke (${{ matrix.front-door }})
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
+    # No build-and-test-local edge on purpose, see e2e-sandbox.
+    needs: [detect-changes]
+    if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'compute-smoke') && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    environment: e2e
+    # Serialize this suite across PRs: it provisions private-DNS interface
+    # endpoints into its OWN persistent test VPC (BlocksComputeTestVpc, separate
+    # from the VPC smoke job's BlocksTestVpc), and AWS permits only one per
+    # service per VPC — two concurrent runs of THIS job would collide. Queue
+    # rather than cancel so an in-flight deploy/destroy isn't interrupted.
+    #
+    # This uses a group distinct from the VPC smoke job (blocks-test-vpc). The
+    # two suites don't collide across groups because they target *different*
+    # persistent VPCs, so they can run in parallel.
+    concurrency:
+      group: blocks-test-compute-${{ needs.detect-changes.outputs.e2e-index }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      # Every leg provisions the same endpoints into the one compute test VPC, so
+      # legs run one after another. The concurrency group is not a queue: it holds
+      # one running and one pending job, and a newer pending job (another PR on
+      # this account) cancels the pending one.
+      max-parallel: 1
+      matrix:
+        front-door: [apigateway, cloudfront]
+        # The cloudfront leg also turns on `defaults.strictNamespacePlacement`, so
+        # the bare endpoint's refusal of placed namespaces is proven on AWS while
+        # the apigateway leg keeps proving the default (off) behaviour, with no
+        # extra deploy.
+        include:
+          - front-door: cloudfront
+            strict-namespace-placement: 'true'
+    env:
+      # `pr-`, not `compute-`: the stack name already starts `bb-test-compute-`, and
+      # the app adds the leg (`-cf` / `-gw`) itself; the extra characters pushed
+      # the app's FileBucket name past S3's 63 at four-digit PR numbers.
+      BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
+      COMPUTE_API_FRONT_DOOR: ${{ matrix.front-door }}
+      COMPUTE_STRICT_NAMESPACE_PLACEMENT: ${{ matrix.strict-namespace-placement || 'false' }}
+    # No BLOCKS_SANDBOX_KEEP: ending the job once the delete has started would
+    # release the concurrency group above while this stack's endpoints are
+    # still in the shared VPC. The suite destroys its stacks and waits. (The
+    # next run's "Wait for an earlier run's stacks to settle" step is only a
+    # fallback: it deploys anyway after 10 minutes.)
+    #
+    # The stacks the teardown is deleting, for E2E Teardown Verify. A matrix
+    # job's output holds one leg's value (the last to set it), which is enough
+    # while there is one leg; with more, give each leg its own output.
+    outputs:
+      teardown-stacks: ${{ steps.teardown.outputs.stacks }}
+    steps:
+      - name: Check the E2E trailer
+        if: contains(fromJSON(needs.detect-changes.outputs.e2e-blocked), 'compute-smoke')
+        run: |
+          echo "::error::The head commit's E2E trailer leaves out this job, but this PR's changes call for it. Push a commit without the trailer before merging."
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # traffic is consistent and identifiable (and can be excluded from product
+      # usage metrics).
+      - uses: ./.github/actions/seed-telemetry-id
+
+      - run: npm ci
+      - run: npm run build:e2e
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/e2e-aws-credentials
+        with:
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
+
+      - name: Ensure persistent compute test VPC
+        run: cd test-infra && npx cdk deploy BlocksComputeTestVpc --require-approval never --outputs-file compute-outputs.json
+
+      - name: Export VPC ID
+        id: vpc-id
+        run: |
+          VPC_ID=$(cat test-infra/compute-outputs.json | python3 -c "import sys,json; print(json.loads(sys.stdin.read())['BlocksComputeTestVpc']['VpcId'])")
+          echo "VPC_TEST_VPC_ID=$VPC_ID" >> "$GITHUB_ENV"
+
+      # The last run's teardown returns once its deletes are accepted, and its
+      # end releases the lock above, so its stacks can still hold their VPC
+      # endpoints here: deleting, or still finishing a create that a cancel cut
+      # off. While this job holds the lock and has not deployed, any
+      # bb-test-compute- stack in an *_IN_PROGRESS state is an earlier run's (or
+      # an earlier leg's). Deploying now would
+      # fail with a conflicting private DNS name. Wait up to 10 minutes for them
+      # to settle, then deploy regardless. (The job timeout leaves room for it.)
+      # Once the compute test VPC has permanent endpoints (test-infra's
+      # BlocksComputeTestVpcEndpoints), the app adds none and runs need no lock,
+      # so there is nothing to wait for.
+      - name: Wait for an earlier run's stacks to settle
+        timeout-minutes: 12
+        run: |
+          # GitHub runs this step with `bash -e` only; without pipefail a failed
+          # list-stacks would read as "nothing in progress".
+          set -o pipefail
+          if grep -q BlocksComputeTestVpcEndpoints test-infra/vpc-test-stack.ts; then
+            echo "The compute test VPC has permanent endpoints: nothing to wait for."
+            exit 0
+          fi
+          stacks() {
+            aws cloudformation list-stacks --stack-status-filter "$@" --output json \
+              --query "StackSummaries[?starts_with(StackName, 'bb-test-compute-')].StackName" | jq -r 'join(" ")'
+          }
+          deadline=$((SECONDS + 600))
+          while :; do
+            if ! busy=$(stacks CREATE_IN_PROGRESS ROLLBACK_IN_PROGRESS DELETE_IN_PROGRESS UPDATE_IN_PROGRESS \
+              UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS); then
+              echo "::warning title=Compute Smoke::Could not list the stacks of earlier runs, deploying anyway."
+              break
+            fi
+            if [ -z "$busy" ]; then break; fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::warning title=Compute Smoke::Still in progress after 10 minutes, deploying anyway: $busy"
+              break
+            fi
+            echo "Waiting for these stacks to settle: $busy"
+            sleep 30
+          done
+          # A delete that failed (often on the endpoints themselves) leaves them in place.
+          if failed=$(stacks DELETE_FAILED) && [ -n "$failed" ]; then
+            echo "::warning title=Compute Smoke::DELETE_FAILED, may still hold VPC endpoints: $failed"
+          fi
+
+      - name: E2E Compute Smoke
+        run: npm run test:e2e:sandbox:compute
+
+      # The suite destroys its stacks in test.after, which never runs when this
+      # job is cancelled (a new push cancels the run), times out or crashes. A
+      # leaked stack keeps its distribution and its VPC endpoints in the shared
+      # compute test VPC, so every later run in the same account fails to
+      # deploy. Delete what this checkout deployed (the app stack and its
+      # -vpc-ref, both named with the sandbox id): skipped when nothing was
+      # synthesized, one ListStacks call when the suite cleaned up. A stack the
+      # suite left only warns here (its destroy is a raw `cdk destroy`, not
+      # product code). On a cancel, timeout, crash or a stack the suite left,
+      # this ends once the delete has started, so the group above can be
+      # released while endpoints are being deleted; the next run's wait step
+      # covers that for up to 10 minutes, and permanent endpoints in the compute
+      # test VPC remove it. Not `cdk destroy` here: it waits for the delete to
+      # finish (about 12 minutes with the endpoints), and GitHub force-stops a
+      # cancelled job 5 minutes after the cancel, so these two steps get 3
+      # minutes together. Fresh credentials, since the first session can expire
+      # before a long or timed-out job gets here.
+      - name: Configure AWS credentials for teardown
+        if: always() && hashFiles('test-apps/compute-smoke/.cdk-blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 1
+        uses: ./.github/actions/e2e-aws-credentials
+        with:
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
+
+      - name: Tear down leftover stacks
+        id: teardown
+        if: always() && hashFiles('test-apps/compute-smoke/.cdk-blocks-sandbox/sandbox-id.txt') != ''
+        timeout-minutes: 2
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: node scripts/ci/e2e-teardown.mjs test-apps/compute-smoke
+
+  # Waits for any stack the E2E Compute Smoke teardown had to delete (its
+  # suite destroys its own). Fails, naming each stack and what blocked it, when
+  # a delete ends DELETE_FAILED after retries or is not done in time;
+  # cleanup-stacks.yml then reclaims the stack. Not a required check, so the
+  # deletes stay off the merge path: red here means a stack to look at, not a
+  # failed test. Skipped when the run is cancelled (a new push), since the next
+  # run starts right away. pr-e2e.yml has its own copy for E2E Sandbox and E2E
+  # Production.
+  teardown-verify:
+    name: E2E Teardown Verify
+    permissions:
+      contents: read
+      id-token: write  # assumes the AWS role below
+    needs: [detect-changes, e2e-compute-smoke]
+    if: >-
+      !cancelled() && github.event.pull_request.head.repo.full_name == github.repository &&
+      (needs.e2e-compute-smoke.outputs.teardown-stacks != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    environment: e2e
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions
+            scripts/ci
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Configure AWS credentials
+        uses: ./.github/actions/e2e-aws-credentials
+        with:
+          role-arns: ${{ secrets.AWS_ROLE_ARNS }}
+          index: ${{ needs.detect-changes.outputs.e2e-index }}
+
+      - name: Wait for the E2E stack deletes
+        env:
+          STACKS: >-
+            ${{ needs.e2e-compute-smoke.outputs.teardown-stacks }}
+        run: node scripts/ci/e2e-stack-wait.mjs $STACKS
