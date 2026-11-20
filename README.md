@@ -2,64 +2,80 @@
 
 [![npm version](https://img.shields.io/npm/v/aws-cdk-blocks?color=brightgreen&label=npm%20package)](https://www.npmjs.com/package/aws-cdk-blocks)[![weekly downloads](https://img.shields.io/npm/dw/aws-cdk-blocks)](https://www.npmjs.com/package/aws-cdk-blocks)[![build status](https://img.shields.io/github/actions/workflow/status/aws/cdk-blocks/publish-packages.yml)](https://github.com/aws/cdk-blocks/blob/main/.github/workflows/publish-packages.yml)
 
-CDK Blocks is a backend toolkit for building full-stack applications on AWS. Each Block is a self-contained backend capability that bundles your application code, a local development setup, and the infrastructure to run it. Pick the Blocks you need and compose them; CDK Blocks generates the AWS infrastructure (CDK constructs) for them. Your entire application runs locally without an AWS account — when you're ready, deploy the same code to AWS without changing it.
+AWS CDK Blocks is an open-source expansion of [AWS Cloud Development Kit (AWS CDK)](https://aws.amazon.com/cdk/). Each CDK Block packages a construct, an interface, and the interface's AWS and local implementations. AWS best practices are built in. More than 17 Blocks cover background jobs, realtime, SQL and NoSQL databases, authentication, file storage, and AI agents. Build and test your whole app locally, then deploy the same code to your own AWS account. Every resource is CDK that you can audit and change. AWS maintains each CDK Block's best practices through versioned releases. Platform teams can package their own standards as custom CDK Blocks.
 
-For an overview, see the [AWS CDK Blocks Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html). For the Block catalog and APIs at this revision, see the [Blocks README](./packages/blocks/README.md).
+A CDK construct defines and provisions AWS infrastructure. A Block packages one application capability in three parts:
+
+- The infrastructure, as CDK constructs.
+- The application code that connects your app to the infrastructure.
+- A local implementation.
+
+Select the CDK Blocks your app needs and compose them. Your app runs locally without an AWS account. When you are ready, deploy the same code to your own AWS account. The deployment provisions the AWS infrastructure, and each Block follows AWS best practices.
+
+Platform teams can package their own standards as custom CDK Blocks and share them through npm. To create a custom CDK Block, see [`create-block`](./packages/create-block/README.md).
+
+> **Documentation:** [Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html)
 
 ## Getting started
 
-Requires [Node.js](https://nodejs.org/) 22 or later and npm 10 or later.
+You must have [Node.js](https://nodejs.org/) 22 or later and npm 10 or later.
 
 ```bash
 npm create @aws-cdk-blocks/blocks-app@latest my-app
 cd my-app
-npm install
 npm run dev
 ```
 
-`npm run dev` starts a local development server at `http://localhost:3000` with every Block running a local implementation. Define your backend in `cdk-blocks/index.ts` and your frontend in `src/`; types flow end to end with no code generation step.
+The first command creates the app and installs its dependencies. `npm run dev` starts a local development server at `http://localhost:3000`. Each Block runs its local implementation, so you do not need an AWS account or credentials.
 
-- In the installed app, `npm run docs` lists Building Blocks, `npm run docs KVStore` opens a block’s guide, and `npm run help` lists tasks.
-- Start from a specific template with `--template <name>`. `npx @aws-cdk-blocks/create-blocks-app --help` lists the templates and describes each.
-- The `auth` template was formerly named `auth-cognito`; the old name still works.
-- Run the command inside an existing project (omit the directory, or pass `.`) to add a `cdk-blocks/` backend to it. The CLI auto-detects an AWS Amplify Gen 2 project and integrates with it.
+Define your backend in `cdk-blocks/index.ts` and your frontend in `src/`. Your frontend imports your backend and gets its types directly from the TypeScript source. You do not run a code generation step.
 
-For a full walkthrough, see [Getting started with AWS CDK Blocks](https://docs.aws.amazon.com/blocks/latest/devguide/getting-started.html).
+- **Documentation in your app:** `npm run docs` lists the Blocks. `npm run docs KVStore` shows the guide for one Block. `npm run help` lists the tasks.
+- **Templates:** To start from a different template, add `-- --template <name>` to the `npm create` command. To see the templates, run `npx @aws-cdk-blocks/create-blocks-app --help`.
+- **Existing projects:** To add a `cdk-blocks/` backend to an existing project, run the `npm create` command in the project directory. Omit the directory name, or use `.`. If the project is an AWS Amplify Gen 2 project, the CLI finds it and integrates with it.
+
+For the full procedure, see the [Getting started guide](https://docs.aws.amazon.com/blocks/latest/devguide/getting-started.html).
 
 ## How it works
 
-CDK Blocks uses Node.js conditional exports to load different code for each context:
+AWS CDK Blocks uses Node.js conditional exports to load different code for each context:
 
-- **Local development** — Blocks use in-memory and filesystem storage; your app runs on your machine.
-- **CDK synthesis** — Blocks produce CDK constructs, and CDK Blocks generates a CloudFormation template.
-- **AWS Lambda runtime** — Blocks call AWS services through the SDK.
+- **Local development:** Your app runs on your machine. Each CDK Block runs its local implementation and keeps its data in memory or in local files.
+- **CDK synthesis:** Each CDK Block packages CDK constructs. The AWS CDK synthesizes an AWS CloudFormation template from them.
+- **AWS runtime:** Your app runs on AWS. Each Block calls AWS services through the AWS SDK.
 
-The same `new KVStore(scope, 'todos')` line becomes a local store in development, an Amazon DynamoDB table at deploy time, and SDK calls in production.
+For example, the line `new KVStore(scope, 'todos')` is a local store in development. At deployment, it becomes an Amazon DynamoDB table. In production, it makes SDK calls to that table. You do not change the code.
 
 ## Blocks
 
-Each Block is published as an npm package, and the umbrella package [`aws-cdk-blocks`](https://www.npmjs.com/package/aws-cdk-blocks) re-exports every Block plus the core runtime.
+Each CDK Block is an npm package. The umbrella package [`aws-cdk-blocks`](https://www.npmjs.com/package/aws-cdk-blocks) re-exports every CDK Block and the core runtime.
 
 | Category | Blocks |
 | --- | --- |
-| Data & storage | `KVStore`, `Database`, `FileBucket` |
-| Authentication | `Auth` (email + password, social, OIDC and SAML in one block) |
-| Compute & background | `Compute`, `AsyncJob`, `CronJob` |
+| Data and storage | `KVStore`, `Database`, `FileBucket` |
+| Authentication | `Auth` (email and password, social sign-in, OIDC, and SAML in one Block) |
+| Compute and background jobs | `Compute`, `AsyncJob`, `CronJob` |
 | AI | `Agent`, `KnowledgeBase` |
 | Communication | `Realtime`, `EmailClient` |
 | Configuration | `AppSetting`, `Secret` |
 | Observability | `Logger`, `Metrics`, `Tracer`, `Dashboard` |
 | Hosting | `Hosting` |
 
+For the full catalog and the API reference of each Block, see the [Developer Guide](https://docs.aws.amazon.com/blocks/latest/devguide/what-is-blocks.html).
+
 ## Supported platforms
 
-Clients are typed from your backend: web frameworks (Next.js, Nuxt, Astro, React, Vue, Svelte, Angular), native mobile (Swift, Kotlin, Dart/Flutter), and desktop applications.
+Type safety extends from your backend to your client on these platforms:
 
-Native clients are build-time code generators that produce type-safe client code from your app’s specification (`blocks.spec.json`), paired with a runtime library that calls your backend over JSON-RPC:
+- **Web frameworks:** Next.js, Nuxt, Astro, React, Vue, Svelte, and Angular.
+- **Native mobile:** Swift, Kotlin, and Dart (Flutter).
+- **Desktop:** Kotlin, Swift, and Dart (Flutter).
 
-- **[kotlin](./native/kotlin/README.md)** — Kotlin Multiplatform (Android, iOS, JVM). Gradle plugin + KMP runtime.
-- **[swift](./native/swift/README.md)** — Swift Package (iOS, macOS). SwiftPM build plugin + Foundation-based runtime.
-- **[dart](./native/dart/README.md)** — Dart / Flutter client. Generates a typed Dart client from that specification.
+Each native client has two parts. At build time, a code generator makes type-safe client code from your Blocks spec (`blocks.spec.json`). At run time, a library calls your backend over JSON-RPC.
+
+- **[Kotlin](./native/kotlin/README.md):** Kotlin Multiplatform (Android, iOS, and JVM). A Gradle plugin and a Kotlin Multiplatform runtime.
+- **[Swift](./native/swift/README.md):** A Swift package (iOS and macOS). A SwiftPM build plugin and a Foundation-based runtime.
+- **[Dart](./native/dart/README.md):** Dart and Flutter. A code generator and runtime packages.
 
 ## Repository layout
 
@@ -67,7 +83,7 @@ Native clients are build-time code generators that produce type-safe client code
 cdk-blocks/
 ├── packages/    # Blocks, the core runtime, and the create-blocks-app CLI (published to npm)
 ├── native/      # Native client SDKs (Kotlin, Swift, Dart)
-├── test-apps/   # Example applications and end-to-end tests
+├── test-apps/   # Example apps and end-to-end tests
 ├── test-infra/  # Persistent CI infrastructure (test VPCs, GitHub OIDC roles)
 ├── tasks/       # Agent benchmark tasks
 ├── docs/        # Contributor guides, design documents, and decisions
@@ -76,7 +92,7 @@ cdk-blocks/
 
 ## Building from source
 
-Requires Node.js 22 or later and npm 10 or later.
+You must have Node.js 22 or later.
 
 ```bash
 npm install
@@ -86,8 +102,8 @@ npm test
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for how to report issues and send pull requests. Coding agents start with [AGENTS.md](./AGENTS.md).
+To report a bug or send a pull request, see [CONTRIBUTING.md](./CONTRIBUTING.md). Coding agents start with [AGENTS.md](./AGENTS.md).
 
 ## License
 
-Apache-2.0
+[Apache-2.0](./LICENSE)
