@@ -112,7 +112,7 @@ this leaf construct, whose `domain.domainName` is a plain `string | string[]`.
 locator, so `getSecret` / `getConfig` resolve it identically (managed
 *provisions*, BYO *references*).
 
-### Read — in your SSR / API / runtime code
+### Read — in your Hosting SSR / server code
 
 ```ts
 // The value API is the bare entry (CDK-free), so no CDK is pulled into the runtime bundle:
@@ -126,10 +126,18 @@ Each getter reads `process.env.KEY` first, so **local dev needs no AWS** — put
 the value in `.env.local`. That is the file the Blocks dev server (`npm run dev`)
 and the sandbox (`npm run sandbox`) load into the backend; they don't load `.env`,
 so a value only in `.env` isn't seen there and the getter throws
-`no config reference found`. (Next.js SSR code under `next dev` also reads `.env`,
+`no value found`. (Next.js SSR code under `next dev` also reads `.env`,
 because Next loads it.) On a deployed function it fetches + decrypts from its
 store and caches per cold start (or per `cacheTtlSeconds`, for rotation without a
 redeploy).
+
+**Which functions can read the stored value.** The store locator and the read
+grant go only to the SSR/server functions Hosting deploys for your site. The
+Blocks API backend (`aws-blocks/index.ts`) doesn't get them, and a sandbox
+doesn't deploy Hosting, so there the getters see only `.env.local`. A static site
+has no Hosting compute, so nothing reads the stored value. For a value your API
+code reads, use the [`Secret`](../bb-secret/README.md) or
+[`AppSetting`](../bb-app-setting/README.md) block.
 
 ### Type-safe keys — autocomplete + typo errors, zero code
 
