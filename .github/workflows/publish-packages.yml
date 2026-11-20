@@ -25,7 +25,8 @@ jobs:
   release:
     name: Version & Publish (npm)
     runs-on: ubuntu-latest
-    environment: publish
+    # Holds only NPM_TOKEN. This job needs no AWS credentials.
+    environment: npm-release
     env:
       HUSKY: '0'
     steps:
