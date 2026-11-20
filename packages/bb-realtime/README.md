@@ -144,8 +144,7 @@ API Gateway throttles the WebSocket stage in messages per second (the stack-wide
 ## Errors
 
 ```typescript
-import { isBlocksError } from '@aws-cdk-blocks/core';
-import { RealtimeErrors } from '@aws-cdk-blocks/bb-realtime';
+import { isBlocksError, RealtimeErrors } from 'aws-cdk-blocks';
 
 try {
   await rt.publish('chat', 'room-1', { sender: 123 }); // wrong type

@@ -58,8 +58,7 @@ const { jobId } = await emailJob.submit({ to: 'alice@example.com', subject: 'Wel
 ## Errors
 
 ```typescript
-import { isBlocksError } from '@aws-cdk-blocks/core';
-import { AsyncJobErrors } from '@aws-cdk-blocks/bb-async-job';
+import { AsyncJobErrors, isBlocksError } from 'aws-cdk-blocks';
 
 try {
   await emailJob.submit(payload);

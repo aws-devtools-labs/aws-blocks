@@ -122,7 +122,7 @@ Configuration for a single pre-registered CloudWatch metric.
 ## Errors
 
 ```typescript
-import { DashboardErrors } from '@aws-cdk-blocks/bb-dashboard';
+import { DashboardErrors } from 'aws-cdk-blocks';
 ```
 
 | Constant | `error.name` | Thrown when |

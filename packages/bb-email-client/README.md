@@ -128,7 +128,7 @@ throws `EmailSendFailedException`. In `sendBatch()` the message is marked `faile
 
 ## Errors
 
-Match with `isBlocksError(e, EmailErrors.<Constant>)`. `isBlocksError` is exported from `@aws-cdk-blocks/core`, `EmailErrors` from `@aws-cdk-blocks/bb-email-client`.
+Match with `isBlocksError(e, EmailErrors.<Constant>)`. Import both `isBlocksError` and `EmailErrors` from `aws-cdk-blocks`.
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
