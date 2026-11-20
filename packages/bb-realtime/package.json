@@ -63,7 +63,7 @@
     "@aws-cdk-blocks/bb-lambda-compute": "^1.0.0",
     "@aws-cdk-blocks/bb-kv-store": "^1.0.0",
     "@aws-cdk-blocks/bb-logger": "^1.0.0",
-    "@aws-sdk/client-apigatewaymanagementapi": "^3.1156.0",
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.1171.0",
     "@standard-schema/spec": "^1.1.0",
     "ws": "^8.22.0"
   },
