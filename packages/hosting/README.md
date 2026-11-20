@@ -1000,7 +1000,7 @@ an image optimizer that name is reserved and synth rejects it in
 `cacheKeyHeaders`; without one the router leaves it alone. The header takes one
 of the cache-key header slots; when `cacheKeyHeaders` already uses all five, it
 stays out of the key and synth warns with
-`@aws-blocks/hosting:ImageAcceptNotInCacheKey`.
+`@aws-cdk-blocks/hosting:ImageAcceptNotInCacheKey`.
 
 ## Custom domains (CloudFront door)
 

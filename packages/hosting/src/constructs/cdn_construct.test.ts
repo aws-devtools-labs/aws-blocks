@@ -2344,7 +2344,7 @@ void describe('CdnConstruct', () => {
       });
       const template = Template.fromStack(stack);
       assert.ok(!ssrCacheKeyHeaders(template).includes(IMAGE_ACCEPT_CACHE_KEY_HEADER));
-      const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('ImageAcceptNotInCacheKey'));
+      const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('@aws-cdk-blocks/hosting:ImageAcceptNotInCacheKey'));
       assert.equal(warnings.length, 1);
     });
 

@@ -868,7 +868,7 @@ export class CdnConstruct extends Construct {
       extraCacheKeyHeaders.length + RESERVED_SSR_CACHE_HEADERS.length < CLOUDFRONT_CACHE_KEY_HEADER_CAP;
     if (hasImageOrigin && !keyImageAccept) {
       Annotations.of(this).addWarningV2(
-        '@aws-blocks/hosting:ImageAcceptNotInCacheKey',
+        '@aws-cdk-blocks/hosting:ImageAcceptNotInCacheKey',
         `cdn.cacheKeyHeaders uses every cache-key header slot, so ${IMAGE_ACCEPT_CACHE_KEY_HEADER} is not in the ` +
           'cache key: CloudFront serves one cached image format per image URL, whatever the viewer accepts. ' +
           `Free a slot (at most ${CLOUDFRONT_CACHE_KEY_HEADER_CAP - RESERVED_SSR_CACHE_HEADERS.length - 1} cacheKeyHeaders), ` +
