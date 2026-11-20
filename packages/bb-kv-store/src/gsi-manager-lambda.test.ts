@@ -160,6 +160,7 @@ interface TestEvent {
 		Indexes: Record<string, { partitionKey: string; sortKey?: string }>;
 		SandboxMode: string;
 		Version: string;
+		EncryptionKeyArn?: string;
 	};
 }
 
@@ -427,4 +428,278 @@ test('GSI manager: Create and Update never read the stack, and ignore a stray Ke
 	assert.strictEqual(result.IsComplete, false, 'Update still builds the missing indexes');
 	assert.strictEqual(updateTableCalls.length, 3);
 	assert.deepStrictEqual(cfnCalls, []);
+});
+
+// --- Sandbox fast path: the recreated table keeps the settings of the old one ---
+//
+// History: the sandbox fast path deletes the table and creates it again with
+// every index. CreateTable got only the keys, the billing mode and the
+// indexes, so a store with `indexes` lost its encryption (AWS-managed or
+// customer key), its TTL, its tags and point-in-time recovery on every deploy
+// that changed its indexes.
+
+const ACCOUNT_KEY_PREFIX = 'arn:aws:kms:us-east-1:111111111111:key';
+const AWS_MANAGED_KEY_ARN = `${ACCOUNT_KEY_PREFIX}/aws-dynamodb-managed`;
+const CUSTOMER_KEY_ARN = `${ACCOUNT_KEY_PREFIX}/customer-1234`;
+const TABLE_ARN = `arn:aws:dynamodb:us-east-1:111111111111:table/${TABLE}`;
+
+/** The observable state of the sandbox table: what DescribeTable and the settings APIs report. */
+interface LiveTable {
+	gsis: string[];
+	/** Undefined: the AWS-owned key. */
+	kmsKeyArn?: string;
+	stream?: { StreamEnabled: boolean; StreamViewType: string };
+	tableClass?: string;
+	deletionProtection: boolean;
+	tags: { Key: string; Value: string }[];
+	ttlAttribute?: string;
+	pitr?: { RecoveryPeriodInDays: number };
+	items: Record<string, unknown>[];
+}
+
+interface SandboxFake {
+	/** Undefined while the table is deleted. */
+	live: () => LiveTable | undefined;
+	calls: string[];
+	createInput: () => Record<string, any> | undefined;
+	/** Make the next N UpdateContinuousBackups calls fail as right after CreateTable. */
+	backupsUnavailable: { remaining: number };
+	/** Fail the named command, to check that nothing is deleted. */
+	failing: Set<string>;
+}
+
+function fakeSandboxTable(initial: LiveTable): SandboxFake {
+	let live: LiveTable | undefined = structuredClone(initial);
+	let createInput: Record<string, any> | undefined;
+	const calls: string[] = [];
+	const backupsUnavailable = { remaining: 0 };
+	const failing = new Set<string>();
+
+	mock.method(DynamoDBClient.prototype, 'send', async (command: { constructor: { name: string }; input: any }) => {
+		const name = command.constructor.name.replace(/Command$/, '');
+		calls.push(name);
+		if (failing.has(name)) throw accessDenied(`dynamodb:${name}`);
+		const input = command.input;
+		if (name === 'CreateTable') {
+			assert.strictEqual(live, undefined, 'CreateTable only after the delete');
+			createInput = input;
+			const sse = input.SSESpecification;
+			live = {
+				gsis: (input.GlobalSecondaryIndexes ?? []).map((g: { IndexName: string }) => g.IndexName),
+				kmsKeyArn: sse?.Enabled ? (sse.KMSMasterKeyId ?? AWS_MANAGED_KEY_ARN) : undefined,
+				stream: input.StreamSpecification,
+				tableClass: input.TableClass,
+				deletionProtection: input.DeletionProtectionEnabled ?? false,
+				tags: input.Tags ?? [],
+				items: [],
+			};
+			return {};
+		}
+		if (!live) throw notFound();
+		switch (name) {
+			case 'DescribeTable':
+				return {
+					Table: {
+						TableName: TABLE,
+						TableArn: TABLE_ARN,
+						TableStatus: 'ACTIVE',
+						KeySchema: [{ AttributeName: '_bkv_pk', KeyType: 'HASH' }],
+						AttributeDefinitions: [{ AttributeName: '_bkv_pk', AttributeType: 'S' }],
+						DeletionProtectionEnabled: live.deletionProtection,
+						...(live.kmsKeyArn
+							? { SSEDescription: { Status: 'ENABLED', SSEType: 'KMS', KMSMasterKeyArn: live.kmsKeyArn } }
+							: {}),
+						...(live.stream ? { StreamSpecification: live.stream } : {}),
+						...(live.tableClass ? { TableClassSummary: { TableClass: live.tableClass } } : {}),
+						// Every index name the tests use is one of INDEXES, built with its keys.
+						GlobalSecondaryIndexes: live.gsis.map((g) => {
+							const keys: { partitionKey: string; sortKey?: string } = INDEXES[g as keyof typeof INDEXES];
+							return {
+								IndexName: g,
+								IndexStatus: 'ACTIVE',
+								KeySchema: [
+									{ AttributeName: keys.partitionKey, KeyType: 'HASH' },
+									...(keys.sortKey ? [{ AttributeName: keys.sortKey, KeyType: 'RANGE' }] : []),
+								],
+							};
+						}),
+					},
+				};
+			case 'ListTagsOfResource':
+				assert.strictEqual(input.ResourceArn, TABLE_ARN);
+				return { Tags: live.tags };
+			case 'DescribeTimeToLive':
+				return {
+					TimeToLiveDescription: live.ttlAttribute
+						? { TimeToLiveStatus: 'ENABLED', AttributeName: live.ttlAttribute }
+						: { TimeToLiveStatus: 'DISABLED' },
+				};
+			case 'UpdateTimeToLive':
+				live.ttlAttribute = input.TimeToLiveSpecification.Enabled
+					? input.TimeToLiveSpecification.AttributeName
+					: undefined;
+				return {};
+			case 'DescribeContinuousBackups':
+				return {
+					ContinuousBackupsDescription: {
+						ContinuousBackupsStatus: 'ENABLED',
+						PointInTimeRecoveryDescription: live.pitr
+							? { PointInTimeRecoveryStatus: 'ENABLED', ...live.pitr }
+							: { PointInTimeRecoveryStatus: 'DISABLED' },
+					},
+				};
+			case 'UpdateContinuousBackups': {
+				if (backupsUnavailable.remaining > 0) {
+					backupsUnavailable.remaining--;
+					const e = new Error('Backups are being enabled for the table. Please retry later');
+					e.name = 'ContinuousBackupsUnavailableException';
+					throw e;
+				}
+				const spec = input.PointInTimeRecoverySpecification;
+				live.pitr = spec.PointInTimeRecoveryEnabled
+					? { RecoveryPeriodInDays: spec.RecoveryPeriodInDays ?? 35 }
+					: undefined;
+				return {};
+			}
+			case 'Scan':
+				return { Items: live.items };
+			case 'DeleteTable':
+				assert.ok(!live.deletionProtection, 'DynamoDB refuses to delete a protected table');
+				live = undefined;
+				return {};
+			case 'BatchWriteItem':
+				live.items.push(
+					...input.RequestItems[TABLE].map(
+						(r: { PutRequest: { Item: Record<string, unknown> } }) => r.PutRequest.Item,
+					),
+				);
+				return {};
+			case 'UpdateTable':
+				for (const u of input.GlobalSecondaryIndexUpdates ?? []) {
+					if (u.Create) live.gsis.push(u.Create.IndexName);
+					if (u.Delete) live.gsis = live.gsis.filter((g) => g !== u.Delete.IndexName);
+				}
+				return {};
+		}
+		throw new Error(`unexpected DynamoDB command ${name}`);
+	});
+
+	return { live: () => live, calls, createInput: () => createInput, backupsUnavailable, failing };
+}
+
+/** A store with `indexes`, as the CDK layer deploys it with the defaults: AWS-managed key, TTL on, stack tags. */
+function deployedTable(overrides: Partial<LiveTable> = {}): LiveTable {
+	return {
+		gsis: ['byStatus'],
+		kmsKeyArn: AWS_MANAGED_KEY_ARN,
+		deletionProtection: false,
+		tags: [
+			{ Key: 'team', Value: 'storefront' },
+			{ Key: 'aws:cloudformation:stack-name', Value: 'TestStack' },
+		],
+		ttlAttribute: '_bkv_ttl',
+		pitr: { RecoveryPeriodInDays: 35 },
+		items: [{ _bkv_pk: { S: 'a' } }, { _bkv_pk: { S: 'b' } }],
+		...overrides,
+	};
+}
+
+function sandboxUpdate(extra: Partial<TestEvent['ResourceProperties']> = {}): TestEvent {
+	return {
+		...deleteEvent(),
+		RequestType: 'Update',
+		ResourceProperties: { TableName: TABLE, Indexes: INDEXES, SandboxMode: 'true', Version: '3', ...extra },
+	};
+}
+
+test('GSI manager (sandbox): the recreated table keeps its encryption, TTL, tags and point-in-time recovery', async () => {
+	const fake = fakeSandboxTable(deployedTable());
+	await runLifecycle(sandboxUpdate());
+
+	assert.ok(fake.calls.includes('DeleteTable'), 'the fast path recreated the table');
+	const live = fake.live();
+	assert.ok(live);
+	assert.deepStrictEqual(live.gsis.sort(), ['byOwner', 'byStatus']);
+	assert.strictEqual(live.kmsKeyArn, AWS_MANAGED_KEY_ARN, 'SSE with the AWS-managed key, not the AWS-owned key');
+	assert.deepStrictEqual(
+		fake.createInput()?.SSESpecification,
+		{ Enabled: true, SSEType: 'KMS' },
+		'the AWS-managed key is chosen by leaving KMSMasterKeyId out',
+	);
+	assert.strictEqual(live.ttlAttribute, '_bkv_ttl', 'TTL stays on');
+	assert.deepStrictEqual(live.pitr, { RecoveryPeriodInDays: 35 }, 'point-in-time recovery stays on');
+	assert.deepStrictEqual(
+		live.tags,
+		[{ Key: 'team', Value: 'storefront' }],
+		'user tags kept; aws: tags cannot be set',
+	);
+	assert.strictEqual(live.items.length, 2, 'items restored');
+	assert.ok(
+		fake.calls.indexOf('UpdateTimeToLive') < fake.calls.indexOf('BatchWriteItem'),
+		'TTL is on again before the items are written back',
+	);
+});
+
+test('GSI manager (sandbox): a table with a customer key is recreated with the same key', async () => {
+	const fake = fakeSandboxTable(deployedTable({ kmsKeyArn: CUSTOMER_KEY_ARN }));
+	await runLifecycle(sandboxUpdate({ EncryptionKeyArn: CUSTOMER_KEY_ARN }));
+	assert.deepStrictEqual(fake.createInput()?.SSESpecification, {
+		Enabled: true,
+		SSEType: 'KMS',
+		KMSMasterKeyId: CUSTOMER_KEY_ARN,
+	});
+	assert.strictEqual(fake.live()?.kmsKeyArn, CUSTOMER_KEY_ARN);
+});
+
+test('GSI manager (sandbox): streams, table class and a custom TTL field are kept; settings that were off stay off', async () => {
+	const fake = fakeSandboxTable(
+		deployedTable({
+			kmsKeyArn: undefined,
+			stream: { StreamEnabled: true, StreamViewType: 'NEW_AND_OLD_IMAGES' },
+			tableClass: 'STANDARD_INFREQUENT_ACCESS',
+			tags: [],
+			ttlAttribute: 'expiresAt',
+			pitr: undefined,
+		}),
+	);
+	await runLifecycle(sandboxUpdate());
+	const input = fake.createInput();
+	assert.ok(input);
+	assert.strictEqual(input.SSESpecification, undefined, 'an AWS-owned key table stays on the AWS-owned key');
+	assert.strictEqual(input.Tags, undefined);
+	assert.deepStrictEqual(input.StreamSpecification, { StreamEnabled: true, StreamViewType: 'NEW_AND_OLD_IMAGES' });
+	assert.strictEqual(input.TableClass, 'STANDARD_INFREQUENT_ACCESS');
+	assert.strictEqual(fake.live()?.ttlAttribute, 'expiresAt');
+	assert.strictEqual(fake.live()?.pitr, undefined);
+	assert.ok(!fake.calls.includes('UpdateContinuousBackups'), 'point-in-time recovery is not turned on');
+});
+
+test('GSI manager (sandbox): point-in-time recovery is retried while the new table cannot take backups yet', async () => {
+	const fake = fakeSandboxTable(deployedTable({ pitr: { RecoveryPeriodInDays: 7 } }));
+	// One retry, so one real 3 s wait: stubbing setTimeout here breaks the
+	// messages that the test runner's child process sends to its parent.
+	fake.backupsUnavailable.remaining = 1;
+	await runLifecycle(sandboxUpdate());
+	assert.strictEqual(fake.calls.filter((c) => c === 'UpdateContinuousBackups').length, 2);
+	assert.deepStrictEqual(fake.live()?.pitr, { RecoveryPeriodInDays: 7 }, 'the pinned recovery window is kept');
+});
+
+for (const failing of ['ListTagsOfResource', 'DescribeTimeToLive', 'DescribeContinuousBackups']) {
+	test(`GSI manager (sandbox): if ${failing} fails, the table is not deleted`, async () => {
+		const fake = fakeSandboxTable(deployedTable());
+		fake.failing.add(failing);
+		await assert.rejects(() => handler(sandboxUpdate()), { name: 'AccessDenied' });
+		assert.ok(!fake.calls.includes('DeleteTable'));
+		assert.ok(!fake.calls.includes('Scan'), 'settings are read before the data');
+		assert.deepStrictEqual(fake.live()?.items.length, 2);
+	});
+}
+
+test('GSI manager (sandbox): a table with deletion protection is not recreated; its indexes change in place', async () => {
+	const fake = fakeSandboxTable(deployedTable({ deletionProtection: true }));
+	await runLifecycle(sandboxUpdate());
+	assert.ok(!fake.calls.includes('DeleteTable'));
+	assert.ok(!fake.calls.includes('CreateTable'));
+	assert.deepStrictEqual(fake.live()?.gsis.sort(), ['byOwner', 'byStatus']);
+	assert.strictEqual(fake.live()?.deletionProtection, true);
 });

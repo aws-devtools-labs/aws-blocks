@@ -63,6 +63,11 @@ export class KVStore<
 	 *   live in the same account and region as the table. With a key policy that
 	 *   does neither, the only sign is an AccessDenied error when the table is first
 	 *   used at runtime. Nothing fails at deploy time.
+	 *
+	 *   In a sandbox deployment, a store with `indexes` is recreated with all its
+	 *   indexes when they change. The GSI manager role then creates the table with
+	 *   this key and copies its items through it, so the key policy must allow
+	 *   that role as well (delegating to account IAM is enough).
 	 */
 	static fromKmsKey(keyArn: string): ExternalKmsKeyRef {
 		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
@@ -220,7 +225,10 @@ export class KVStore<
 		const indexes = config.indexes;
 		if (indexes && Object.keys(indexes).length > 0) {
 			const gsiProvider = getOrCreateGsiProvider(cdk.Stack.of(this), this.defaults.logRetention);
-			gsiProvider.addTableArn(this.table.tableArn, isSandbox);
+			// A customer-managed key (provisioned or `fromKmsKey`). The sandbox fast
+			// path recreates the table with this key and needs to use it.
+			const customerKeyArn = this.table.encryptionKey?.keyArn;
+			gsiProvider.addTableArn(this.table.tableArn, isSandbox, customerKeyArn);
 
 			const indexesWithTypes: Record<string, unknown> = {};
 			for (const [indexName, indexConfig] of Object.entries(indexes)) {
@@ -239,6 +247,9 @@ export class KVStore<
 					Indexes: indexesWithTypes,
 					SandboxMode: isSandbox ? 'true' : 'false',
 					Version: '3',
+					// Sandbox only: tells the fast path that the table's KMS key is a
+					// customer key to recreate it with, not the AWS-managed key.
+					...(isSandbox && customerKeyArn ? { EncryptionKeyArn: customerKeyArn } : {}),
 				},
 			});
 
@@ -284,7 +295,12 @@ const GSI_PROVIDER_KEY = Symbol.for('BLOCKS_GSI_MANAGER_PROVIDER');
 
 interface SharedGsiProvider {
 	serviceToken: string;
-	addTableArn: (tableArn: string, isSandbox: boolean) => void;
+	/**
+	 * Grant the GSI manager access to one more table. A sandbox table also gets
+	 * the fast-path permissions, and `customerKeyArn` (a customer-managed key of
+	 * that table) the KMS permissions to create the table again with that key.
+	 */
+	addTableArn: (tableArn: string, isSandbox: boolean, customerKeyArn?: string) => void;
 }
 
 function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): SharedGsiProvider {
@@ -303,6 +319,7 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 
 	const tableArns: string[] = [];
 	const sandboxTableArns: string[] = [];
+	const sandboxKeyArns: string[] = [];
 
 	// Everything added to the stack below is AWS Blocks' own (marked at the end).
 	const stackChildrenBefore = new Set(stack.node.children);
@@ -363,6 +380,7 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 
 	// Sandbox permissions — only added if any table requests sandbox mode
 	let sandboxPolicyAdded = false;
+	let sandboxKeyPolicyAdded = false;
 
 	const provider = new Provider(stack, 'BlocksGsiProvider', {
 		onEventHandler: gsiManagerLambda,
@@ -374,7 +392,7 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 
 	const shared: SharedGsiProvider = {
 		serviceToken: provider.serviceToken,
-		addTableArn: (tableArn: string, isSandbox: boolean) => {
+		addTableArn: (tableArn: string, isSandbox: boolean, customerKeyArn?: string) => {
 			tableArns.push(tableArn);
 			if (isSandbox) {
 				sandboxTableArns.push(tableArn);
@@ -387,10 +405,44 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 								'dynamodb:CreateTable',
 								'dynamodb:Scan',
 								'dynamodb:BatchWriteItem',
+								// Read the table's settings before the delete and set
+								// them again on the new table (tags at CreateTable).
+								'dynamodb:ListTagsOfResource',
+								'dynamodb:TagResource',
+								'dynamodb:DescribeTimeToLive',
+								'dynamodb:UpdateTimeToLive',
+								'dynamodb:DescribeContinuousBackups',
+								'dynamodb:UpdateContinuousBackups',
 							],
 							resources: cdk.Lazy.list({ produce: () => sandboxTableArns }),
 						}),
 					);
+				}
+				if (customerKeyArn) {
+					// Several stores can share one `fromKmsKey` key.
+					if (!sandboxKeyArns.includes(customerKeyArn)) sandboxKeyArns.push(customerKeyArn);
+					if (!sandboxKeyPolicyAdded) {
+						sandboxKeyPolicyAdded = true;
+						// CreateTable with a customer key needs DescribeKey and
+						// CreateGrant; the scan and the restore read and write
+						// through the key. Only these tables' keys, only via DynamoDB.
+						gsiManagerLambda.addToRolePolicy(
+							new PolicyStatement({
+								actions: [
+									'kms:DescribeKey',
+									'kms:CreateGrant',
+									'kms:Decrypt',
+									'kms:Encrypt',
+									'kms:ReEncrypt*',
+									'kms:GenerateDataKey*',
+								],
+								resources: cdk.Lazy.list({ produce: () => sandboxKeyArns }),
+								conditions: {
+									StringEquals: { 'kms:ViaService': `dynamodb.${stack.region}.amazonaws.com` },
+								},
+							}),
+						);
+					}
 				}
 			}
 		},

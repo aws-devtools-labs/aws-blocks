@@ -7,12 +7,22 @@ import {
 	BillingMode,
 	CreateTableCommand,
 	DeleteTableCommand,
+	DescribeContinuousBackupsCommand,
 	DescribeTableCommand,
+	DescribeTimeToLiveCommand,
 	DynamoDBClient,
 	KeyType,
+	ListTagsOfResourceCommand,
 	ScalarAttributeType,
 	ScanCommand,
+	type SSESpecification,
+	type StreamSpecification,
+	type TableClass,
+	type TableDescription,
+	type Tag,
+	UpdateContinuousBackupsCommand,
 	UpdateTableCommand,
+	UpdateTimeToLiveCommand,
 } from '@aws-sdk/client-dynamodb';
 
 const dynamodb = new DynamoDBClient({});
@@ -34,6 +44,14 @@ interface CfnEvent {
 		TableName: string;
 		Indexes: Record<string, IndexConfig>;
 		SandboxMode?: string;
+		/**
+		 * ARN of the customer-managed KMS key of the table, set only in sandbox
+		 * mode and only for a store with `encryption: 'customer-managed'` or
+		 * `KVStore.fromKmsKey()`. It tells the sandbox fast path that the KMS key
+		 * of the live table is a customer key to pass to CreateTable, and not the
+		 * AWS-managed `aws/dynamodb` key.
+		 */
+		EncryptionKeyArn?: string;
 	};
 }
 
@@ -201,10 +219,144 @@ function isTableBusy(table: any): boolean {
 
 // ── Sandbox fast path ───────────────────────────────────────────────────────
 
-async function recreateTableWithIndexes(tableName: string, desired: Record<string, IndexConfig>) {
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Tag keys with this prefix belong to AWS (for example the
+// `aws:cloudformation:*` tags) and TagResource rejects them.
+const AWS_TAG_PREFIX = 'aws:';
+
+// UpdateContinuousBackups fails with this error for a short time after a
+// table is created, until DynamoDB can turn backups on for it.
+const CONTINUOUS_BACKUPS_UNAVAILABLE = 'ContinuousBackupsUnavailableException';
+const PITR_RETRY_ATTEMPTS = 40;
+const RETRY_DELAY_MS = 3000;
+
+/**
+ * The settings of a live table that CreateTable does not copy from anything,
+ * so the sandbox fast path reads them before it deletes the table and applies
+ * them to the new table. The CDK layer sets encryption, TTL, PITR and tags (the
+ * stack tags); streams and the table class are kept as well when set.
+ */
+interface TableSettings {
+	/** Undefined: the AWS-owned key, which CreateTable uses by default. */
+	sse?: SSESpecification;
+	stream?: StreamSpecification;
+	tableClass?: TableClass;
+	/** User tags only; `aws:` tags cannot be set again. */
+	tags: Tag[];
+	/** Set when TTL is on (or turning on). */
+	ttlAttribute?: string;
+	/** Set when point-in-time recovery is on. */
+	pitr?: { recoveryPeriodInDays?: number };
+}
+
+/**
+ * Read every setting that the recreate must keep. Any failure throws before
+ * the table is deleted, so a missing permission never costs the table.
+ *
+ * @param customerKeyArn - the `EncryptionKeyArn` property. DescribeTable reports
+ *   an ARN for the AWS-managed key too, so only this property tells the two apart.
+ */
+async function readTableSettings(
+	tableName: string,
+	table: TableDescription,
+	customerKeyArn: string | undefined,
+): Promise<TableSettings> {
+	const settings: TableSettings = { tags: [] };
+
+	if (table.SSEDescription?.SSEType === 'KMS') {
+		settings.sse = customerKeyArn
+			? { Enabled: true, SSEType: 'KMS', KMSMasterKeyId: table.SSEDescription.KMSMasterKeyArn ?? customerKeyArn }
+			: { Enabled: true, SSEType: 'KMS' };
+	}
+	if (table.StreamSpecification?.StreamEnabled) {
+		settings.stream = { StreamEnabled: true, StreamViewType: table.StreamSpecification.StreamViewType };
+	}
+	if (table.TableClassSummary?.TableClass) settings.tableClass = table.TableClassSummary.TableClass;
+
+	let nextToken: string | undefined;
+	do {
+		const page = await dynamodb.send(
+			new ListTagsOfResourceCommand({ ResourceArn: table.TableArn, NextToken: nextToken }),
+		);
+		for (const tag of page.Tags ?? []) {
+			if (!tag.Key?.startsWith(AWS_TAG_PREFIX)) settings.tags.push(tag);
+		}
+		nextToken = page.NextToken;
+	} while (nextToken);
+
+	const { TimeToLiveDescription: ttl } = await dynamodb.send(new DescribeTimeToLiveCommand({ TableName: tableName }));
+	if ((ttl?.TimeToLiveStatus === 'ENABLED' || ttl?.TimeToLiveStatus === 'ENABLING') && ttl.AttributeName) {
+		settings.ttlAttribute = ttl.AttributeName;
+	}
+
+	const { ContinuousBackupsDescription: backups } = await dynamodb.send(
+		new DescribeContinuousBackupsCommand({ TableName: tableName }),
+	);
+	const pitr = backups?.PointInTimeRecoveryDescription;
+	if (pitr?.PointInTimeRecoveryStatus === 'ENABLED') {
+		settings.pitr = { recoveryPeriodInDays: pitr.RecoveryPeriodInDays };
+	}
+	return settings;
+}
+
+/** Turn TTL and point-in-time recovery back on. Both need an ACTIVE table. */
+async function applySettingsAfterCreate(tableName: string, settings: TableSettings) {
+	if (settings.ttlAttribute) {
+		await dynamodb.send(
+			new UpdateTimeToLiveCommand({
+				TableName: tableName,
+				TimeToLiveSpecification: { Enabled: true, AttributeName: settings.ttlAttribute },
+			}),
+		);
+	}
+	if (settings.pitr) {
+		const { recoveryPeriodInDays } = settings.pitr;
+		for (let attempt = 1; ; attempt++) {
+			try {
+				await dynamodb.send(
+					new UpdateContinuousBackupsCommand({
+						TableName: tableName,
+						PointInTimeRecoverySpecification: {
+							PointInTimeRecoveryEnabled: true,
+							...(recoveryPeriodInDays !== undefined
+								? { RecoveryPeriodInDays: recoveryPeriodInDays }
+								: {}),
+						},
+					}),
+				);
+				break;
+			} catch (e) {
+				const unavailable = e instanceof Error && e.name === CONTINUOUS_BACKUPS_UNAVAILABLE;
+				if (!unavailable || attempt >= PITR_RETRY_ATTEMPTS) throw e;
+				await sleep(RETRY_DELAY_MS);
+			}
+		}
+	}
+}
+
+/**
+ * Delete the table and create it again with every desired GSI at once, then
+ * copy its items back.
+ *
+ * CreateTable starts from defaults, so the new table gets the settings of the
+ * old one explicitly: server-side encryption (the AWS-managed key, or the
+ * customer key named by `customerKeyArn`), TTL, point-in-time recovery, user
+ * tags, streams and the table class. They are read before the delete; TTL and
+ * point-in-time recovery are set again once the new table is ACTIVE, before the
+ * items are written back. A table with deletion protection never comes here
+ * (see `handler`).
+ */
+async function recreateTableWithIndexes(
+	tableName: string,
+	desired: Record<string, IndexConfig>,
+	customerKeyArn: string | undefined,
+) {
 	console.log('⚠️  SANDBOX MODE: Recreating table with all GSIs (fast path)');
 
 	const table = await describeTable(tableName);
+	const settings = await readTableSettings(tableName, table, customerKeyArn);
+	console.log(`Keeping table settings: ${JSON.stringify({ ...settings, tags: settings.tags.map((t) => t.Key) })}`);
 
 	// Backup data
 	const items: any[] = [];
@@ -221,7 +373,7 @@ async function recreateTableWithIndexes(tableName: string, desired: Record<strin
 	while (true) {
 		try {
 			await dynamodb.send(new DescribeTableCommand({ TableName: tableName }));
-			await new Promise((r) => setTimeout(r, 3000));
+			await sleep(RETRY_DELAY_MS);
 		} catch (e: any) {
 			if (e.name === 'ResourceNotFoundException') break;
 			throw e;
@@ -251,7 +403,7 @@ async function recreateTableWithIndexes(tableName: string, desired: Record<strin
 			ScalarAttributeType.S) as ScalarAttributeType,
 	}));
 
-	// Recreate with all GSIs
+	// Recreate with all GSIs and the settings read above
 	await dynamodb.send(
 		new CreateTableCommand({
 			TableName: tableName,
@@ -266,6 +418,10 @@ async function recreateTableWithIndexes(tableName: string, desired: Record<strin
 				],
 				Projection: { ProjectionType: 'ALL' as const },
 			})),
+			...(settings.sse ? { SSESpecification: settings.sse } : {}),
+			...(settings.stream ? { StreamSpecification: settings.stream } : {}),
+			...(settings.tableClass ? { TableClass: settings.tableClass } : {}),
+			...(settings.tags.length > 0 ? { Tags: settings.tags } : {}),
 		}),
 	);
 
@@ -273,8 +429,10 @@ async function recreateTableWithIndexes(tableName: string, desired: Record<strin
 	while (true) {
 		const t = await describeTable(tableName);
 		if (!isTableBusy(t)) break;
-		await new Promise((r) => setTimeout(r, 3000));
+		await sleep(RETRY_DELAY_MS);
 	}
+
+	await applySettingsAfterCreate(tableName, settings);
 
 	// Restore data
 	for (let i = 0; i < items.length; i += 25) {
@@ -294,7 +452,7 @@ async function recreateTableWithIndexes(tableName: string, desired: Record<strin
 export async function handler(event: CfnEvent) {
 	console.log('onEvent:', JSON.stringify(event, null, 2));
 
-	const { TableName, Indexes, SandboxMode } = event.ResourceProperties;
+	const { TableName, Indexes, SandboxMode, EncryptionKeyArn } = event.ResourceProperties;
 	const desired = event.RequestType === 'Delete' ? {} : (Indexes ?? {});
 	const isSandbox = SandboxMode === 'true';
 
@@ -316,10 +474,15 @@ export async function handler(event: CfnEvent) {
 		return { PhysicalResourceId: physicalId, Data: { Status: 'COMPLETE' } };
 	}
 
-	// Sandbox fast path: drop and recreate with all GSIs at once
+	// Sandbox fast path: drop and recreate with all GSIs at once. A table with
+	// deletion protection (`protection: 'locked'`) is never deleted: it takes
+	// the one-change-at-a-time path below, which only needs UpdateTable.
 	if (isSandbox && Object.keys(desired).length > 0) {
-		await recreateTableWithIndexes(TableName, desired);
-		return { PhysicalResourceId: physicalId, Data: { Status: 'COMPLETE' } };
+		if (!table.DeletionProtectionEnabled) {
+			await recreateTableWithIndexes(TableName, desired, EncryptionKeyArn);
+			return { PhysicalResourceId: physicalId, Data: { Status: 'COMPLETE' } };
+		}
+		console.log('Table has deletion protection; changing its GSIs one at a time instead of recreating it');
 	}
 
 	// Production path: initiate the first GSI change if table is idle.

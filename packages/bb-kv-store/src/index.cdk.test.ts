@@ -255,7 +255,9 @@ for (const days of [0, 36, 7.5]) {
 		});
 		Annotations.fromStack(stack).hasWarning(
 			'*',
-			Match.stringLikeRegexp('retentionDays must be an integer.*ack: @aws-cdk-blocks/bb-kv-store:InvalidPitrDays'),
+			Match.stringLikeRegexp(
+				'retentionDays must be an integer.*ack: @aws-cdk-blocks/bb-kv-store:InvalidPitrDays',
+			),
 		);
 	});
 }
@@ -461,6 +463,116 @@ test('CDK: the table name is a literal in the template, as the GSI manager Delet
 	const tables = Object.values(resources).filter((r) => r.Type === 'AWS::DynamoDB::Table');
 	assert.strictEqual(tables.length, 1);
 	assert.strictEqual(tables[0].Properties.TableName, 'TestStack-app-users');
+});
+
+function sandboxStatementsOfGsiManager(build: (parent: Scope) => void) {
+	// `sandboxMode` is app context, so it must be set before the stack is built.
+	const app = new cdk.App({ context: { sandboxMode: 'true' } });
+	const stack = new StubBlocksStack(app, 'TestStack');
+	stack.defaults = BlocksPresets.sandbox;
+	build(new Scope('app'));
+	const resources: Record<string, CfnResource> = Template.fromStack(stack).toJSON().Resources;
+	const { policies } = policyStatementsOf(resources, 'BlocksGsiManager');
+	const statements = policies.flatMap(([, p]) => p.Properties.PolicyDocument.Statement as any[]);
+	const custom = Object.values(resources).filter((r) => r.Type === 'AWS::CloudFormation::CustomResource');
+	return { resources, statements, custom };
+}
+
+test('CDK: in sandbox, the GSI manager may read and set again the settings of the tables it recreates', () => {
+	const { statements, custom } = sandboxStatementsOfGsiManager((parent) => {
+		new KVStore(parent, 'users', { schema: userSchema, indexes: { byEmail: { partitionKey: 'email' } } });
+	});
+	assert.strictEqual(custom[0].Properties.SandboxMode, 'true');
+	assert.strictEqual(custom[0].Properties.EncryptionKeyArn, undefined, 'no customer key: the AWS-managed key');
+	const fastPath = statements.find((s) => [s.Action].flat().includes('dynamodb:CreateTable'));
+	assert.ok(fastPath);
+	assert.deepStrictEqual([fastPath.Action].flat().sort(), [
+		'dynamodb:BatchWriteItem',
+		'dynamodb:CreateTable',
+		'dynamodb:DeleteTable',
+		'dynamodb:DescribeContinuousBackups',
+		'dynamodb:DescribeTimeToLive',
+		'dynamodb:ListTagsOfResource',
+		'dynamodb:Scan',
+		'dynamodb:TagResource',
+		'dynamodb:UpdateContinuousBackups',
+		'dynamodb:UpdateTimeToLive',
+	]);
+	assert.deepStrictEqual([fastPath.Resource].flat().length, 1, 'only the table of the store');
+	assert.ok(JSON.stringify(fastPath.Resource).includes('Arn'));
+	assert.ok(!statements.some((s) => [s.Action].flat().some((a: string) => a.startsWith('kms:'))));
+});
+
+test('CDK: in sandbox, a customer key is passed to the GSI manager and usable only through DynamoDB', () => {
+	const keyArn = 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234-ef56';
+	const { statements, custom } = sandboxStatementsOfGsiManager((parent) => {
+		const shared = KVStore.fromKmsKey(keyArn);
+		new KVStore(parent, 'users', {
+			schema: userSchema,
+			indexes: { byEmail: { partitionKey: 'email' } },
+			encryption: shared,
+		});
+		new KVStore(parent, 'events', {
+			schema: userSchema,
+			indexes: { byEmail: { partitionKey: 'email' } },
+			encryption: shared,
+		});
+	});
+	assert.deepStrictEqual(
+		custom.map((c) => c.Properties.EncryptionKeyArn),
+		[keyArn, keyArn],
+	);
+	const kms = statements.filter((s) => [s.Action].flat().some((a: string) => a.startsWith('kms:')));
+	assert.strictEqual(kms.length, 1);
+	assert.deepStrictEqual([kms[0].Action].flat().sort(), [
+		'kms:CreateGrant',
+		'kms:Decrypt',
+		'kms:DescribeKey',
+		'kms:Encrypt',
+		'kms:GenerateDataKey*',
+		'kms:ReEncrypt*',
+	]);
+	assert.deepStrictEqual([kms[0].Resource].flat(), [keyArn], 'the shared key once, no other key');
+	assert.deepStrictEqual(kms[0].Condition, {
+		StringEquals: {
+			'kms:ViaService': { 'Fn::Join': ['', ['dynamodb.', { Ref: 'AWS::Region' }, '.amazonaws.com']] },
+		},
+	});
+});
+
+test('CDK: in sandbox, a provisioned customer key is granted by its own ARN', () => {
+	const { resources, statements, custom } = sandboxStatementsOfGsiManager((parent) => {
+		new KVStore(parent, 'users', {
+			schema: userSchema,
+			indexes: { byEmail: { partitionKey: 'email' } },
+			encryption: 'customer-managed',
+		});
+	});
+	const [keyId] = Object.entries(resources).find(([, r]) => r.Type === 'AWS::KMS::Key') ?? [];
+	assert.ok(keyId);
+	const keyRef = { 'Fn::GetAtt': [keyId, 'Arn'] };
+	assert.deepStrictEqual(custom[0].Properties.EncryptionKeyArn, keyRef);
+	const kms = statements.find((s) => [s.Action].flat().includes('kms:CreateGrant'));
+	assert.deepStrictEqual([kms?.Resource].flat(), [keyRef]);
+});
+
+test('CDK: in production, the GSI manager gets no fast-path, settings or KMS permissions, and no key property', () => {
+	const { stack, parent } = setup();
+	new KVStore(parent, 'users', {
+		schema: userSchema,
+		indexes: { byEmail: { partitionKey: 'email' } },
+		encryption: 'customer-managed',
+	});
+	const resources: Record<string, CfnResource> = Template.fromStack(stack).toJSON().Resources;
+	const { policies } = policyStatementsOf(resources, 'BlocksGsiManager');
+	const actions = policies.flatMap(([, p]) =>
+		p.Properties.PolicyDocument.Statement.flatMap((s: any) => [s.Action].flat()),
+	);
+	for (const a of ['dynamodb:CreateTable', 'dynamodb:UpdateTimeToLive', 'dynamodb:TagResource', 'kms:CreateGrant']) {
+		assert.ok(!actions.includes(a), `${a} is sandbox-only`);
+	}
+	const custom = Object.values(resources).find((r) => r.Type === 'AWS::CloudFormation::CustomResource');
+	assert.strictEqual(custom?.Properties.EncryptionKeyArn, undefined);
 });
 
 test('CDK: a store without indexes gets no GSI provider and no stack-status lookup', () => {
