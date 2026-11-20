@@ -1041,7 +1041,7 @@
           "**/*.html"
         ],
         "SystemMetadata": {
-          "cache-control": "no-cache, no-store, must-revalidate"
+          "cache-control": "max-age=0, must-revalidate"
         },
         "OutputObjectKeys": true
       },

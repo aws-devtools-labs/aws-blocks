@@ -844,6 +844,27 @@ new HostingConstruct(stack, 'Hosting', {
 });
 ```
 
+### Cache-Control on uploaded files
+
+Each uploaded file gets one of these `Cache-Control` values:
+
+| Files | `Cache-Control` |
+|---|---|
+| Hashed assets (`staticAssets.immutablePaths`) | `public, max-age=31536000, immutable` |
+| HTML (`*.html`, prerendered pages included) | `max-age=0, must-revalidate` |
+| `staticAssets.noCachePaths` | `no-cache, no-store, must-revalidate` |
+| Everything else | `staticAssets.cacheControl`, else `public, s-maxage=31536000, max-age=0, must-revalidate` |
+
+HTML is revalidated on every request, and because it carries no `no-store`,
+the CloudFront door keeps a copy at the edge and answers a repeat visit's
+`If-None-Match` with `304 Not Modified`. The first request after a deploy
+still gets the new build's HTML: every HTML request resolves to the current
+build's `builds/<buildId>/` key before the cache lookup, so a deploy changes
+the cache key. These files are the build's prerendered, public pages; a
+signed-in or per-user page comes from the server, whose own `Cache-Control`
+applies. The `'none'` door has no CDN in front of its S3 website and keeps
+`no-cache, no-store, must-revalidate` on HTML.
+
 ## Access logging
 
 CloudFront access logs are delivered to a dedicated, private S3 bucket.

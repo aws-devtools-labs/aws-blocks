@@ -3479,7 +3479,7 @@ void describe('HostingConstruct — BYO domain + hostedZoneId', () => {
 // regression here silently collapses cache hit-rate. These assert the 3-tier
 // split documented in hosting_construct.ts:
 //   1. immutablePaths → `max-age=31536000, immutable`
-//   2. *.html         → `no-cache, no-store, must-revalidate`
+//   2. *.html         → `max-age=0, must-revalidate` (noCachePaths: no-store)
 //   3. mutable assets → `s-maxage=31536000, max-age=0, must-revalidate`
 // ================================================================
 
@@ -3502,7 +3502,7 @@ void describe('HostingConstruct — static asset Cache-Control split (G19)', () 
     return values;
   };
 
-  void it('emits immutable, html-no-store, and mutable-edge-cache Cache-Control tiers', () => {
+  void it('emits immutable, html-revalidate, and mutable-edge-cache Cache-Control tiers', () => {
     const staticDir = createStaticDir();
     fs.writeFileSync(path.join(staticDir, 'app.abc123.js'), 'console.log(1)');
     const stack = createStack();
@@ -3522,7 +3522,7 @@ void describe('HostingConstruct — static asset Cache-Control split (G19)', () 
     const ccs = cacheControlValues(template).join(' | ');
 
     assert.match(ccs, /max-age=31536000, immutable/, 'immutable tier present');
-    assert.match(ccs, /no-cache, no-store, must-revalidate/, 'html no-store tier present');
+    assert.match(ccs, /(^|\| )max-age=0, must-revalidate( \||$)/, 'html revalidate tier present');
     assert.match(
       ccs,
       /s-maxage=31536000, max-age=0, must-revalidate/,
@@ -3547,6 +3547,62 @@ void describe('HostingConstruct — static asset Cache-Control split (G19)', () 
     });
     const template = Template.fromStack(stack);
     assert.match(cacheControlValues(template).join(' | '), /public, max-age=42/);
+  });
+
+  // HTML must be storable by CloudFront (no `no-store`) so the edge can answer a
+  // viewer's `If-None-Match` with 304. With `no-cache`/`no-store` and the SSR
+  // cache policy's minimum TTL of 0, CloudFront never keeps the object, so every
+  // conditional request is a full 200 from S3. `max-age=0, must-revalidate`
+  // keeps a copy at the edge and revalidates it on every request.
+  const deploymentsByInclude = (template: Template) => {
+    const deployments = Object.values(template.findResources('Custom::CDKBucketDeployment')) as Array<{
+      Properties: { Include?: string[]; SystemMetadata?: Record<string, string> };
+    }>;
+    return (glob: string) => deployments.filter((d) => (d.Properties.Include ?? []).includes(glob));
+  };
+
+  for (const [label, makeManifest] of [
+    ['static site', (dir: string) => spaManifest(dir)],
+    ['compute app (prerendered pages)', (dir: string) => ssrManifest(dir, createBundleDir())],
+  ] as const) {
+    void it(`uploads HTML as max-age=0, must-revalidate, without no-store (${label})`, () => {
+      const staticDir = createStaticDir();
+      fs.writeFileSync(path.join(staticDir, 'about.html'), '<h1>about</h1>');
+      const stack = createStack();
+      new HostingConstruct(stack, 'Hosting', { manifest: makeManifest(staticDir) });
+      const html = deploymentsByInclude(Template.fromStack(stack))('*.html');
+      assert.equal(html.length, 1, 'one HTML deployment');
+      assert.deepEqual(html[0].Properties.SystemMetadata, { 'cache-control': 'max-age=0, must-revalidate' });
+      assert.deepEqual(html[0].Properties.Include, ['*.html', '**/*.html']);
+    });
+  }
+
+  void it('keeps noCachePaths at no-cache, no-store, must-revalidate and uploads them after the HTML', () => {
+    const staticDir = createStaticDir();
+    fs.writeFileSync(path.join(staticDir, 'config.json'), '{}');
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        version: 1,
+        compute: {},
+        staticAssets: { directory: staticDir, noCachePaths: ['config.json'] },
+        routes: [{ pattern: '/*', target: 'static' }],
+        buildId: 'cc-test-nocache',
+      },
+    });
+    const template = Template.fromStack(stack);
+    const noCache = template.findResources('Custom::CDKBucketDeployment', {
+      Properties: { Include: ['config.json'] },
+    });
+    const [id, res] = Object.entries(noCache)[0] as [string, { DependsOn?: string[]; Properties: { SystemMetadata: Record<string, string> } }];
+    assert.ok(id, 'noCachePaths deployment exists');
+    assert.deepEqual(res.Properties.SystemMetadata, { 'cache-control': 'no-cache, no-store, must-revalidate' });
+    // A noCachePaths entry that is itself HTML must not be overwritten by the HTML pass.
+    const htmlIds = Object.keys(
+      template.findResources('Custom::CDKBucketDeployment', { Properties: { Include: ['*.html', '**/*.html'] } }),
+    );
+    assert.equal(htmlIds.length, 1);
+    assert.ok((res.DependsOn ?? []).includes(htmlIds[0]), 'noCachePaths deployment depends on the HTML deployment');
   });
 
   void it('deploys all asset objects under the immutable builds/<id>/ prefix (atomic deploy)', () => {
