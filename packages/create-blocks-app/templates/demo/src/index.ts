@@ -90,9 +90,14 @@ const addTodo = async () => {
   
   if (errorDiv) showMessage(errorDiv, '', 'idle');
   
+  // Clear the input when the request starts: text typed while it is in flight is the next todo.
+  input.value = '';
   try {
-    await api.createTodo(title, parseInt(prioritySelect.value));
-    input.value = '';
+    await api.createTodo(title, parseInt(prioritySelect.value)).catch((error: unknown) => {
+      // Give the title back, unless the user already typed a new one.
+      if (!input.value) input.value = title;
+      throw error;
+    });
     await refreshTodos();
   } catch (error) {
     if (errorDiv) showError(errorDiv, messageOf(error));
