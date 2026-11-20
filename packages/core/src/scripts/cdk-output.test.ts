@@ -123,7 +123,7 @@ describe('createCdkProgressReporter', () => {
     const err = collectingSink();
     const reporter = createCdkProgressReporter(out, err);
     const warning = [
-      'aws-blocks/index.cdk.ts:33:3',
+      'cdk-blocks/index.cdk.ts:33:3',
       "WARNING The 'alb' front door serves the app over plain HTTP (no certificate), so sign-in travels unencrypted.",
       '   app-sandbox/Hosting/Hosting',
       "   Acknowledge with 'Annotation::@aws-cdk-blocks/hosting:PlainHttpFrontDoor'",
@@ -148,7 +148,7 @@ describe('createCdkProgressReporter', () => {
     const err = collectingSink();
     const reporter = createCdkProgressReporter(out, err);
     const block = [
-      'aws-blocks/index.cdk.ts:33:3',
+      'cdk-blocks/index.cdk.ts:33:3',
       'WARNING Plain HTTP front door.',
       '   app-sandbox/Hosting/Hosting',
       "   Acknowledge with 'Annotation::@aws-cdk-blocks/hosting:PlainHttpFrontDoor'",
@@ -171,11 +171,11 @@ describe('createCdkProgressReporter', () => {
     const err = collectingSink();
     const reporter = createCdkProgressReporter(collectingSink(), err);
     const block = [
-      'aws-blocks/index.cdk.ts:33:3',
-      'or aws-blocks/a.ts:1:1',
-      'or aws-blocks/b.ts:2:2',
-      'or aws-blocks/c.ts:3:3',
-      'or aws-blocks/d.ts:4:4',
+      'cdk-blocks/index.cdk.ts:33:3',
+      'or cdk-blocks/a.ts:1:1',
+      'or cdk-blocks/b.ts:2:2',
+      'or cdk-blocks/c.ts:3:3',
+      'or cdk-blocks/d.ts:4:4',
       '(and 2 more...)',
       'WARNING Shared warning.',
       '   app/A',
@@ -402,16 +402,16 @@ describe('attachCdkWatchOutput', () => {
     const child = fakeWatch();
     const printedWarnings = new Set(['WARNING Already printed.\n   app/Old']);
     attachCdkWatchOutput(child, { level: 'normal', stderr: collectingSink(), printedWarnings });
-    const fresh = 'aws-blocks/index.cdk.ts:33:3\nWARNING Plain HTTP front door.\n   app-sandbox/Hosting/Hosting\n';
-    child.err.write(`Detected change to aws-blocks/index.cdk.ts\n${fresh}WARNING Already printed.\n   app/Old\n\n`);
+    const fresh = 'cdk-blocks/index.cdk.ts:33:3\nWARNING Plain HTTP front door.\n   app-sandbox/Hosting/Hosting\n';
+    child.err.write(`Detected change to cdk-blocks/index.cdk.ts\n${fresh}WARNING Already printed.\n   app/Old\n\n`);
     child.err.write(`${fresh}\n`);
     await tick();
     child.out.end();
     child.err.end();
     await tick();
     assert.deepStrictEqual(calls, [
-      ['error', '[CDK Watch] Detected change to aws-blocks/index.cdk.ts'],
-      ['error', '[CDK Watch] aws-blocks/index.cdk.ts:33:3'],
+      ['error', '[CDK Watch] Detected change to cdk-blocks/index.cdk.ts'],
+      ['error', '[CDK Watch] cdk-blocks/index.cdk.ts:33:3'],
       ['error', '[CDK Watch] WARNING Plain HTTP front door.'],
       ['error', '[CDK Watch]    app-sandbox/Hosting/Hosting'],
     ]);

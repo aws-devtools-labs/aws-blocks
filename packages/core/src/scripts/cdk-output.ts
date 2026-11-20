@@ -145,7 +145,7 @@ const WARNING_START_LINE = /^(?:WARNING\s|\[Warning at \/)/;
 
 /**
  * A source location the CDK CLI prints in the run of lines before a warning: up
- * to five of them, the first bare (`aws-blocks/index.cdk.ts:33:3`), the next ones
+ * to five of them, the first bare (`cdk-blocks/index.cdk.ts:33:3`), the next ones
  * as `or <path>:<line>:<col>`, then `(and N more...)` when there are more.
  */
 const WARNING_LOCATION_LINE = /^(?:(?:or )?\S+:\d+:\d+|\(and \d+ more\.\.\.\))$/;
