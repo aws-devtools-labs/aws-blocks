@@ -350,7 +350,7 @@ A file names the role that the app's statements run as with `${app_role}`. Befor
 
 ```sql
 -- cdk-blocks/migrations/app/003_roles.sql
-GRANT authenticated TO ${app_role};
+GRANT authenticated TO ${app_role} WITH INHERIT FALSE, SET TRUE;
 ```
 
 The replacement is plain text, in string literals and comments too. Nothing else in a file is replaced, and the file's hash is of the text as you wrote it.
@@ -526,7 +526,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 Each transaction on the returned object starts with one statement, `SELECT set_config('role', $1, true), set_config('request.jwt.claims', $2, true)`: `SET LOCAL ROLE` and the claims, both for that transaction only. The role and the claims end with the transaction, so it is safe through a transaction pooler. The same notes as for `asUser()` apply (errors, transactions, cost), and these:
 
 - **The claims are yours, unchanged.** Pass what your policies read. Supabase's `auth.uid()` reads `sub` and expects the Supabase user id, so pass that id when the rows are keyed by it. Only server code sets claims; take them from a verified session, never from request input.
-- **The connection role must be a member of the role.** Grant it in a migration with [`${app_role}`](#the-app-role-in-a-migration): `GRANT authenticated TO ${app_role};`. Otherwise the first statement fails with `DatabaseConfigurationError`, and the function's log names the migration to add. `npm run db connect` lists the roles the connection role may switch to.
+- **The connection role must be a member of the role.** Grant it in a migration with [`${app_role}`](#the-app-role-in-a-migration): `GRANT authenticated TO ${app_role} WITH INHERIT FALSE, SET TRUE;`. Otherwise the first statement fails with `DatabaseConfigurationError`, and the function's log names the migration to add. `npm run db connect` lists the roles the connection role may switch to.
+- **Grant the right to switch, not the role itself.** `WITH INHERIT FALSE, SET TRUE` lets the connection role switch to the role and gives it nothing else. After a plain `GRANT authenticated TO ${app_role};` the connection role inherits the role, so a policy written `TO authenticated` also applies to a statement that does not go through `asRole()`. The options need PostgreSQL 16 or later, which local mode and a cluster that the block provisions have. On an older existing database, use the plain grant and write the role's policies so that they pass only with claims.
 - **Write a policy so that it accepts an empty claims setting.** After a transaction that set the claims, PostgreSQL leaves `request.jwt.claims` on that connection as an empty string, and `''::jsonb` is an error. A later statement on the block itself then fails with `QueryFailed` instead of reading no rows, when the connection role is one that policies apply to. Write `nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'`. A cluster that the block provisions gives every connection the default `{}`; a transaction pooler does not keep such a default.
 - **A statement can undo the switch** with `RESET ROLE` inside its own transaction. The app writes the SQL, so this is a rule for the app's own statements, not a boundary.
 
@@ -539,7 +540,7 @@ GRANT USAGE ON SCHEMA app TO authenticated; -- the block's schema (db.schemaName
 GRANT SELECT ON todos TO authenticated;
 CREATE POLICY todos_owner ON todos FOR SELECT TO authenticated
   USING (user_id = nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub');
-GRANT authenticated TO ${app_role};
+GRANT authenticated TO ${app_role} WITH INHERIT FALSE, SET TRUE;
 ```
 
 A role belongs to the cluster, not to a block: create it in the migrations of one block on the cluster.

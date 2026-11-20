@@ -220,8 +220,7 @@ async function migrateExternal(props: MigrationProperties): Promise<boolean> {
 					poolSize: 1,
 				});
 	try {
-		// The app connects as the role of the connection string, which is the role this function connects as,
-		// and it exists before any file runs: `${app_role}` is that role.
+		// `${app_role}` is the role of the connection string, which the app connects as too.
 		const result = await withRetry(async () =>
 			runMigrationPlan(engine, buildMigrationPlan(asset.files, 'external', await connectionRole(engine)), {
 				schemaName,

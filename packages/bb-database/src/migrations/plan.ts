@@ -38,9 +38,12 @@ export interface FilePlan {
 // What the checks see in place of the placeholder: a quoted identifier, valid wherever a role name is.
 const APP_ROLE_STAND_IN = '"blocks_app_role"';
 
-/** `sql` with every {@link APP_ROLE_PLACEHOLDER} replaced by `appRole`, the role's SQL text (a quoted identifier). */
-export function withAppRole(sql: string, appRole: string): string {
-	return sql.replaceAll(APP_ROLE_PLACEHOLDER, appRole);
+/**
+ * `sql` with every {@link APP_ROLE_PLACEHOLDER} replaced by `appRole`, the role's SQL text (a quoted identifier).
+ * The replacement is a function, so a `$` in the role's name is text and not a replacement pattern (`$$`, `$&`).
+ */
+function withAppRole(sql: string, appRole: string): string {
+	return sql.replaceAll(APP_ROLE_PLACEHOLDER, () => appRole);
 }
 
 /** The quoted name of the role the engine's statements run as: the role of an existing database's connection. */
@@ -174,9 +177,11 @@ export function buildMigrationPlan(
 		.map((file) => ({
 			file,
 			hash: createHash('sha256').update(migrations[file]).digest('hex'),
-			steps: splitStatements(
-				appRole === undefined ? migrations[file] : withAppRole(migrations[file], appRole),
-			).flatMap(sequence),
+			// The file is split first: the splitter does not read quoted identifiers, so a `'` or a `;` in the
+			// role's name must not pass through it.
+			steps: splitStatements(migrations[file])
+				.map((statement) => (appRole === undefined ? statement : withAppRole(statement, appRole)))
+				.flatMap(sequence),
 		}));
 	return { kind, files };
 }

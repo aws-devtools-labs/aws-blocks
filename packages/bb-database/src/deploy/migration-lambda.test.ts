@@ -4,17 +4,20 @@
 // DSQL rejects a schema-level grant on `public` (a system entity): the deploy that pinned this ran
 // `GRANT USAGE ON SCHEMA "public"`.
 import assert from 'node:assert';
-import { afterEach, beforeEach, describe, test } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
 import { sql } from '../common/sql.js';
-import { APP_ROLE_PLACEHOLDER, CLAIMS_SETTING } from '../constants.js';
+import { APP_ROLE_PLACEHOLDER } from '../constants.js';
 import { serializationConflict } from '../errors.js';
 import { DatabaseCore } from '../runtime/index.js';
 import { registerInternalAccess } from '../runtime/internal.js';
 import { roleDatabase } from '../runtime/scoped.js';
+import { ROLE_TODOS } from '../test-support/fixtures.js';
 import { PgliteSession } from '../test-support/pglite-session.js';
 import { RecordingEngine } from '../test-support/recording-engine.js';
 import { ScriptedEngine } from '../test-support/scripted-engine.js';
 import { ensureAppRole, grantAppRole, isRetryableMigrationError, migrateCluster } from './migration-lambda.js';
+
+const ARN = 'arn:aws:iam::123:role/app';
 
 class GrantEngine extends RecordingEngine {
 	constructor(
@@ -46,7 +49,7 @@ async function provisionAppRole(
 describe('ensureAppRole and grantAppRole', () => {
 	test('does not grant on schema public (DSQL rejects it as a system entity)', async () => {
 		const engine = new GrantEngine(['notes']);
-		await provisionAppRole(engine, 'dsql', 'blocks_app_x', 'arn:aws:iam::123:role/app', 'public');
+		await provisionAppRole(engine, 'dsql', 'blocks_app_x', ARN, 'public');
 		assert.ok(!engine.statements.some((s) => s.includes('ON SCHEMA')), engine.statements.join('\n'));
 		assert.ok(engine.statements.some((s) => s.startsWith('CREATE ROLE')));
 		assert.ok(engine.statements.some((s) => s.startsWith('AWS IAM GRANT')));
@@ -57,13 +60,13 @@ describe('ensureAppRole and grantAppRole', () => {
 
 	test('grants usage on a block-owned schema', async () => {
 		const engine = new GrantEngine();
-		await provisionAppRole(engine, 'dsql', 'blocks_app_x', 'arn:aws:iam::123:role/app', 'app_dbxa');
+		await provisionAppRole(engine, 'dsql', 'blocks_app_x', ARN, 'app_dbxa');
 		assert.ok(engine.statements.includes('GRANT USAGE ON SCHEMA "app_dbxa" TO "blocks_app_x"'));
 	});
 
 	test('a materialized view gets SELECT like a view', async () => {
 		const engine = new GrantEngine(['notes'], ['daily']);
-		await provisionAppRole(engine, 'aurora', 'blocks_app_x', 'arn:aws:iam::123:role/app', 'app_dbxa');
+		await provisionAppRole(engine, 'aurora', 'blocks_app_x', ARN, 'app_dbxa');
 		assert.ok(
 			engine.statements.includes('GRANT SELECT ON "app_dbxa"."daily" TO "blocks_app_x"'),
 			engine.statements.join('\n'),
@@ -72,7 +75,7 @@ describe('ensureAppRole and grantAppRole', () => {
 
 	test('on an aurora cluster the role joins rds_iam instead of an AWS IAM GRANT', async () => {
 		const engine = new GrantEngine(['notes']);
-		await provisionAppRole(engine, 'aurora', 'blocks_app_x', 'arn:aws:iam::123:role/app', 'app_dbxa');
+		await provisionAppRole(engine, 'aurora', 'blocks_app_x', ARN, 'app_dbxa');
 		assert.ok(engine.statements.includes('GRANT rds_iam TO "blocks_app_x"'), engine.statements.join('\n'));
 		assert.ok(!engine.statements.some((s) => s.startsWith('AWS IAM GRANT')));
 		assert.ok(engine.statements.includes('GRANT USAGE ON SCHEMA "app_dbxa" TO "blocks_app_x"'));
@@ -124,24 +127,20 @@ describe('isRetryableMigrationError', () => {
 // failed until a second deploy.
 describe('migrateCluster on a first deploy', () => {
 	const APP_ROLE = 'blocks_app_main';
-	const ARN = 'arn:aws:iam::123:role/app';
 	const role = { dbRole: APP_ROLE, appRoleArn: ARN };
-	const CLAIMS = `nullif(current_setting('${CLAIMS_SETTING}', true), '')::jsonb`;
-	const ROLE_POLICIES = [
-		'CREATE ROLE authenticated NOLOGIN;',
-		'CREATE TABLE todos (id SERIAL PRIMARY KEY, owner_id TEXT NOT NULL, title TEXT NOT NULL);',
-		'ALTER TABLE todos ENABLE ROW LEVEL SECURITY;',
-		'GRANT SELECT ON todos TO authenticated;',
-		`CREATE POLICY todos_owner ON todos FOR SELECT TO authenticated USING (owner_id = ${CLAIMS} ->> 'sub');`,
-		"INSERT INTO todos (owner_id, title) VALUES ('alice', 'a1'), ('bob', 'b1');",
-	].join('\n');
+	let template: PgliteSession;
 	let admin: PgliteSession;
 
-	// A fresh cluster per test: roles belong to the cluster, not to a schema.
-	beforeEach(async () => {
-		admin = await PgliteSession.open();
+	before(async () => {
+		template = await PgliteSession.open();
 		// Aurora's IAM login role, which PGlite does not have.
-		await admin.execute('CREATE ROLE rds_iam');
+		await template.execute('CREATE ROLE rds_iam');
+	});
+	after(() => template.close());
+
+	// A fresh cluster per test, copied from the template: roles belong to the cluster, not to a schema.
+	beforeEach(async () => {
+		admin = await template.clone();
 	});
 	afterEach(() => admin.close());
 
@@ -160,14 +159,14 @@ describe('migrateCluster on a first deploy', () => {
 	const titles = sql`SELECT title FROM todos ORDER BY id`;
 
 	test('a migration that grants a role to the app role by name succeeds, and asRole() can switch to it', async () => {
-		const files = { '001_todos.sql': `${ROLE_POLICIES}\nGRANT authenticated TO "${APP_ROLE}";` };
+		const files = { '001_todos.sql': `${ROLE_TODOS}\nGRANT authenticated TO "${APP_ROLE}";` };
 		assert.strictEqual(await migrateCluster(admin, 'aurora', files, role, 'public'), true);
 		const rows = await asRole('authenticated', { sub: 'alice' }).query<{ title: string }>(titles);
 		assert.deepStrictEqual(rows, [{ title: 'a1' }]);
 	});
 
 	test(`${APP_ROLE_PLACEHOLDER} in a migration names the app role`, async () => {
-		const files = { '001_todos.sql': `${ROLE_POLICIES}\nGRANT authenticated TO ${APP_ROLE_PLACEHOLDER};` };
+		const files = { '001_todos.sql': `${ROLE_TODOS}\nGRANT authenticated TO ${APP_ROLE_PLACEHOLDER};` };
 		assert.strictEqual(await migrateCluster(admin, 'aurora', files, role, 'public'), true);
 		const members = await admin.query<{ member: string }>(
 			"SELECT m.rolname AS member FROM pg_auth_members a JOIN pg_roles r ON r.oid = a.roleid JOIN pg_roles m ON m.oid = a.member WHERE r.rolname = 'authenticated'",
@@ -179,7 +178,7 @@ describe('migrateCluster on a first deploy', () => {
 
 	test('a deploy after a failed file finds the role in place and runs the file again', async () => {
 		const first = {
-			'001_todos.sql': ROLE_POLICIES,
+			'001_todos.sql': ROLE_TODOS,
 			'002_grant.sql': `GRANT authenticated TO ${APP_ROLE_PLACEHOLDER};\nSELECT * FROM missing;`,
 		};
 		await assert.rejects(migrateCluster(admin, 'aurora', first, role, 'public'), {
@@ -202,7 +201,6 @@ describe('migrateCluster on a first deploy', () => {
 // What the app role is given, statement for statement: the same set as before the role was created ahead of the
 // migrations. Only the order changed: the role and its IAM mapping first, the schema grants after the files.
 describe('migrateCluster gives the app role the same privileges', () => {
-	const ARN = 'arn:aws:iam::123:role/app';
 	const role = { dbRole: 'blocks_app_x', appRoleArn: ARN };
 	const files = { '001_notes.sql': 'CREATE TABLE notes (id INT PRIMARY KEY);' };
 	const isRoleStatement = (s: string) => /^(CREATE ROLE|GRANT|AWS IAM GRANT)\b/.test(s);
@@ -258,7 +256,7 @@ class DsqlCluster extends ScriptedEngine {
 describe('migrateCluster while a DSQL job runs', () => {
 	test('each poll finds the role in place; the schema grants come once the files are done', async () => {
 		const engine = new DsqlCluster();
-		const role = { dbRole: 'blocks_app_x', appRoleArn: 'arn:aws:iam::123:role/app' };
+		const role = { dbRole: 'blocks_app_x', appRoleArn: ARN };
 		const files = {
 			'001_t.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY, n INT);\nCREATE INDEX ASYNC t_n ON t (n);',
 			'002_grant.sql': `GRANT SELECT ON t TO ${APP_ROLE_PLACEHOLDER};`,

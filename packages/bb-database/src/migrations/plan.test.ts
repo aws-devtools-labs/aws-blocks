@@ -4,7 +4,7 @@
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import { isBlocksError } from '@aws-cdk-blocks/core';
-import { APP_ROLE_PLACEHOLDER } from '../constants.js';
+import { APP_ROLE_PLACEHOLDER, quoteIdent } from '../constants.js';
 import { MIGRATION_VALIDATION_ERROR_NAME } from '../errors.js';
 import { buildMigrationPlan, connectionRole, lintMigrationFiles } from './plan.js';
 
@@ -244,6 +244,23 @@ describe(`${APP_ROLE_PLACEHOLDER} in a migration file`, () => {
 		const local = buildMigrationPlan({ '001.sql': file }, 'aurora', '"blocks_app_local"');
 		assert.strictEqual(plan.files[0].hash, local.files[0].hash);
 		assert.strictEqual(plan.files[0].hash, buildMigrationPlan({ '001.sql': file }, 'aurora').files[0].hash);
+	});
+
+	// On an existing database the role is the connection's, a name the block does not choose. A `$` pattern in
+	// a replacement string (`$$`, `$&`, `` $` ``, `$'`) once changed the name, and a `'` or `;` in it once reached
+	// the statement splitter.
+	test('a role name with $, a quote or a semicolon is inserted as it is', () => {
+		for (const name of ['svc$$app', 'a$&b', 'a$`b', "a$'b", 'a;b', "it's"]) {
+			const plan = buildMigrationPlan(
+				{ '001.sql': `GRANT authenticated TO ${APP_ROLE_PLACEHOLDER};\nSELECT 1;` },
+				'external',
+				quoteIdent(name),
+			);
+			assert.deepStrictEqual(
+				plan.files[0].steps.map((s) => s.sql),
+				[`GRANT authenticated TO ${quoteIdent(name)}`, 'SELECT 1'],
+			);
+		}
 	});
 
 	test('passes the checks of both cluster kinds', () => {

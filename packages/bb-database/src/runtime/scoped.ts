@@ -44,6 +44,8 @@ const PG_INVALID_PARAMETER_VALUE = '22023';
 
 // The fix is a migration, not a statement the app can run: the app role cannot grant itself a role, and in a
 // migration CURRENT_USER is the cluster admin. `${app_role}` names the app role in every place a file runs.
+// The grant gives the right to switch only (INHERIT FALSE): with a plain grant the app role would inherit the
+// role, and the role's policies would apply to statements outside asRole() as well.
 function roleRefused(fullId: string, role: string): (e: unknown) => unknown {
 	return (e) => {
 		const code = sqlStateOf(e);
@@ -51,8 +53,8 @@ function roleRefused(fullId: string, role: string): (e: unknown) => unknown {
 		console.error(
 			`[Database] ${fullId}: asRole('${role}') was refused by PostgreSQL (SQLSTATE ${code}). The role must ` +
 				`exist and the role the app connects as must be a member of it. Add a migration file with ` +
-				`GRANT ${quoteIdent(role)} TO ${APP_ROLE_PLACEHOLDER}; (the migration runner replaces ` +
-				`${APP_ROLE_PLACEHOLDER} with that role).`,
+				`GRANT ${quoteIdent(role)} TO ${APP_ROLE_PLACEHOLDER} WITH INHERIT FALSE, SET TRUE; (the migration runner ` +
+				`replaces ${APP_ROLE_PLACEHOLDER} with that role; before PostgreSQL 16, leave out the WITH clause).`,
 		);
 		return configError(
 			`Database '${fullId}': the connection role cannot switch to the role given to asRole(). ` +

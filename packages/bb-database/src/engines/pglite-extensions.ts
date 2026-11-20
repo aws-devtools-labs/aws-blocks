@@ -43,7 +43,8 @@ import { pgErrorCode } from '../errors.js';
  *   `postgresql.conf`, and the directory then fails to open without it (`npm run db -- status` opens it that way).
  *
  * `vector` (pgvector) is not in PGlite 0.5's package; it fails locally, see {@link explainMissingExtension}.
- * `moddatetime`'s bundle also holds `autoinc`, `insert_username` and `refint`, which Aurora does not list.
+ * `moddatetime`'s bundle also holds `autoinc`, `insert_username` and `refint`, which Aurora lists too (as
+ * `contrib-spi`): they can be created locally and on AWS without a key of their own here.
  *
  * Loaded eagerly, so a data directory whose migrations created any of them opens again, and a test that creates
  * one at runtime works. Measured on PGlite 0.5.11 (Apple M3 Pro, Node 22, median of six runs): reopening an

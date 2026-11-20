@@ -121,7 +121,7 @@ export const LOCAL_APP_ROLE = `${DB_ROLE_PREFIX}local`;
  * replaced before the file runs, with the quoted name: the app role the migration Lambda creates on a cluster
  * the block provisions (`blocks_app_{cluster}`, {@link sanitizeDbRoleName}), `"blocks_app_local"` in local
  * mode, and the connection role on an existing database. One file then grants to the app role in every place
- * it runs: `GRANT authenticated TO ${app_role};`.
+ * it runs: `GRANT authenticated TO ${app_role} WITH INHERIT FALSE, SET TRUE;`.
  */
 // biome-ignore lint/suspicious/noTemplateCurlyInString: the placeholder a migration file writes, not a template
 export const APP_ROLE_PLACEHOLDER = '${app_role}';

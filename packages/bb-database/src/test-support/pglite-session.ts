@@ -4,7 +4,7 @@
 // An in-memory PGlite as a stand-in for a provisioned cluster, for the tests of the migration Lambda. Not part
 // of the public package: compiled into `dist/` next to the tests, never imported from an entry file.
 
-import { PGlite } from '@electric-sql/pglite';
+import { PGlite, type PGliteInterface } from '@electric-sql/pglite';
 import type { TransactionHandle } from '../common/engine.js';
 import { quoteIdent } from '../constants.js';
 import {
@@ -30,7 +30,7 @@ const ADMIN = 'postgres';
  */
 export class PgliteSession extends CountedEngine implements RowCountingEngine {
 	private constructor(
-		readonly db: PGlite,
+		readonly db: PGliteInterface,
 		private readonly role?: string,
 	) {
 		super();
@@ -40,6 +40,11 @@ export class PgliteSession extends CountedEngine implements RowCountingEngine {
 		const db = new PGlite();
 		await db.waitReady;
 		return new PgliteSession(db);
+	}
+
+	/** A copy of this database as it is now, which costs much less than {@link open}: a fresh cluster per test. */
+	async clone(): Promise<PgliteSession> {
+		return new PgliteSession(await this.db.clone());
 	}
 
 	/** An engine on the same database whose transactions run as `role`. */
