@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-agent": patch
-"@aws-blocks/blocks": patch
+"@aws-cdk-blocks/bb-agent": patch
+"aws-cdk-blocks": patch
 ---
 
 fix(bb-agent): don't show the previous answer when the chat reconnects at the start of a turn
