@@ -110,21 +110,15 @@ function copyDynamicDeps(outDir: string): void {
  *   matches the official @aws/agentcore CLI's convention and passes.
  */
 export function bundleAgentCoreAsset(backendModulePath: string, outDir: string): string {
-	// Generated entry: load config, import the backend (constructs + registers the Agent),
-	// then serve. `resolveDir` = bb-agent package root so `@aws-cdk-blocks/*` and this package's
-	// own `serve` resolve via node_modules; the backend is imported by absolute PATH (esbuild
-	// resolves paths, not file:// URLs) so it's bundled into the SAME graph and its
-	// `@aws-cdk-blocks/*` deps dedupe to one instance.
-	// Wrapped in an async IIFE (not top-level await) because the bundle is emitted as CJS,
-	// which does not support top-level await.
+	// Generated entry: start the harness; `serveBackend` loads the config and then imports the
+	// backend (constructs + registers the Agent), and repeats that on the next invocation while
+	// the config is not readable. `resolveDir` = bb-agent package root so `@aws-cdk-blocks/*` and
+	// this package's own `serveBackend` resolve via node_modules; the backend is imported by
+	// absolute PATH (esbuild resolves paths, not file:// URLs) so it's bundled into the SAME
+	// graph and its `@aws-cdk-blocks/*` deps dedupe to one instance.
 	const entrySource = [
-		"import { loadConfigToProcessEnv } from '@aws-cdk-blocks/core';",
-		"import { serve } from '@aws-cdk-blocks/bb-agent/agentcore';",
-		'(async () => {',
-		'  await loadConfigToProcessEnv();',
-		`  await import(${JSON.stringify(backendModulePath)});`,
-		'  serve();',
-		'})();',
+		"import { serveBackend } from '@aws-cdk-blocks/bb-agent/agentcore';",
+		`serveBackend(() => import(${JSON.stringify(backendModulePath)}));`,
 	].join('\n');
 
 	mkdirSync(outDir, { recursive: true });

@@ -153,6 +153,12 @@ handler does**, which is how the loop gets `BLOCKS_RT_CALLBACK_URL` (registered 
 every other `registerConfig()` value a tool's Building Block may read. IAM to read the blob is inherited
 from the shared execution role.
 
+The config blob is uploaded by a deployment that is not ordered before the Runtime, so the container can
+start before the blob is readable. The entry (`serveBackend()`) starts the harness at once and imports the
+backend only after a config load finds the blob; until then each invocation loads the config again and
+fails, so the caller's `stream()` rejects instead of running a turn that cannot publish to Realtime. This
+is the same rule the Lambda handler follows for its cold start.
+
 > **Note:** The runtime (`agent.ts`) and CDK (`index.cdk.ts`) layers both create the internal BBs on the Agent scope (`this`) with the **same child ids** (`sn`, `convos`, `messages`, `rt`). Same id → same `fullId` → same derived physical name, so the deployed loop resolves the exact resources CDK provisioned. A derived name is not always the `fullId` itself (FileBucket shortens a `fullId` over S3's 63 characters), so the runtime always addresses a child by the identifier it registered (`getSdkIdentifiers(child)`), never by its raw `fullId`. The two `KVStore` children also take their options from one place in both layers: `conversationsTableOptions` and `messagesTableOptions` in `schemas.ts`.
 
 ## Model Providers
