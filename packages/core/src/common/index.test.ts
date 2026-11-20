@@ -343,7 +343,8 @@ describe('formatUserAgentString', () => {
 
 	test('a chain exceeding 63 bytes drops parents from inside until it fits', () => {
 		const root = { id: 'my-app' };
-		const p1 = new TestBB('a', { parent: root, bbName: 'KnowledgeBase', bbVersion: '1.2.3' });
+		// Short enough to fit beside the origin for a core version of up to 16 characters.
+		const p1 = new TestBB('a', { parent: root, bbName: 'Auth', bbVersion: '1.2.3' });
 		const p2 = new TestBB('b', { parent: p1, bbName: 'LambdaCompute', bbVersion: '4.5.6' });
 		const p3 = new TestBB('c', { parent: p2, bbName: 'EmailClient', bbVersion: '7.8.9' });
 		const leaf = new TestBB('db', { parent: p3, bbName: 'Database', bbVersion: '0.2.6' });
@@ -353,7 +354,7 @@ describe('formatUserAgentString', () => {
 
 		const s = leaf.testFormatUserAgentString();
 		assert.ok(Buffer.byteLength(s, 'utf8') <= 63, `result must fit in 63 bytes, got ${Buffer.byteLength(s, 'utf8')}`);
-		assert.strictEqual(s, `aws-blocks/${CORE_VERSION} bb/KnowledgeBase/1.2.3 ... bb/Database/0.2.6`);
+		assert.strictEqual(s, `aws-blocks/${CORE_VERSION} bb/Auth/1.2.3 ... bb/Database/0.2.6`);
 	});
 
 	test('never truncates mid-token: result is always a fitting subset', () => {
@@ -384,9 +385,10 @@ describe('formatUserAgentString', () => {
 		const auth = new TestBB('auth', { parent: root, bbName: 'Auth', bbVersion: '1.0.1-rc.1' });
 		const leaf = new TestBB('db', { parent: auth, bbName: 'Database', bbVersion: '0.2.6' });
 
-		// 20 bytes admits `aws-blocks/<core>` but not the marker plus the leaf.
-		const s = leaf.testFormatUserAgentString(20);
-		assert.strictEqual(s, `aws-blocks/${CORE_VERSION}`);
+		// Exactly the origin's length admits `aws-blocks/<core>` but not the marker plus the leaf.
+		const origin = `aws-blocks/${CORE_VERSION}`;
+		const s = leaf.testFormatUserAgentString(Buffer.byteLength(origin, 'utf8'));
+		assert.strictEqual(s, origin);
 	});
 
 	test('drops the fewest parents needed, nearest the leaf first', () => {
@@ -432,16 +434,17 @@ describe('formatUserAgentString', () => {
 		const bb = new MultiByteChainBB('x', { parent: { id: 'my-app' } });
 
 		const full = `aws-blocks/${CORE_VERSION} ${leafEntry}`;
-		assert.ok(full.length <= 50, `precondition: ${full.length} characters must look like it fits`);
+		// A budget of the string's length in characters, which it overflows only in bytes.
+		const budget = full.length;
 		assert.ok(
-			Buffer.byteLength(full, 'utf8') > 50,
-			`precondition: ${Buffer.byteLength(full, 'utf8')} bytes must actually overflow`,
+			Buffer.byteLength(full, 'utf8') > budget,
+			`precondition: ${Buffer.byteLength(full, 'utf8')} bytes must actually overflow ${budget}`,
 		);
 
-		const s = bb.testFormatUserAgentString(50);
+		const s = bb.testFormatUserAgentString(budget);
 		assert.ok(
-			Buffer.byteLength(s, 'utf8') <= 50,
-			`result must fit in 50 bytes, got ${Buffer.byteLength(s, 'utf8')}`,
+			Buffer.byteLength(s, 'utf8') <= budget,
+			`result must fit in ${budget} bytes, got ${Buffer.byteLength(s, 'utf8')}`,
 		);
 	});
 
