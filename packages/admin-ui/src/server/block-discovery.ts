@@ -666,7 +666,7 @@ export function discoverBlocks(options: DiscoverBlocksOptions): BlocksResult {
 		if (!existsSync(blocksDir) || !statSync(blocksDir).isDirectory()) {
 			return unavailable(
 				projectRoot,
-				`No cdk-blocks/ directory in ${projectRoot}. Run the dashboard from the root of a Blocks app (the directory containing cdk-blocks/), or create cdk-blocks/index.ts to declare your first block.`,
+				`No cdk-blocks/ directory in ${projectRoot}. Run the dashboard from the root of a CDK Blocks app (the directory containing cdk-blocks/), or create cdk-blocks/index.ts to declare your first block.`,
 				'NOT_A_BLOCKS_PROJECT',
 			);
 		}
