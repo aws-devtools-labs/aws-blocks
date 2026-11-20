@@ -64,6 +64,7 @@ export const cacheConfigSchema = z.object({
   computeResource: z.string().min(1),
   driver: z.enum(['opennext', 'nitro-s3']).optional(),
   tagRevalidation: z.boolean().optional(),
+  cdnInvalidation: z.boolean().optional(),
   revalidationQueue: z.boolean().optional(),
   revalidationFunction: z
     .object({

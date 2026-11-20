@@ -77,7 +77,8 @@
     "semver": "^7.8.5",
     "zod": "^4.6.7",
     "@standard-schema/spec": "^1.1.0",
-    "@aws-sdk/client-lambda-web": "^3.1156.0"
+    "@aws-sdk/client-lambda-web": "^3.1156.0",
+    "@aws-sdk/client-cloudfront": "^3.1156.0"
   },
   "devDependencies": {
     "@types/cross-spawn": "^6.0.6",
