@@ -13,10 +13,10 @@ appcompat = "1.7.1"
 androidxBrowser = "1.10.0"
 androidxActivity = "1.9.3"
 
-jna = "5.17.0"
+jna = "5.19.1"
 ktor = "3.3.3"
 kotlinpoet = "2.3.0"
-kotest = "6.2.6"
+kotest = "6.2.7"
 
 kotlinx-atomicfu = "0.27.0"
 kotlinx-coroutines = "1.11.0"
