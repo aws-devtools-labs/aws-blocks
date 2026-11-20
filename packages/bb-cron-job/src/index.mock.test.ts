@@ -16,6 +16,47 @@ const fakeScope = {
 	},
 } as any;
 
+describe('CronJob mock – time zone schedules', () => {
+	test('reuses the formatter while searching for the next weekly occurrence', (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-01-05T00:01:00Z') });
+		const formatters = t.mock.method(Intl, 'DateTimeFormat');
+		const fired: string[] = [];
+		new CronJob(fakeScope, 'weekly-tokyo', {
+			schedule: 'cron(0 9 ? * MON *)',
+			timezone: 'Asia/Tokyo',
+			handler: async (event) => {
+				fired.push(event.scheduledTime);
+			},
+		});
+
+		const next = Date.parse('2026-01-12T00:00:00Z');
+		assert.strictEqual(formatters.mock.calls.filter(({ arguments: [, options] }) => options?.minute).length, 1);
+		t.mock.timers.tick(next - Date.now() - 1);
+		assert.deepStrictEqual(fired, []);
+		t.mock.timers.tick(1);
+		assert.deepStrictEqual(fired, ['2026-01-12T00:00:00.000Z']);
+	});
+
+	test('uses the configured time zone for each job', (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-01-05T00:01:00Z') });
+		const fired: string[] = [];
+		for (const [id, timezone] of [['tokyo', 'Asia/Tokyo'], ['kolkata', 'Asia/Kolkata']]) {
+			new CronJob(fakeScope, id, {
+				schedule: 'cron(0 9 * * ? *)',
+				timezone,
+				handler: async (event) => {
+					fired.push(`${id}: ${event.scheduledTime}`);
+				},
+			});
+		}
+
+		t.mock.timers.tick(Date.parse('2026-01-05T03:30:00Z') - Date.now());
+		assert.deepStrictEqual(fired, ['kolkata: 2026-01-05T03:30:00.000Z']);
+		t.mock.timers.tick(Date.parse('2026-01-06T00:00:00Z') - Date.now());
+		assert.deepStrictEqual(fired, ['kolkata: 2026-01-05T03:30:00.000Z', 'tokyo: 2026-01-06T00:00:00.000Z']);
+	});
+});
+
 describe('CronJob mock – schedules far in the future', () => {
 	beforeEach(() => {
 		mock.timers.enable({ apis: ['setTimeout', 'Date'], now: new Date('2026-03-01T00:00:00Z') });
