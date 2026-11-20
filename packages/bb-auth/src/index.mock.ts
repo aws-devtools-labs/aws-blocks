@@ -143,7 +143,7 @@ const MOCK_LAYER: AuthLayer = {
 			const target =
 				provider.family === 'oidc' && provider.transport === 'direct'
 					? isStubProvider(provider.config)
-						? 'AWS Blocks stub IdP (local sign-in, no real credentials)'
+						? 'AWS CDK Blocks stub IdP (local sign-in, no real credentials)'
 						: `${provider.config.issuer} (real IdP)`
 					: 'Cognito managed login (unavailable locally — deploy a sandbox to test it)';
 			console.log(`[auth] provider "${provider.id}" → ${target}`);
