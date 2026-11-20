@@ -52,9 +52,9 @@
   },
   "devDependencies": {
     "@aws-crypto/sha256-js": "^5.2.0",
-    "@aws-sdk/client-cloudformation": "^3.1156.0",
-    "@aws-sdk/client-cognito-identity-provider": "^3.1156.0",
-    "@aws-sdk/client-dynamodb": "^3.1156.0",
+    "@aws-sdk/client-cloudformation": "^3.1171.0",
+    "@aws-sdk/client-cognito-identity-provider": "^3.1171.0",
+    "@aws-sdk/client-dynamodb": "^3.1171.0",
     "@smithy/signature-v4": "^5.7.5",
     "@types/node": "^20.19.43",
     "aws-cdk-lib": "^2.274.0",

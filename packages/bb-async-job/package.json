@@ -54,7 +54,7 @@
     "@aws-cdk-blocks/bb-lambda-compute": "^1.0.0",
     "@aws-cdk-blocks/bb-container-compute": "^1.0.0",
     "@aws-cdk-blocks/core": "^1.0.0",
-    "@aws-sdk/client-sqs": "^3.1156.0"
+    "@aws-sdk/client-sqs": "^3.1171.0"
   },
   "devDependencies": {
     "@standard-schema/spec": "^1.1.0",
