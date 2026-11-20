@@ -9,7 +9,7 @@ This separation provides:
 - **Clear separation of concerns** - Infrastructure, runtime, mocking, and client protocols are distinct
 - **Selective bundling** - Only relevant code ships to each environment
 - **Explicit contracts** - All Building Blocks have the same file structure
-- **Better tooling** - AWS CDK Blocks can analyze and optimize each layer independently
+- **Better tooling** - CDK Blocks can analyze and optimize each layer independently
 
 ## Export Structure
 
@@ -23,7 +23,7 @@ building-block/
 
 All four files are **required**. If a Building Block doesn't need a particular layer, export a no-op.
 
-## How AWS CDK Blocks Consumes Each Export
+## How CDK Blocks Consumes Each Export
 
 ```
 Building Block Exports          Consumption
@@ -462,7 +462,7 @@ export class MyClientHook {
 
 ## Export Discovery
 
-AWS CDK Blocks uses two mechanisms to ensure correct exports are consumed in each context:
+CDK Blocks uses two mechanisms to ensure correct exports are consumed in each context:
 
 1. **Conditional exports** in package.json
 2. **Export manifest** generated at build time

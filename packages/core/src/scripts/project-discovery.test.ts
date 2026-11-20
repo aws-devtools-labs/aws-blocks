@@ -23,7 +23,7 @@ function makeDir(...segments: string[]): string {
 	return dir;
 }
 
-/** Plants the marker file, making `dir` an AWS CDK Blocks project. */
+/** Plants the marker file, making `dir` a CDK Blocks project. */
 function makeProject(dir: string): string {
 	mkdirSync(join(dir, 'cdk-blocks'), { recursive: true });
 	writeFileSync(join(dir, 'cdk-blocks', 'index.ts'), 'export const blocks = {};');

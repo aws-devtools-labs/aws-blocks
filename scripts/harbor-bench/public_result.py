@@ -36,7 +36,7 @@ def numeric(value):
 
 
 def storage(snapshot):
-    """AWS CDK Blocks storage the app constructs in its backend sources; only the fixed STORAGE names leave here."""
+    """CDK Blocks storage the app constructs in its backend sources; only the fixed STORAGE names leave here."""
     found = set()
     try:
         with tarfile.open(snapshot, 'r:gz') as archive:

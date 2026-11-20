@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The declarative command tree of the AWS CDK Blocks task runner: groups, canonical names,
+ * The declarative command tree of the CDK Blocks task runner: groups, canonical names,
  * hidden aliases, descriptions, flags, examples and handlers.
  *
  * Command names are data. Renaming a command, or making an alias canonical,
@@ -368,7 +368,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 	{
 		path: ['docs'],
 		group: 'Develop',
-		summary: 'Read the AWS CDK Blocks docs: a block, an export or option, one section, or a search',
+		summary: 'Read the CDK Blocks docs: a block, an export or option, one section, or a search',
 		description: [
 			'Print the docs that ship in aws-cdk-blocks, looked up by name.',
 			'',

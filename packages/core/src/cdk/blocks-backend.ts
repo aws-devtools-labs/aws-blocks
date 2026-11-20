@@ -77,7 +77,7 @@ export function assertCdkConditionActive(): void {
 }
 
 /**
- * Timeout of the shared AWS CDK Blocks handler Lambda, and therefore the ceiling on a
+ * Timeout of the shared CDK Blocks handler Lambda, and therefore the ceiling on a
  * single invocation. Exported because resources that feed the handler have to
  * size their own timeouts against it (e.g. an SQS queue's visibility timeout).
  */
@@ -134,7 +134,7 @@ export interface CoreBlocksBackendProps extends BlocksBackendProps {
  * `accessLogging` is deliberately off by default in BOTH presets (see the
  * {@link BlocksDefaults.accessLogging} field doc): enabling it provisions the
  * account/region-level API Gateway CloudWatch Logs role, an AWS-side singleton a
- * second AWS CDK Blocks stack can repoint on deploy or break on teardown. We must NOT
+ * second CDK Blocks stack can repoint on deploy or break on teardown. We must NOT
  * flip that default, but a durable deployment silently having no request-level
  * audit trail is worth surfacing.
  *
@@ -167,7 +167,7 @@ function warnIfDurableWithoutAccessLogging(scope: Construct, defaults: BlocksDef
 			'trail. It is off by default because enabling it provisions the account/region-level API ' +
 			'Gateway CloudWatch Logs role — an AWS-side singleton that a second AWS CDK Blocks stack in the same ' +
 			'account+region can repoint on deploy or leave broken on teardown (see the `accessLogging` ' +
-			'field docs on the backend `defaults`). Once you have confirmed a single AWS CDK Blocks stack owns ' +
+			'field docs on the backend `defaults`). Once you have confirmed a single CDK Blocks stack owns ' +
 			"that role in the region, opt in by setting `accessLogging: true` in this backend's " +
 			'`defaults`; opting in also enables S3 server access logging for any FileBucket, each of ' +
 			'which then gets its own log bucket. If leaving it off is deliberate (for example a ' +
@@ -280,7 +280,7 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 	enableRolePolicyPacking(executionRole, scope);
 
 	// ── Permissions boundary + IAM report ─────────────────────────────────
-	// Cover every role AWS CDK Blocks creates for this root (blocks-roles.ts — an
+	// Cover every role CDK Blocks creates for this root (blocks-roles.ts — an
 	// aspect, so roles blocks add later are covered too), then apply the opt-in
 	// ceiling (`defaults.permissionsBoundary`) to that set. Unset → no-op,
 	// templates unchanged. The report lists what the shared role accumulated; it is
@@ -562,10 +562,10 @@ export function ensureVpcAccessPolicyWhenVpcActive(root: { executionRole: iam.IR
 }
 
 /**
- * Standalone CDK construct that provisions the AWS CDK Blocks backend: a single Lambda
+ * Standalone CDK construct that provisions the CDK Blocks backend: a single Lambda
  * function fronted by one shared API Gateway REST API with RPC + catch-all proxy routing.
  *
- * Use this to embed an AWS CDK Blocks backend into any existing CDK stack. Building Blocks
+ * Use this to embed a CDK Blocks backend into any existing CDK stack. Building Blocks
  * instantiated during the `backendCDKPath` import will automatically attach to
  * this construct's Lambda handler.
  *
@@ -586,7 +586,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	 * `globalThis.CURRENT_BLOCKS_STACK.backendModulePath`.
 	 */
 	public readonly backendModulePath: string;
-	/** Shared IAM role assumed by all AWS CDK Blocks compute. Building Blocks grant to this role. */
+	/** Shared IAM role assumed by all CDK Blocks compute. Building Blocks grant to this role. */
 	public readonly executionRole: iam.IRole;
 	/** Infrastructure defaults for Building Blocks created under this backend. */
 	public readonly defaults: BlocksDefaults;

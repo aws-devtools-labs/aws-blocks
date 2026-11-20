@@ -11,7 +11,7 @@ import Foundation
 let blocksCodegenConfigName = "blocks.codegen.json"
 
 /// A build plugin that automatically generates typed Swift models and API methods
-/// from an AWS CDK Blocks spec file (`blocks.spec.json`) at build time.
+/// from a CDK Blocks spec file (`blocks.spec.json`) at build time.
 ///
 /// Add this plugin to your target and include `blocks.spec.json` in your source files.
 /// The generated `Models.swift` and `API.swift` will be compiled as part of the target.

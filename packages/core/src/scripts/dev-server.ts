@@ -220,7 +220,7 @@ export function rejectsDevRequestOrigin(
  * `text/plain`, `application/x-www-form-urlencoded` or `multipart/form-data`
  * body, or one with no `Content-Type`, to another origin without a CORS
  * preflight, so refusing them keeps a cross-site page from running an RPC call
- * at all. Every AWS CDK Blocks client sends `application/json`.
+ * at all. Every CDK Blocks client sends `application/json`.
  */
 export function isJsonRpcContentType(contentType: string | undefined): boolean {
   return (contentType ?? '').split(';')[0].trim().toLowerCase() === 'application/json';
@@ -364,7 +364,7 @@ export interface DevServerOptions {
   frontendPort?: number;
   /**
    * Interface the dev server binds. Default: `127.0.0.1` (loopback only). The dev
-   * server proxies your whole AWS CDK Blocks API — with local mock auth, which
+   * server proxies your whole CDK Blocks API — with local mock auth, which
    * authenticates nothing — against the local mock datastore, so it must not be
    * reachable from other machines by default. Set a wider host (e.g. `0.0.0.0`)
    * only for container / remote-devbox setups where you control who can reach the
@@ -1437,7 +1437,7 @@ export async function startDevServer(options: DevServerOptions) {
       return;
     }
 
-    // ── AWS CDK Blocks runtime config ──────────────────────────────────────────
+    // ── CDK Blocks runtime config ──────────────────────────────────────────
     // Reserved path: serve it from the front door so it works for every
     // framework (Next/Nuxt/Astro/SPA all proxy through this :3000 server),
     // mirroring production where CloudFront serves `${BLOCKS_SANDBOX_PREFIX}/*`
@@ -1569,7 +1569,7 @@ export async function startDevServer(options: DevServerOptions) {
     console.log(`AWS CDK Blocks local server running on ${frontDoor}`);
     buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: Date.now() - devStartTime });
 
-    // Spawn frontend dev server after AWS CDK Blocks server is ready
+    // Spawn frontend dev server after CDK Blocks server is ready
     if (frontendCommand) {
       const child = spawnFrontend(frontendCommand);
       await announceFrontendReady(child);

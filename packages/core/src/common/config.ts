@@ -300,7 +300,7 @@ export function isConfigResolved(): boolean {
 }
 
 /**
- * Sanitize an AWS CDK Blocks identifier into a valid config/env-var key segment:
+ * Sanitize a CDK Blocks identifier into a valid config/env-var key segment:
  * uppercase, with every non-alphanumeric character replaced by `_`.
  *
  * Config entries are loaded into `process.env` at runtime (see

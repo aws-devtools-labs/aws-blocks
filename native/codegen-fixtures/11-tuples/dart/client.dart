@@ -156,7 +156,7 @@ class Api {
 }
 
 
-// --- AWS CDK Blocks Client ---
+// --- CDK Blocks Client ---
 
 class Blocks {
   late final Api api;

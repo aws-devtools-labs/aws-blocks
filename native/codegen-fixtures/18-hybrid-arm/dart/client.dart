@@ -1484,7 +1484,7 @@ class AuthApi {
 }
 
 
-// --- AWS CDK Blocks Client ---
+// --- CDK Blocks Client ---
 
 class Blocks {
   late final AuthApi authApi;

@@ -4,7 +4,7 @@
 /**
  * CDK entry for `@aws-cdk-blocks/bb-secret/internal`.
  *
- * This subpath is for AWS CDK Blocks' own Building Blocks only. It is not part of
+ * This subpath is for CDK Blocks' own Building Blocks only. It is not part of
  * the public API and can change in any release.
  *
  * @internal
@@ -22,7 +22,7 @@ import { type FrameworkKey, SSM_SECRETS_STORE_WARNING_ID } from './internal-shar
 export { type FrameworkKey, SSM_SECRETS_STORE_WARNING_ID } from './internal-shared.js';
 
 /**
- * Create a key that AWS CDK Blocks generates for one of its own Building Blocks,
+ * Create a key that CDK Blocks generates for one of its own Building Blocks,
  * in the store chosen by `defaults.secretsStore`.
  *
  * - `'secrets-manager'`: a bb-secret `Secret` with a CloudFormation-generated
@@ -86,7 +86,7 @@ function resolveDefaults(scope: ScopeParent, id: string): BlocksDefaults {
 		?.defaults;
 	if (ambient) return ambient;
 	console.warn(
-		`[Blocks] frameworkKey '${id}' resolved infrastructure defaults with no owning BlocksStack/BlocksBackend; ` +
+		`[AWS CDK Blocks] frameworkKey '${id}' resolved infrastructure defaults with no owning BlocksStack/BlocksBackend; ` +
 			'using BlocksPresets.production.',
 	);
 	return BlocksPresets.production;

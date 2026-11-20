@@ -23,7 +23,7 @@
  * constructs every Building Block and registers each AsyncJob), then looks the
  * job up by `fullId` and runs it. The parent → worker message carries only
  * serializable data (`{ jobFullId, record }`); the worker → parent reply is
- * `{ ok }` or `{ error }`. The handler's *own* AWS CDK Blocks calls (e.g. `bucket.put`)
+ * `{ ok }` or `{ error }`. The handler's *own* CDK Blocks calls (e.g. `bucket.put`)
  * run against real AWS from inside the worker using the task role — no bridge
  * needed for those, because the worker is a full runtime.
  *

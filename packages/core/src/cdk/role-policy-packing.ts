@@ -76,7 +76,7 @@ import { attributeRoleStatements } from './iam-report.js';
 /**
  * CDK context key that raises the managed-policies-per-role limit the quota check
  * enforces, for accounts whose IAM "Managed policies per role" quota was raised.
- * Named like other AWS CDK Blocks context keys (`@aws-cdk-blocks/<package>:<option>`).
+ * Named like other CDK Blocks context keys (`@aws-cdk-blocks/<package>:<option>`).
  *
  * @internal
  */
@@ -118,7 +118,7 @@ const mergedRoles = new WeakMap<iam.Role, true>();
  * managed-policy quota check for `role` (see the module docs). Idempotent. Grant helpers are unaffected: blocks keep
  * calling `grant*()` / `addToPrincipalPolicy()` on the role as before.
  *
- * @param root - the AWS CDK Blocks root whose Building Blocks the quota error attributes
+ * @param root - the CDK Blocks root whose Building Blocks the quota error attributes
  *   grants to (defaults to the role's stack).
  * @internal
  */
@@ -270,7 +270,7 @@ function validateManagedPolicyQuota(role: iam.Role, root: Construct): string[] {
 		`AWS CDK Blocks: the IAM role ${role.node.path} needs ${attached} managed policies, more than the ` +
 			`${quota} allowed per role. The Building Blocks granting to it need more permissions than fit on one ` +
 			`role, ${packed}.${topText} To fix: consolidate resources where possible; or move some Building ` +
-			'Blocks into a separate AWS CDK Blocks backend (another BlocksStack or BlocksBackend), which has its own ' +
+			'Blocks into a separate CDK Blocks backend (another BlocksStack or BlocksBackend), which has its own ' +
 			`execution role. ${raise}`,
 	];
 }
@@ -320,7 +320,7 @@ function warnReplacementHeadroom(role: iam.Role, overflowCount: number): void {
 			`overflow policies, against a quota of ${quota} per role. A deploy that changes an overflow policy ` +
 			'attaches the new copy before it deletes the old one, so a deploy that replaces every overflow policy ' +
 			`would briefly need ${attached + overflowCount} and could fail in CloudFormation. Consolidate grants, ` +
-			'move some Building Blocks into a separate AWS CDK Blocks backend, or raise the quota ' +
+			'move some Building Blocks into a separate CDK Blocks backend, or raise the quota ' +
 			`("${MANAGED_POLICIES_PER_ROLE_QUOTA_CONTEXT_KEY}") if the account's IAM quota allows it.`,
 	);
 }

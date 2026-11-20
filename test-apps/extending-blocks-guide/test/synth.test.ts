@@ -32,7 +32,7 @@ describe('extending-blocks-guide synth', () => {
     template = JSON.parse(readFileSync(join(SYNTH_DIR, files[0]), 'utf-8'));
   });
 
-  test('contains the AWS CDK Blocks Lambda handler', () => {
+  test('contains the CDK Blocks Lambda handler', () => {
     const lambdas = Object.values(template.Resources).filter(
       (r: any) => r.Type === 'AWS::Lambda::Function'
     );

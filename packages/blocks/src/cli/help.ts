@@ -48,7 +48,7 @@ export function rootHelp(version: string): string {
 		if (group === 'Develop') {
 			lines.push(...table([
 				['docs:api', 'Read exact API signatures'],
-				['docs:search', 'Search the AWS CDK Blocks docs'],
+				['docs:search', 'Search the CDK Blocks docs'],
 			]));
 		}
 	}

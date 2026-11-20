@@ -261,7 +261,7 @@ describe('defaults.permissionsBoundary — BlocksBackend', () => {
 		for (const preset of [BlocksPresets.production, BlocksPresets.sandbox]) {
 			const app = new cdk.App();
 			const stack = new cdk.Stack(app, 'NoBoundaryStack');
-			await makeBackend(stack, 'AWS CDK Blocks', preset);
+			await makeBackend(stack, 'Blocks', preset);
 
 			const template = Template.fromStack(stack);
 			const bounded = rolesOf(template).filter(([, r]) => r.Properties?.PermissionsBoundary !== undefined);
@@ -285,21 +285,21 @@ describe('defaults.permissionsBoundary — BlocksBackend', () => {
 		);
 	});
 
-	test('wins over the CDK @aws-cdk/core:permissionsBoundary context for Blocks roles, and warns', async () => {
+	test('wins over the CDK @aws-cdk/core:permissionsBoundary context for CDK Blocks roles, and warns', async () => {
 		const app = new cdk.App({ context: { '@aws-cdk/core:permissionsBoundary': { name: 'platform-boundary' } } });
 		const stack = new cdk.Stack(app, 'ContextAndOptionStack');
 		new iam.Role(stack, 'CustomerOwnedRole', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
-		await makeBackend(stack, 'AWS CDK Blocks', withBoundary('app-boundary'));
+		await makeBackend(stack, 'Blocks', withBoundary('app-boundary'));
 
 		const template = Template.fromStack(stack);
 		// The context still governs the rest of the stack…
 		assertEveryRoleBounded(template, arnForName('platform-boundary'), (id) => id.startsWith('CustomerOwnedRole'));
-		// …while the explicit AWS CDK Blocks option governs every role AWS CDK Blocks created.
+		// …while the explicit CDK Blocks option governs only the backend’s roles.
 		assertEveryRoleBounded(template, arnForName('app-boundary'), (id) => !id.startsWith('CustomerOwnedRole'));
 		Annotations.fromStack(stack).hasWarning('/ContextAndOptionStack/Blocks', Match.stringLikeRegexp('context'));
 	});
 
-	test('the CDK context alone still bounds every AWS CDK Blocks role (the option is not required)', async () => {
+	test('the CDK context alone still bounds every CDK Blocks role (the option is not required)', async () => {
 		const app = new cdk.App({ context: { '@aws-cdk/core:permissionsBoundary': { name: 'platform-boundary' } } });
 		const stack = new cdk.Stack(app, 'ContextOnlyStack');
 		await makeBackend(stack, 'Blocks', BlocksPresets.production);

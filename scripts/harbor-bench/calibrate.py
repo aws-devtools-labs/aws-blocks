@@ -253,7 +253,7 @@ def main():
     parser.add_argument('--concurrency', type=int, default=2,
                         help='concurrent Harbor runs; each container takes 2 CPUs and 6 GiB (default 2)')
     parser.add_argument('--output', type=Path, required=True, help='new or empty calibration directory')
-    parser.add_argument('--revision', default='HEAD', help='AWS CDK Blocks revision to pack once (default HEAD)')
+    parser.add_argument('--revision', default='HEAD', help='CDK Blocks revision to pack once (default HEAD)')
     parser.add_argument('--registry', type=Path,
                         help='reuse an already packed dist-registry of --revision instead of building it')
     parser.add_argument('--profile', default=os.environ.get('HARBOR_AWS_PROFILE'),

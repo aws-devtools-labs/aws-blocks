@@ -90,7 +90,7 @@ export function anyRequirementNeedsVpc(scope: Construct): boolean {
  * Get the framework-owned VPC for a stack, creating one on first use.
  *
  * VPC is a **derived** resource: when a Building Block (or, later, a container
- * compute) requires one and the customer didn't bring their own, AWS CDK Blocks
+ * compute) requires one and the customer didn't bring their own, CDK Blocks
  * materializes a sensible default here, so the whole app shares a
  * single VPC. Keyed by a Symbol on the stack so it's a true singleton: the first
  * caller creates, everyone else reuses. Passing a customer VPC (`vpc:` prop)
@@ -122,14 +122,14 @@ export function getOrCreateVpc(scope: Construct): ec2.IVpc {
 }
 
 /**
- * Initialize VPC support on an AWS CDK Blocks scope (BlocksStack or BlocksBackend).
+ * Initialize VPC support on a CDK Blocks scope (BlocksStack or BlocksBackend).
  * Creates the security group, sets VPC context, and returns the VpcContext
  * that is used for Lambda placement configuration.
  *
  * Called during setupBlocksInfra when `vpc` prop is present.
  *
  * @param source - Where the VPC came from: `'provided'` (customer passed
- *   `defaults.vpc`) or `'derived'` (AWS CDK Blocks created it because a block required
+ *   `defaults.vpc`) or `'derived'` (CDK Blocks created it because a block required
  *   one). Stamped on the context so a stateful block can refuse to auto-join a
  *   derived VPC — see {@link VpcContext.source}. Defaults to `'provided'`, since
  *   the backend's own call sites only run on the customer-provided path.
@@ -258,7 +258,7 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 	}
 
 	if (options.provisionEndpoints === false) {
-		// The customer owns the endpoints, so AWS CDK Blocks can't admit BB-provisioned
+		// The customer owns the endpoints, so CDK Blocks can't admit BB-provisioned
 		// compute on them. Say which SGs need admitting rather than let the
 		// compute fail at runtime with a
 		// timeout. The SG is named by construct path, since
@@ -328,7 +328,7 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 	// Dedicated security group for the interface endpoints. Without an explicit
 	// SG, CDK creates a default that allows 443 from the entire VPC CIDR — on a
 	// bring-your-own VPC that exposes every endpoint to unrelated workloads. Scope
-	// ingress to the AWS CDK Blocks Lambda SG plus the BB-registered client SGs admitted
+	// ingress to the CDK Blocks Lambda SG plus the BB-registered client SGs admitted
 	// below, so only our compute can reach them. The description predates the
 	// client SGs and is kept verbatim, because changing it replaces the group, so
 	// it names fewer sources than the group actually admits: read the ingress
@@ -386,7 +386,7 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 			privateDnsEnabled: true,
 			securityGroups: [endpointSecurityGroup],
 			// `open: false` suppresses CDK's default "allow 443 from the whole VPC
-			// CIDR" ingress rule. Our dedicated SG already allows 443 from the AWS CDK Blocks
+			// CIDR" ingress rule. Our dedicated SG already allows 443 from the CDK Blocks
 			// Lambda SG and the registered client SGs; without this, CDK would
 			// re-widen access to the entire VPC — the exact broadening this dedicated
 			// SG exists to prevent.

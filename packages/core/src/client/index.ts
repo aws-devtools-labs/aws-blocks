@@ -85,7 +85,7 @@ async function resolveApiUrl(): Promise<string> {
         'Server Component is being statically prerendered during `next build` ' +
         'inside `cdk deploy`.\n' +
         'Fix: add `export const dynamic = \'force-dynamic\';` to any page ' +
-        'that calls the AWS CDK Blocks API so Next.js skips prerendering it.',
+        'that calls the CDK Blocks API so Next.js skips prerendering it.',
       );
     }
 
@@ -178,7 +178,7 @@ async function resolveApiUrl(): Promise<string> {
 // --- Middleware ---
 
 /**
- * An AWS CDK Blocks request object passed through middleware before being sent.
+ * A CDK Blocks request object passed through middleware before being sent.
  * Middleware can inspect or modify any of these properties before the
  * request is dispatched to the server.
  */

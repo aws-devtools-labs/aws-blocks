@@ -210,7 +210,7 @@ class BetaApi {
 }
 
 
-// --- AWS CDK Blocks Client ---
+// --- CDK Blocks Client ---
 
 class Blocks {
   late final AlphaApi alphaApi;

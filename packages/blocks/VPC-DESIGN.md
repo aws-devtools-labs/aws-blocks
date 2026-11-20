@@ -25,7 +25,7 @@ interface BlocksVpcOptions {
   network: ec2.IVpc;
 
   /**
-   * Subnet selection for Lambda and all AWS CDK Blocks-managed compute placement.
+   * Subnet selection for Lambda and all CDK Blocks-managed compute placement.
    * @default { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }
    */
   subnets?: ec2.SubnetSelection;
@@ -47,7 +47,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 
 const vpc = new ec2.Vpc(app, 'AppVpc', { maxAzs: 2, natGateways: 1 });
 
-// Simplest: pass VPC, AWS CDK Blocks provisions endpoints automatically
+// Simplest: pass VPC, CDK Blocks provisions endpoints automatically
 await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
   backendCDKPath: join(__dirname, 'index.ts'),
@@ -98,7 +98,7 @@ interface VpcRequirements {
    *  build on a mismatch. */
   requiresEgress?: boolean;
   /** Security groups of compute the BB provisions itself that must reach the
-   *  AWS CDK Blocks-managed interface endpoints; the framework admits each on the
+   *  CDK Blocks-managed interface endpoints; the framework admits each on the
    *  endpoint security group (443). Registered after the BB builds them. */
   endpointClientSecurityGroups?: ec2.ISecurityGroup[];
   /** Constructs that must not be created before those security groups can reach

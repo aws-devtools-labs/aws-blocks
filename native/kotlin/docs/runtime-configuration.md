@@ -164,6 +164,6 @@ gone.
 ## Upgrading from a release that wrote to `~/.blocks` directly
 
 Versions of this runtime that predate `applicationId` wrote the cookie jar to `~/.blocks/cookies`,
-with no per-application component, so every AWS CDK Blocks application run by one OS user shared it. Those
+with no per-application component, so every CDK Blocks application run by one OS user shared it. Those
 entries are not read and not migrated, so a signed-in user signs in once more after upgrading. The
 old `~/.blocks/cookies` directory is not removed; delete it by hand if you want it gone.

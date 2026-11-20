@@ -594,7 +594,7 @@ export function readBody(req: http.IncomingMessage, limit: number): Promise<Buff
  * reachable at, and the origin the client called, which `ctx.request.url` reports.
  * A loopback forwarded host contributes only its host: its own query, fragment or
  * userinfo (`localhost:3000?a=b#c`) never rides along, as in the Lambda handler.
- * Behind an AWS CDK Blocks CloudFront front door the client called the door's host (a
+ * Behind a CDK Blocks CloudFront front door the client called the door's host (a
  * trusted `x-blocks-public-host`), while the base URL stays the one the door
  * stamped, as on Lambda.
  */
@@ -669,7 +669,7 @@ export function buildRequestUrl(req: http.IncomingMessage, publicOrigin?: string
  * The externally reachable base URL of a request (`getRequestBaseUrl()`): the
  * origin the front door stamped plus the stamped API Gateway stage
  * (`https://<host>/prod`), with no trailing slash, as the Lambda handler reports
- * it for the same request. Behind an AWS CDK Blocks CloudFront front door it stays that
+ * it for the same request. Behind a CDK Blocks CloudFront front door it stays that
  * stamped origin, while {@link buildRequestUrl} reports the host the client called.
  *
  * @internal Exported for testing only.

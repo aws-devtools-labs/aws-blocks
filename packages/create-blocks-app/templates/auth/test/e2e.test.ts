@@ -41,7 +41,7 @@ function skipUnlessLocal(t: { skip(message?: string): void }): boolean {
   return true;
 }
 
-// Wait for the AWS CDK Blocks server to be ready without depending on the sample API.
+// Wait for the CDK Blocks server to be ready without depending on the sample API.
 async function waitForServer() {
   for (let i = 0; i < 60; i++) {
     try {

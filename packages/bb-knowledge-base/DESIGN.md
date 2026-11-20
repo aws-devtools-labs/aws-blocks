@@ -42,7 +42,7 @@ Design document for KnowledgeBase. For usage, see [README.md](./README.md).
 
 **Decision:** KnowledgeBase exposes only `retrieve()` (vector search), not `retrieveAndGenerate()` (search + LLM answer).
 
-**Rationale:** AWS CDK Blocks already has a separate Agent Building Block that handles RAG orchestration (retrieve + generate). Baking generation into KnowledgeBase would create overlapping responsibilities. `retrieve()` is the primitive — it returns ranked chunks that the Agent or application code can feed into any LLM. This keeps KnowledgeBase single-purpose and composable.
+**Rationale:** CDK Blocks already has a separate Agent Building Block that handles RAG orchestration (retrieve + generate). Baking generation into KnowledgeBase would create overlapping responsibilities. `retrieve()` is the primitive — it returns ranked chunks that the Agent or application code can feed into any LLM. This keeps KnowledgeBase single-purpose and composable.
 
 ### D-KB-5a: `asAgentTool()` returns a plain tool shape, and its filter is required
 

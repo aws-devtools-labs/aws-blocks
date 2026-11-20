@@ -30,7 +30,7 @@ const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 // The readiness config.json carries which one we hit.
 let isLocalMock = false;
 
-// Wait for the AWS CDK Blocks server to be ready without depending on the sample API.
+// Wait for the CDK Blocks server to be ready without depending on the sample API.
 async function waitForServer() {
   for (let i = 0; i < 60; i++) {
     try {

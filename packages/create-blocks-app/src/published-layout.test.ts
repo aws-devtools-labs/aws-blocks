@@ -109,7 +109,7 @@ describe('create-blocks-app version stamping from the published package', () => 
     }
   });
 
-  it('stamps aws-cdk-blocks when adding AWS CDK Blocks to an existing project', () => {
+  it('stamps aws-cdk-blocks when adding CDK Blocks to an existing project', () => {
     const project = join(root, 'existing');
     mkdirSync(project, { recursive: true });
     writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'existing', version: '1.0.0' }));
@@ -134,7 +134,7 @@ describe('create-blocks-app version stamping from the published package', () => 
     assert.strictEqual(readManifest(join(project, 'package.json')).dependencies?.['aws-cdk-blocks'], '~0.1.0');
   });
 
-  it('stamps the root and the cdk-blocks/ workspace when adding AWS CDK Blocks to an Amplify Gen 2 project', () => {
+  it('stamps the root and the cdk-blocks/ workspace when adding CDK Blocks to an Amplify Gen 2 project', () => {
     const project = join(root, 'amplify-app');
     mkdirSync(join(project, 'amplify'), { recursive: true });
     writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'amplify-app', version: '1.0.0' }));

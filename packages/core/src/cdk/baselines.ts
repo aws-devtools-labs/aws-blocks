@@ -167,7 +167,7 @@ function findRoot(scope: IConstruct): BaselineRoot | undefined {
 
 /**
  * `<dirname(backendHandlerPath)>/baselines/<stack>` — where the baselines of
- * one AWS CDK Blocks stack/backend live.
+ * one CDK Blocks stack/backend live.
  *
  * @param options.backendHandlerPath - The stack's `backendHandlerPath`. Resolved
  *   against the working directory when relative (it is absolute in every template).

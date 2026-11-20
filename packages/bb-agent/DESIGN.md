@@ -130,7 +130,7 @@ The CDK class provisions:
 - **KVStore:** `${id}-convos` / `${id}-messages` — conversation metadata + history (only when `inferenceOnly: false`)
 - **Realtime:** `${id}-rt` — streaming namespace `chunks`
 - **AgentCore Runtime** (`${id}-runtime`, via `AgentCoreRuntime`) — the co-bundled backend + `serve()`
-  harness. It runs **as the shared AWS CDK Blocks execution role** (`Scope.executionRole` / `BlocksRole`) —
+  harness. It runs **as the shared CDK Blocks execution role** (`Scope.executionRole` / `BlocksRole`) —
   the same role the Lambda handler runs as — so it **inherits every Building Block's grants**, including
   **Realtime publish** (`execute-api:ManageConnections` + the connections table, granted to the handler
   by the `${id}-rt` Realtime child), other BBs an agent's *tools* touch (KVStore, tables, etc.), and
@@ -157,7 +157,7 @@ from the shared execution role.
 
 ## Model Providers
 
-All providers are Strands model implementations, mapped from AWS CDK Blocks' `ModelConfig` via `model-factory.ts`:
+All providers are Strands model implementations, mapped from CDK Blocks' `ModelConfig` via `model-factory.ts`:
 
 | Provider | Strands Class | Use Case |
 |----------|--------------|----------|

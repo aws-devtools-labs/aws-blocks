@@ -7,7 +7,7 @@
 #
 # Recreates test-apps/amplify-gen2 from scratch:
 # 1. Scaffolds a fresh Amplify Gen 2 project
-# 2. Runs create-blocks-app to integrate AWS CDK Blocks
+# 2. Runs create-blocks-app to integrate CDK Blocks
 # 3. Restores the hand-maintained frontend + Playwright tests from git
 #
 # Usage (from repo root):

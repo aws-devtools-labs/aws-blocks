@@ -4,7 +4,7 @@
 /**
  * AWS runtime entry for `@aws-cdk-blocks/bb-secret/internal`.
  *
- * This subpath is for AWS CDK Blocks' own Building Blocks only. It is not part of
+ * This subpath is for CDK Blocks' own Building Blocks only. It is not part of
  * the public API and can change in any release.
  *
  * @internal

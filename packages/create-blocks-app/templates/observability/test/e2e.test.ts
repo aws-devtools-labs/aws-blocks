@@ -41,7 +41,7 @@ function collectLines(stream: NodeJS.ReadableStream | null) {
   });
 }
 
-// Wait for the AWS CDK Blocks server to be ready without depending on the sample API.
+// Wait for the CDK Blocks server to be ready without depending on the sample API.
 async function waitForServer() {
   for (let i = 0; i < 30; i++) {
     try {

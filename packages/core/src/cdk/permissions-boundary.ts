@@ -91,11 +91,11 @@ export function resolvePermissionsBoundary(scope: Construct): iam.IManagedPolicy
 
 /**
  * Apply the root's permissions boundary (see {@link resolvePermissionsBoundary})
- * to every IAM role AWS CDK Blocks creates for it, through the shared role visitor
+ * to every IAM role CDK Blocks creates for it, through the shared role visitor
  * ({@link forEachBlocksRole}). No-op when unset.
  *
  * Warns when CDK's `@aws-cdk/core:permissionsBoundary` context is also set: for
- * AWS CDK Blocks roles this option wins (its override runs after the context's).
+ * CDK Blocks roles this option wins (its override runs after the context's).
  *
  * @internal
  */

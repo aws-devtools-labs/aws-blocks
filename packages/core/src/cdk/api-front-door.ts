@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The `cloudfront` tier: an AWS CDK Blocks-managed CloudFront distribution in front of the
+ * The `cloudfront` tier: a CDK Blocks-managed CloudFront distribution in front of the
  * API.
  *
  * By default (`apigateway`) clients call the stack's shared API Gateway REST API
@@ -85,7 +85,7 @@ export const API_BEHAVIOR_OPTIONS = {
 } satisfies AddBehaviorOptions;
 
 /**
- * Viewer-request function on an AWS CDK Blocks CloudFront front door's API behaviors that
+ * Viewer-request function on a CDK Blocks CloudFront front door's API behaviors that
  * reach the shared gateway: stamp the host the viewer called (the distribution's
  * domain or a custom domain) as {@link PUBLIC_HOST_HEADER}, overwriting any client
  * copy. CloudFront forwards the gateway's own `Host` (see
@@ -197,7 +197,7 @@ export function httpOriginFromEndpoint(gatewayUrl: string, customHeaders?: Recor
 /**
  * The header a claiming CloudFront `Hosting` distribution adds to its API origin
  * so the backend's `apiWaf` rate rule can tell its (edge-IP) requests from
- * direct callers. `undefined` unless the backend has an AWS CDK Blocks-managed web ACL
+ * direct callers. `undefined` unless the backend has a CDK Blocks-managed web ACL
  * (a caller-supplied `webAclArn` is attached as-is). Calling it records that the
  * claiming distribution sends the header.
  *

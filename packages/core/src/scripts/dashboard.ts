@@ -25,7 +25,7 @@ export type DashboardCommand = 'serve' | 'doctor';
 
 export interface DashboardOptions {
 	/**
-	 * Root of the AWS CDK Blocks app (where package.json and .cdk-blocks/ live). When
+	 * Root of the CDK Blocks app (where package.json and .cdk-blocks/ live). When
 	 * omitted the project is discovered from the working directory (or from
 	 * `--project`). An explicit value here wins over both and is used verbatim.
 	 */
@@ -285,7 +285,7 @@ async function installAdminUi(projectRoot: string, specifier: string): Promise<s
 }
 
 /**
- * Decides which AWS CDK Blocks app the command acts on.
+ * Decides which CDK Blocks app the command acts on.
  *
  * An explicit `options.projectRoot` is a programmatic caller (the template's
  * own `scripts/dashboard.ts` wrapper knows exactly where it lives), so it is

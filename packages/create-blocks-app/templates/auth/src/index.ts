@@ -37,7 +37,7 @@ function clear(el: HTMLElement) {
 
 // Render a themed status line (success/error/idle) into `el`, driven by the
 // shared `StatusMessage` primitive — themed `--bb-*` tokens + a polite ARIA live
-// region, consistent with the AWS CDK Blocks UI components.
+// region, consistent with the CDK Blocks UI components.
 //
 // For a status-only container (pre-mounted in bindUi), the handle is still
 // mounted in `el`, so set() mutates the live region in place (e.g. repeated

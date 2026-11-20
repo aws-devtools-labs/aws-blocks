@@ -349,7 +349,7 @@ A read or write that fails never throws into your app: the session keeps working
 
 Outbound requests carry an `aws-blocks-dart` token so AWS telemetry can attribute traffic.
 
-RPC calls send it as `x-blocks-user-agent` on every platform. The header is not CORS-safelisted, so a browser preflights the call; the AWS CDK Blocks server has allowed it since `@aws-blocks/core` 0.6.0 (and every `@aws-cdk-blocks/core`).
+RPC calls send it as `x-blocks-user-agent` on every platform. The header is not CORS-safelisted, so a browser preflights the call; the CDK Blocks server has allowed it since `@aws-blocks/core` 0.6.0 (and every `@aws-cdk-blocks/core`).
 
 On web, presigned uploads, presigned downloads and the WebSocket upgrade do not carry the token. Elsewhere they send it as `User-Agent`, a header a browser ignores on a request and does not allow on the upgrade.
 

@@ -529,7 +529,7 @@ function renderLoginPage(providerId: string, users: StubUser[], req: AuthorizeRe
 		'<style>body{font-family:system-ui,sans-serif;max-width:400px;margin:4rem auto;padding:0 1rem;color:#1a1a1a}' +
 		'h1{font-size:1.25rem}button{padding:8px 16px;cursor:pointer;border:0;border-radius:6px;background:#1a1a1a;color:#fff}</style>' +
 		'</head><body>' +
-		'<h1>AWS CDK Blocks stub IdP: sign in</h1>' +
+		'<h1>CDK Blocks stub IdP: sign in</h1>' +
 		`<p style="color:#666;font-size:14px">Local sign-in for <strong>${escapeHtml(providerId)}</strong>. No real credentials.</p>` +
 		`<form method="POST" action="${escapeHtml(action)}">` +
 		options +

@@ -173,7 +173,7 @@ The frontend imports the backend (`import { api } from 'cdk-blocks'`), so its `t
 
 Skip this for a Next.js app: `next build` ignores project references when it type-checks, so it checks `cdk-blocks/` with the app's `tsconfig.json` either way, and that needs Node types (a `tsconfig.json` that sets no `types` has them). Skip it for a backend-only app (`backend`, `api-only`, `sql`, `cron`, `observability`, `observability`) too: all its code runs on Node.
 
-### An app from an AWS CDK Blocks Vite template
+### An app from a CDK Blocks Vite template
 
 1. Copy the TypeScript files of a fresh scaffold of the same template (pass its name to `--template`), made in a folder outside your app (on Windows, pick another folder than `/tmp`):
 
@@ -197,7 +197,7 @@ Skip this for a Next.js app: `next build` ignores project references when it typ
 
 ### Any other project
 
-1. Give the backend its own project: copy [the default template's `cdk-blocks/tsconfig.json`](../../packages/create-blocks-app/templates/default/cdk-blocks/tsconfig.json) into `cdk-blocks/`. Adding AWS CDK Blocks to a project with `create-blocks-app` already wrote it. Make sure `@types/node` is in your `devDependencies`.
+1. Give the backend its own project: copy [the default template's `cdk-blocks/tsconfig.json`](../../packages/create-blocks-app/templates/default/cdk-blocks/tsconfig.json) into `cdk-blocks/`. Adding CDK Blocks to a project with `create-blocks-app` already wrote it. Make sure `@types/node` is in your `devDependencies`.
 
 2. In the `tsconfig` that compiles the code importing `cdk-blocks` (`tsconfig.app.json` in a create-vite app, otherwise `tsconfig.json`), add:
 

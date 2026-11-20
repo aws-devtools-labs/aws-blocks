@@ -25,8 +25,8 @@ let template: any;
  * CDK synthesizes its own helper Lambdas for custom resources — the S3
  * auto-delete provider and the BucketDeployment runtime, both pulled in by the
  * config registry's S3 bucket (`autoDeleteObjects` under the sandbox posture).
- * They are CDK-managed plumbing, not AWS CDK Blocks compute, so exclude them when
- * counting how many computes AWS CDK Blocks provisions. Their construct path carries a
+ * They are CDK-managed plumbing, not CDK Blocks compute, so exclude them when
+ * counting how many computes CDK Blocks provisions. Their construct path carries a
  * `Custom::` segment; a real compute's does not
  * (`.../BlocksApi/DefaultCompute/Handler/Resource`).
  */
@@ -46,7 +46,7 @@ describe('extending-blocks-guide-blocksbackend synth', () => {
     template = JSON.parse(readFileSync(join(SYNTH_DIR, files[0]), 'utf-8'));
   });
 
-  test('exactly one AWS CDK Blocks compute Lambda (the BlocksBackend handler)', () => {
+  test('exactly one CDK Blocks compute Lambda (the BlocksBackend handler)', () => {
     const lambdas = blocksComputeLambdas();
     assert.strictEqual(
       lambdas.length,

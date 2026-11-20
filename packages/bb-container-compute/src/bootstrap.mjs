@@ -74,7 +74,7 @@ async function getTaskCredentials() {
 	const full = process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI;
 	if (!rel && !full) {
 		throw new Error(
-			'[AWS CDK Blocks bootstrap] no ECS container credentials endpoint — AWS_CONTAINER_CREDENTIALS_RELATIVE_URI/FULL_URI unset. ' +
+			'no ECS container credentials endpoint — AWS_CONTAINER_CREDENTIALS_RELATIVE_URI/FULL_URI unset. ' +
 				'This script expects to run as an ECS task with a task role.',
 		);
 	}
@@ -180,7 +180,7 @@ async function main() {
 	];
 	if (!bucket || !region || files.some((f) => !f.key)) {
 		throw new Error(
-			`[AWS CDK Blocks bootstrap] missing config: BLOCKS_CODE_BUCKET=${bucket} AWS_REGION=${region} ` +
+			`missing config: BLOCKS_CODE_BUCKET=${bucket} AWS_REGION=${region} ` +
 				`MAIN_KEY=${files[0].key} WORKER_KEY=${files[1].key} PKG_KEY=${files[2].key}`,
 		);
 	}

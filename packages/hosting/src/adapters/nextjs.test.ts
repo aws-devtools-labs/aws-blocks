@@ -3001,31 +3001,14 @@ void describe('pinNextBuildId', () => {
     assert.ok(pinNextBuildId(tmpDir, 'fixed'));
     // The build was killed: the restore never ran.
     const wrapper = fs.readFileSync(configFile, 'utf-8');
-    assert.match(wrapper, /^\/\/ AWS CDK Blocks: deterministic build ID/m);
-    assert.ok(wrapper.includes(`// AWS CDK Blocks: pinned by pid ${process.pid}.`));
+    assert.ok(wrapper.includes('// AWS Blocks: deterministic build ID (restored after the build).\n'));
+    assert.ok(wrapper.includes(`// AWS Blocks: pinned by pid ${process.pid}.\n`));
     assert.strictEqual(restorePinnedNextConfig(tmpDir), true);
     assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), original);
     assert.ok(!fs.existsSync(path.join(tmpDir, 'next.config.blocks-base.ts')));
     // Nothing to restore the second time; a user's own config is never touched.
     assert.strictEqual(restorePinnedNextConfig(tmpDir), false);
     assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), original);
-  });
-
-  void it('recovers a legacy wrapper without disturbing a live legacy build', () => {
-    const configFile = path.join(tmpDir, 'next.config.ts');
-    const baseFile = path.join(tmpDir, 'next.config.blocks-base.ts');
-    const original = 'export default {};\n';
-    const marker = '// AWS Blocks: deterministic build ID (restored after the build).\n';
-    const liveWrapper = `${marker}// AWS Blocks: pinned by pid ${process.ppid}.\n`;
-    fs.writeFileSync(baseFile, original);
-    fs.writeFileSync(configFile, liveWrapper);
-    assert.strictEqual(restorePinnedNextConfig(tmpDir), false);
-    assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), liveWrapper);
-    // Early wrappers carried the marker but no owner line.
-    fs.writeFileSync(configFile, marker);
-    assert.strictEqual(restorePinnedNextConfig(tmpDir), true);
-    assert.strictEqual(fs.readFileSync(configFile, 'utf-8'), original);
-    assert.ok(!fs.existsSync(baseFile));
   });
 
   void it('an overlapping build: a running build keeps its wrapper, and a finished one never deletes the restored config', () => {

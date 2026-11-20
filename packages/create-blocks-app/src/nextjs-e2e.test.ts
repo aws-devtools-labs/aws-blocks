@@ -172,11 +172,11 @@ describe('Next.js template E2E assertions', () => {
   });
 
   const scenarios = [
-    { name: 'starter page with config', html: 'AWS CDK Blocks + Next.js', configStatus: 200, exitCode: 0 },
+    { name: 'starter page with config', html: 'CDK Blocks + Next.js', configStatus: 200, exitCode: 0 },
     { name: 'customized page with config', html: 'My application', configStatus: 200, exitCode: 0 },
     { name: 'customized page with a trailing slash in TEST_URL', html: 'My application', configStatus: 200, exitCode: 0, trailingSlash: true },
     { name: 'customized page without config', html: 'My application', configStatus: 404, exitCode: 1 },
-    { name: 'starter page with failing config', html: 'AWS CDK Blocks + Next.js', configStatus: 500, exitCode: 1 },
+    { name: 'starter page with failing config', html: 'CDK Blocks + Next.js', configStatus: 500, exitCode: 1 },
     { name: 'home page fails after readiness', html: 'My application', configStatus: 200, exitCode: 1, homeFails: true },
     { name: 'sample API returns the wrong message', html: 'My application', configStatus: 200, exitCode: 1, message: 'Wrong greeting' },
     { name: 'sample API returns an invalid timestamp', html: 'My application', configStatus: 200, exitCode: 1, timestamp: 'not a timestamp' },

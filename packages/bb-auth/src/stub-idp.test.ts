@@ -83,7 +83,8 @@ async function continueThroughPicker(b: TestBrowser, start: Response, sub: strin
 	const picker = await b.fetch(authorize);
 	assert.strictEqual(picker.status, 200);
 	const html = await picker.text();
-	assert.match(html, /AWS CDK Blocks stub IdP/);
+	assert.match(html, /<title>Sign in — AWS CDK Blocks stub IdP<\/title>/);
+	assert.match(html, /<h1>CDK Blocks stub IdP: sign in<\/h1>/);
 	assert.match(html, /Alice/);
 	assert.match(html, /Bob/);
 

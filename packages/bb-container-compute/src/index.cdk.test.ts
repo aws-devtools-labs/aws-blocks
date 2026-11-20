@@ -334,7 +334,7 @@ describe('ContainerCompute — default image is pinned by digest', () => {
 		assert.match(DEFAULT_CONTAINER_IMAGE, DIGEST_PINNED_DEFAULT);
 	});
 
-	test('a custom digest-pinned image is used verbatim, not re-pinned by AWS CDK Blocks', async () => {
+	test('a custom digest-pinned image is used verbatim, not re-pinned by CDK Blocks', async () => {
 		// The tagged case is covered by 'a custom image is used verbatim' above.
 		const pinned = `public.ecr.aws/example/custom-node@sha256:${'a'.repeat(64)}`;
 		assert.deepStrictEqual(await synthImages('ContainerCustomDigestStack', pinned), [pinned]);

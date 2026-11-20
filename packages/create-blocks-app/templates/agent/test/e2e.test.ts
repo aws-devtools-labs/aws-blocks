@@ -50,7 +50,7 @@ async function signUpAndSignIn() {
   return await authApi.setAuthState({ action: 'autoSignIn', username: creds.username });
 }
 
-// Wait for the AWS CDK Blocks server to be ready without depending on the sample API,
+// Wait for the CDK Blocks server to be ready without depending on the sample API,
 // and record which runtime it reports.
 async function waitForServer() {
   for (let i = 0; i < 60; i++) {

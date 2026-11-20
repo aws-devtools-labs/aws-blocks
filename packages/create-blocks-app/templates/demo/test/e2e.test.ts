@@ -30,7 +30,7 @@ const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json
 // the local auth block just issued for `name` (it finds the block's .cdk-blocks/local/data/
 // files itself). On AWS, Cognito emails it instead.
 
-// Wait for the AWS CDK Blocks server to be ready without depending on the sample API.
+// Wait for the CDK Blocks server to be ready without depending on the sample API.
 async function waitForServer() {
   for (let i = 0; i < 60; i++) {
     try {
