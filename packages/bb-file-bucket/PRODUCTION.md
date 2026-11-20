@@ -59,6 +59,6 @@ Object Lock can be added to a bucket that is already deployed, but S3 can't turn
 - **Billing:** Per-request plus storage — no provisioned throughput
 - **Latency:** First-byte latency typically 100–200 ms
 - **Throughput:** Scales automatically, 5,500 GET and 3,500 PUT requests/second per prefix
-- **Object size limit:** 5 TB per object
+- **Upload size:** FileBucket uses a single `PutObject` request (up to [5 GB on S3](https://docs.aws.amazon.com/AmazonS3/latest/userguide/upload-objects.html)). For larger objects, use S3's multipart upload API directly.
 - **Cost:** ~$0.005 per 1,000 PUT requests, ~$0.0004 per 1,000 GET requests, ~$0.023/GB/month storage
 - **Durability:** 99.999999999% (11 nines) across 3+ AZs

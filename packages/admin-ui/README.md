@@ -1,6 +1,6 @@
 # @aws-cdk-blocks/admin-ui
 
-The Blocks Admin UI — a local dashboard for Blocks applications covering deployments, logs, resources, environments, and cost.
+Use the CDK Blocks dashboard to inspect resources, deployments, logs, and environments in your AWS CDK Blocks application.
 
 ## How it runs
 

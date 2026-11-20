@@ -19,7 +19,7 @@ export function AppHeader() {
 
 	return (
 		<header className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-panel px-4">
-			<span className="text-[15px] font-semibold tracking-tight">Blocks</span>
+			<span className="text-[15px] font-semibold tracking-tight">CDK Blocks</span>
 			<span className="text-fg-dim">/</span>
 			<span className="font-mono text-[13px] text-fg-soft">{meta?.projectName ?? '…'}</span>
 			<span className="text-fg-dim">/</span>

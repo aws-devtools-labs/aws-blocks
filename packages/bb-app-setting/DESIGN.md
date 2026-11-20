@@ -73,7 +73,7 @@ The 4 KB (4096 bytes) size limit applies to the **JSON-encoded** value of non-se
 
 ## Mock Implementation
 
-- Data stored in the shared `.cdk-blocks/local/data/settings.json`, keyed by `scope.fullId`.
+- Values share `.cdk-blocks/local/data/settings.json`, keyed by the setting's `fullId`.
 - Data persists across dev server restarts. Customers can wipe with `rm -rf .cdk-blocks/local/data .bb-data`.
 - `get()` returns the stored value from disk, or the initial `value` from constructor if no file exists.
 - `put()` writes the value to disk immediately.
