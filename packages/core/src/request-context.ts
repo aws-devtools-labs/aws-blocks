@@ -12,7 +12,7 @@ import { PUBLIC_HOSTS_CONFIG_KEY } from './constants.js';
  * AsyncLocalStorage that carries the inbound HTTP request cookies through
  * the call stack. SSR frameworks (Next.js Server Components) can read this
  * via `requestCookies.getStore()` to forward auth cookies when calling the
- * Blocks API server-side.
+ * CDK Blocks API server-side.
  *
  * Also registered on `globalThis.__BLOCKS_REQUEST_COOKIES_STORE__` so the
  * client bundle can access it without importing node:async_hooks.

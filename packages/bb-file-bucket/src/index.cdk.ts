@@ -63,7 +63,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 
 		if (options?.bucket) {
 			// `fromExisting`: don't provision; bind to the pre-existing bucket and
-			// grant read/write to the Blocks runtime Lambda. The wrapped bucket owns
+			// grant read/write to the CDK Blocks runtime Lambda. The wrapped bucket owns
 			// its own encryption and Object Lock, so say so when either was set.
 			const ignored = (['encryption', 'objectLock'] as const).filter(k => options[k] !== undefined);
 			if (ignored.length > 0) {

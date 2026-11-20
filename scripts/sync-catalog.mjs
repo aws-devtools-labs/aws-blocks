@@ -102,7 +102,7 @@ function buildCatalog(pkgs) {
 
 function renderCatalogTable(entries) {
   const rows = entries.map(
-    (e) => `| ${e.pkg} | ${escapeCell(e.blurb) || '—'} | ${escapeCell(e.keywords) || '—'} |`,
+    (e) => `| ${e.pkg} | ${escapeCell(e.blurb.replaceAll('AWS CDK Blocks', 'CDK Blocks')) || '—'} | ${escapeCell(e.keywords) || '—'} |`,
   );
   return ['| Block | What it does | Keywords |', '|-------|--------------|----------|', ...rows].join('\n');
 }

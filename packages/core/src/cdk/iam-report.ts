@@ -31,7 +31,7 @@ interface ReportStatement {
 	blocks: string[];
 }
 
-/** One IAM role AWS Blocks created for the root, with its boundary and tags as rendered for the template. */
+/** One IAM role CDK Blocks created for the root, with its boundary and tags as rendered for the template. */
 interface ReportRole {
 	logicalId: string;
 	/** Cloud-assembly artifact id of the stack the role is in (helper stacks, e.g. us-east-1, appear separately). */
@@ -54,7 +54,7 @@ interface ReportRole {
  * that alters this method fails CI rather than skewing the report.
  *
  * At synth, the coupling is guarded too: if `_toCloudFormation` is missing, throws,
- * or renders no `Resources` entry, this throws an AWS Blocks error naming the role
+ * or renders no `Resources` entry, this throws a CDK Blocks error naming the role
  * path, the internal method, and the installed aws-cdk-lib version (with the
  * original error, if any, as a non-enumerable `cause`) — so synth fails loudly
  * instead of writing a report with missing boundaries or tags.
@@ -83,9 +83,9 @@ function renderedProperties(role: cdk.CfnResource): Record<string, unknown> {
 function cdkCouplingError(role: cdk.CfnResource, what: string, original?: unknown): Error {
 	const version = cdkVersion();
 	return new Error(
-		`AWS Blocks IAM report: could not render ${role.node.path} through aws-cdk-lib's internal ` +
+		`AWS CDK Blocks IAM report: could not render ${role.node.path} through aws-cdk-lib's internal ` +
 			`CfnElement._toCloudFormation() (${what}) — this aws-cdk-lib version${version ? ` (${version})` : ''} ` +
-			'changed it. Pin aws-cdk-lib to a supported version or report this to AWS Blocks.',
+			'changed it. Pin aws-cdk-lib to a supported version or report this to CDK Blocks.',
 		original === undefined ? undefined : { cause: original },
 	);
 }
@@ -106,7 +106,7 @@ export interface OwningBlock {
 	path: string;
 }
 
-/** The nearest construct between `node` and `root` (exclusive) that is a Blocks Scope (has a string `fullId`). */
+/** The nearest construct between `node` and `root` (exclusive) that is a CDK Blocks Scope (has a string `fullId`). */
 function owningBlock(node: IConstruct, root: Construct): OwningBlock | undefined {
 	for (let current: IConstruct | undefined = node; current && current !== root; current = current.node.scope) {
 		const fullId = (current as { fullId?: unknown }).fullId;
@@ -204,7 +204,7 @@ export function attributeRoleStatements(root: Construct, role: iam.Role): Attrib
  * Build the composed-policy report for `root`'s shared execution role: every
  * statement on every inline/managed policy attached to it, the managed policy
  * ARNs and the boundary as the template carries them, and an inventory of every
- * role AWS Blocks created for `root` (each with its boundary and tags as
+ * role CDK Blocks created for `root` (each with its boundary and tags as
  * rendered), so a pipeline can verify both from this one file. Values are CloudFormation-resolved (`Ref` / `Fn::GetAtt` stay
  * as objects) and sorted, so the output is stable across synths.
  *
@@ -235,7 +235,7 @@ function buildReport(root: Construct, role: iam.Role) {
 		});
 	}
 
-	// Every role AWS Blocks created for this root — the same set the permissions
+	// Every role CDK Blocks created for this root — the same set the permissions
 	// boundary is applied to (blocks-roles.ts), including other stacks' roles.
 	const roles: ReportRole[] = finalizeBlocksRoles(root).map((r) => {
 		const props = renderedProperties(r);
@@ -267,7 +267,7 @@ function buildReport(root: Construct, role: iam.Role) {
 	return {
 		schemaVersion: 1,
 		description:
-			'Composed IAM permissions of the AWS Blocks shared execution role, which every Blocks compute ' +
+			'Composed IAM permissions of the AWS CDK Blocks shared execution role, which every CDK Blocks compute ' +
 			'(API handler, raw routes, queue/cron/WebSocket handlers, agent runtime) runs as. Generated at synth.',
 		root: root.node.path,
 		executionRole: {
@@ -284,7 +284,7 @@ function buildReport(root: Construct, role: iam.Role) {
 /** The error an app's synth fails with, listing every violation (unless `reportOnly`). */
 function appViolationsError(file: string, violations: readonly AppViolation[]): Error {
 	return new Error(
-		`[Blocks] defaults.appIdentity: ${violations.length} app-isolation violation(s) (full list in ${file}; set reportOnly: true to only report them):\n` +
+		`[AWS CDK Blocks] defaults.appIdentity: ${violations.length} app-isolation violation(s) (full list in ${file}; set reportOnly: true to only report them):\n` +
 			violations.map((v) => `  • [${v.rule}] ${v.message}`).join('\n'),
 	);
 }
@@ -312,14 +312,14 @@ export function attachIamReport(root: Construct, role: iam.Role, fileStem: strin
 			if (violations && violations.length > 0) {
 				if (!report.app?.reportOnly) throw appViolationsError(file, violations);
 				process.stderr.write(
-					`[Blocks] ${violations.length} app-isolation violation(s) for app "${report.app?.id}" — see ${file}\n`,
+					`[AWS CDK Blocks] ${violations.length} app-isolation violation(s) for app "${report.app?.id}" — see ${file}\n`,
 				);
 			}
 			// One line when synthesized by the CDK CLI (which sets CDK_OUTDIR); quiet in unit tests.
 			if (process.env.CDK_OUTDIR) {
 				const shown = relative(process.cwd(), file);
 				process.stderr.write(
-					`[Blocks] IAM report (${report.executionRole.statements.length} statements on the shared execution role): ${shown.startsWith('..') ? file : shown}\n`,
+					`[AWS CDK Blocks] IAM report (${report.executionRole.statements.length} statements on the shared execution role): ${shown.startsWith('..') ? file : shown}\n`,
 				);
 			}
 		},

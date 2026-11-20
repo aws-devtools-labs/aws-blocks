@@ -6,7 +6,7 @@ Design document for KVStore. For usage, see [README.md](./README.md).
 **Type:** Primitive (new infrastructure)
 **AWS Service:** DynamoDB (one table per store: a partition key, an optional sort key, optional global secondary indexes)
 
-KVStore is the one NoSQL block of AWS Blocks. It is one package, one class, and one error constant. A store has three forms that differ only in their options. The forms share one table layout, so a store moves between the first two forms with no new table. The block replaces the earlier `KVStore` and the former `DistributedTable` block. The [design decisions](#design-decisions) record what came from each.
+KVStore is the one NoSQL block of AWS CDK Blocks. It is one package, one class, and one error constant. A store has three forms that differ only in their options. The forms share one table layout, so a store moves between the first two forms with no new table. The block replaces the earlier `KVStore` and the former `DistributedTable` block. The [design decisions](#design-decisions) record what came from each.
 
 | Form | Options | Key of the store | Table key schema |
 |---|---|---|---|
@@ -187,7 +187,7 @@ A store fixes its key when the table is created. A changed `key` option on a dep
 
 ### Durability and encryption
 
-Point-in-Time Recovery comes from the option of the block first, and then from the stack-wide `defaults.pointInTimeRecovery`. `BlocksPresets` turns it on under `production` and off under `sandbox`. Server-side encryption does **not** come from a preset. `BlocksDefaults` has no encryption field, so SSE defaults to the AWS-managed `aws/dynamodb` key under every preset, and only the `encryption` option of a store changes it. `resolveDynamoDbProtection` in `@aws-cdk-blocks/core/cdk/internal` resolves both, for every DynamoDB table that AWS Blocks provisions.
+Point-in-Time Recovery comes from the option of the block first, and then from the stack-wide `defaults.pointInTimeRecovery`. `BlocksPresets` turns it on under `production` and off under `sandbox`. Server-side encryption does **not** come from a preset. `BlocksDefaults` has no encryption field, so SSE defaults to the AWS-managed `aws/dynamodb` key under every preset, and only the `encryption` option of a store changes it. `resolveDynamoDbProtection` in `@aws-cdk-blocks/core/cdk/internal` resolves both, for every DynamoDB table that CDK Blocks provisions.
 
 - **`pointInTimeRecovery?: boolean | { retentionDays: number }`:** `true` turns on continuous backups with the default 35-day window of DynamoDB. `{ retentionDays: n }` turns on PITR and sets the window to `n` days, from 1 to 35. A value outside that range gives a warning at synth, and the default window applies. `false` turns PITR off. When the option is omitted, `defaults.pointInTimeRecovery` applies. The template has a `PointInTimeRecoverySpecification` only when PITR is on.
 - **`encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef`:** `'aws-managed'`, the default, uses the `aws/dynamodb` key. `'customer-managed'` provisions a dedicated CMK for each table. `KVStore.fromKmsKey(arn)` uses a CMK that you own, so several tables can share one key. An unrecognized value fails the synth with an error that lists the valid values. It never falls back to `'aws-managed'`, so a request for a customer-managed key cannot be downgraded with no error.

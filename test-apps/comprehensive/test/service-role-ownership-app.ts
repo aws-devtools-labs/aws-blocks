@@ -9,7 +9,7 @@
  * `BlocksStack`, then removes the `Condition` of every trust statement of every
  * IAM role and synthesizes. The service-principal trust check then reports each
  * role whose trust names a non-Lambda service principal: as a synth error when
- * AWS Blocks owns the role, as a warning when the app does. Prints one JSON
+ * CDK Blocks owns the role, as a warning when the app does. Prints one JSON
  * line: `{ errors, warnings, serviceRoles }`, each a list of role resource
  * paths (`serviceRoles` = every role with a non-Lambda service principal).
  *

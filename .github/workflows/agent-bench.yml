@@ -433,7 +433,7 @@ jobs:
           if-no-files-found: ignore
 
       # Archive the agent's generated source for post-run audit, from the staged copy (deps/build
-      # output, VCS, the Blocks sandbox and anything credential-shaped were never staged).
+      # output, VCS, the CDK Blocks sandbox and anything credential-shaped were never staged).
       - name: 6. Upload source
         if: always() && steps.stage.outcome == 'success'
         continue-on-error: true

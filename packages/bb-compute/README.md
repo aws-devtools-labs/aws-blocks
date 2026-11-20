@@ -80,7 +80,7 @@ type is a compile error.
 | `logRetention` | `RetentionDays` | the stack's `defaults.logRetention` | How long the container's log group keeps logs. |
 
 The tasks run in the app's VPC (the one you provide via `defaults.vpc.network`,
-or the shared Blocks VPC), in the private-with-egress subnets by default (or
+or the shared AWS CDK Blocks VPC), in the private-with-egress subnets by default (or
 the `defaults.vpc.subnets` you choose).
 
 ## Errors
@@ -132,7 +132,7 @@ Synth warnings:
 | `{ on: 'memory', targetPercent }` | Average memory utilization |
 | `{ on: 'queue-depth', backlogPerInstance }` | Messages waiting or in flight on the compute's job queues |
 
-Without `scaling.strategy`, Blocks picks one by what the compute runs:
+Without `scaling.strategy`, CDK Blocks picks one by what the compute runs:
 
 | The compute runs | Default strategy |
 | --- | --- |
@@ -155,12 +155,12 @@ Without `scaling.strategy`, Blocks picks one by what the compute runs:
 
 ## Container image
 
-Blocks builds no image and deploying needs no local Docker. Your application
+CDK Blocks builds no image and deploying needs no local Docker. Your application
 code is shipped separately as an S3 asset and fetched at every task start, so
 `image` only supplies the runtime environment.
 
 The default image is ECR Public's mirror of the Docker official `node:24-slim`
-image, pinned by digest. The digest changes only with a Blocks release.
+image, pinned by digest. The digest changes only with a CDK Blocks release.
 
 - It runs as the unprivileged `node` user (uid/gid 1000), not root.
 - The process starts in `/home/node`, which that user owns, so a relative write
@@ -171,7 +171,7 @@ A custom `image`:
 
 - must be arm64-compatible and provide a Node 24 runtime on `PATH`, plus any
   system libraries your handlers need (e.g. media tooling);
-- is used exactly as written: Blocks doesn't add a digest to it or change its
+- is used exactly as written: CDK Blocks doesn't add a digest to it or change its
   user. It runs as the image's own default user and starts in its own `WORKDIR`;
 - is pulled by ECS at every task start, and the container runs with the stack's
   shared execution role. A tag such as `my-image:24` can point at different
@@ -306,7 +306,7 @@ no cold starts and with CPU and memory sized for the workload.
 - Moving a namespace that already serves traffic onto a container: during
   that deploy, its calls can get 503s for the minute or two the new tasks take
   to start, because the route switches before they're healthy.
-- Through a Blocks CloudFront front door, `ctx.request.url` is the CloudFront
+- Through a CDK Blocks CloudFront front door, `ctx.request.url` is the CloudFront
   (or custom-domain) URL in a container namespace and in a namespace on a
   Lambda compute alike. Called at the gateway's `execute-api` URL directly,
   both report the gateway's host.

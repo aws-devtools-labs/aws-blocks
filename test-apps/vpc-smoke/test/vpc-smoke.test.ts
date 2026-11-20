@@ -29,7 +29,7 @@ const outputsPath = join(
 
 let apiUrl: string;
 
-/** Call an API method via the Blocks JSON-RPC protocol */
+/** Call an API method via the CDK Blocks JSON-RPC protocol */
 async function rpc(method: string, ...args: unknown[]): Promise<unknown> {
   const res = await fetch(apiUrl, {
     method: 'POST',

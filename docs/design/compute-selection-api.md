@@ -2,15 +2,15 @@
 
 ## Context
 
-AWS Blocks team is in the midst of building options to run work on various types and configurations of compute. The current default is to run all work on single lambda, including all API requests, async jobs, and cron jobs. The "Multi-compute" project will give customers the option of construction a `Compute` building block and **injecting it** into different workloads. (Once every workload supports compute, `compute` could also be injected at the `Scope` level.)
+The AWS CDK Blocks team is in the midst of building options to run work on various types and configurations of compute. The current default is to run all work on single lambda, including all API requests, async jobs, and cron jobs. The "Multi-compute" project will give customers the option of construction a `Compute` building block and **injecting it** into different workloads. (Once every workload supports compute, `compute` could also be injected at the `Scope` level.)
 
 ## Problem
 
-The original design called for each "type" of `Compute` to be instantiated using Building Block names that "leak" the underlying service names into the IFC layer. This design asks customers to choose specific `Compute` blocks based on what they know of the underlying services, which is antithetical to the design philosophy of AWS Blocks.
+The original design called for each "type" of `Compute` to be instantiated using Building Block names that "leak" the underlying service names into the IFC layer. This design asks customers to choose specific `Compute` blocks based on what they know of the underlying services, which is antithetical to the design philosophy of CDK Blocks.
 
 ## Goals/Constraints
 
-There are two overarching design goals in the AWS Blocks ecosystem to bear in mind.
+There are two overarching design goals in the CDK Blocks ecosystem to bear in mind.
 
 1. Building Blocks are **"Cloud"** Building Blocks; ***not*** *"AWS"* Building Blocks.
 2. Power users should always be able to "drop" into CDK to customize and extend.
@@ -36,7 +36,7 @@ The design has three parts: the **compute types** a customer chooses from, the *
 
 ### Compute types
 
-Blocks supports three compute types:
+CDK Blocks supports three compute types:
 
 | Type | Model | Alternative Tags | Backed by | Status |
 | --- | --- | --- | --- | --- |
@@ -104,7 +104,7 @@ type ContainerScaling = {
   /**
    * One or more signals that drive scaling. With several, scale-out satisfies
    * whichever signal demands the most instances; scale-in happens only when all
-   * agree it is safe. Leave empty for Blocks to assign sane defaults.
+   * agree it is safe. Leave empty for CDK Blocks to assign sane defaults.
    */
   strategy?: ScalingSignal | ScalingSignal[];
 };
@@ -208,9 +208,9 @@ const reports = new ContainerCompute(scope, 'reports', { size: { vcpu: 1, memory
 const api     = new ServerlessCompute(scope, 'api', { memory: 512 });
 ```
 
-Each class is named by the compute type (`ContainerCompute`, `ServerlessCompute`) and takes that type's options (`ContainerComputeOptions`, `ServerlessComputeOptions`). It multiplies the block surface to one class per type, and "which types exist" is a matter of which classes are importable rather than one `type` union. (Service-named variants like `EcsCompute` and `LambdaCompute` are contrary to the Blocks goals. Examples discussed in Appendix B.).
+Each class is named by the compute type (`ContainerCompute`, `ServerlessCompute`) and takes that type's options (`ContainerComputeOptions`, `ServerlessComputeOptions`). It multiplies the block surface to one class per type, and "which types exist" is a matter of which classes are importable rather than one `type` union. (Service-named variants like `EcsCompute` and `LambdaCompute` are contrary to the CDK Blocks goals. Examples discussed in Appendix B.).
 
-This option is not technically a violation of current Blocks goals, but it is a "spiritually" contradiction with recent decisions to consolidate where possible. (Examples being in the `Auth` block and *possibly* the `Database` block(s).)
+This option is not technically a violation of current CDK Blocks goals, but it is a "spiritually" contradiction with recent decisions to consolidate where possible. (Examples being in the `Auth` block and *possibly* the `Database` block(s).)
 
 ### Customizing and extending
 
@@ -291,7 +291,7 @@ new AsyncJob(scope, 'emails', {
 });
 ```
 
-Like Option 2, concurrency is per-job and compute-conditional (the knob only exists when the compute is one that has vCPUs to multiply against, so serverless rejects it at compile time). The difference is the unit: instead of an absolute per-instance count, the job states concurrency **per vCPU**, and Blocks multiplies by the compute's `size.vcpu` to get the per-instance figure. This ties a job's parallelism to the compute it lands on, so the same job scales its concurrency with the instance size rather than being pinned to an absolute number that a customer must re-tune when they resize the box.
+Like Option 2, concurrency is per-job and compute-conditional (the knob only exists when the compute is one that has vCPUs to multiply against, so serverless rejects it at compile time). The difference is the unit: instead of an absolute per-instance count, the job states concurrency **per vCPU**, and CDK Blocks multiplies by the compute's `size.vcpu` to get the per-instance figure. This ties a job's parallelism to the compute it lands on, so the same job scales its concurrency with the instance size rather than being pinned to an absolute number that a customer must re-tune when they resize the box.
 
 **v1 scope.** We deliberately do not expose threading control or a soft-vs-hard time-limit choice yet. So for now **one unit of concurrency is one thread**, which keeps hard time limits enforceable (a job bound 1:1 to a thread can be forcibly terminated). What `maxConcurrencyPerCPU` *does* give the customer is control over how IO-bound vs CPU-bound their work is: IO-bound work that spends most of its time awaiting can set a higher value; CPU-bound work sets 1 (or omits it).
 

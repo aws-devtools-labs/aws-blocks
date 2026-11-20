@@ -106,7 +106,7 @@ export type AsyncJobOptions<T> = AsyncJobBaseOptions<T> &
 				compute: ComputeProvider<'container'>;
 				/**
 				 * How many deliveries of this job run at once per instance, expressed
-				 * **per vCPU**. Blocks multiplies by the compute's vCPU count for the
+				 * **per vCPU**. CDK Blocks multiplies by the compute's vCPU count for the
 				 * per-instance concurrency: `max(1, ceil(maxConcurrencyPerCPU × vcpu))`.
 				 * Higher for IO-bound work that mostly awaits; explicitly set 1 for
 				 * CPU-bound work. When omitted, the poller allows five in-flight deliveries

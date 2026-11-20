@@ -169,7 +169,7 @@ class ProvenanceTests(unittest.TestCase):
             app = Path(temp)
             (app / '.cdk-blocks/local/data/app-todos').mkdir(parents=True)
             (app / '.cdk-blocks/local/data/app-todos/store.json').write_text('{"1":{"title":"survival-a"}}')
-            (app / 'data.json').write_text('["survival-b"]')  # Stored outside the Blocks mock directory.
+            (app / 'data.json').write_text('["survival-b"]')  # Stored outside the CDK Blocks mock directory.
             (app / 'node_modules/x/.cdk-blocks/local/data').mkdir(parents=True)
             (app / 'node_modules/x/.cdk-blocks/local/data/f').write_text('survival-b')
             self.assertEqual(stored_in_blocks(app, ['survival-a']), [])

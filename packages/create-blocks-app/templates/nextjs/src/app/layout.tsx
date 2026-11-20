@@ -2,8 +2,8 @@ import type { Metadata, Viewport } from 'next';
 import { THEME_CSS, THEME_STYLE_ID } from 'aws-cdk-blocks/theme';
 
 export const metadata: Metadata = {
-  title: 'Blocks + Next.js',
-  description: 'Next.js App Router with Blocks backend',
+  title: 'AWS CDK Blocks + Next.js',
+  description: 'Next.js App Router with CDK Blocks backend',
 };
 
 export const viewport: Viewport = {
@@ -27,8 +27,8 @@ export default function RootLayout({
       </head>
       <body style={{ fontFamily: 'var(--bb-font-family, system-ui, sans-serif)', padding: '2rem', maxWidth: '800px', margin: '0 auto', background: 'var(--bb-color-bg, #fff)', color: 'var(--bb-color-text, #333)' }}>
         <header style={{ marginBottom: '2rem', borderBottom: '1px solid var(--bb-color-border, #eee)', paddingBottom: '1rem' }}>
-          <h1 style={{ margin: 0 }}>Blocks + Next.js</h1>
-          <p style={{ color: 'var(--bb-color-text-muted, #666)', margin: '0.5rem 0 0' }}>Server Components calling Blocks API</p>
+          <h1 style={{ margin: 0 }}>CDK Blocks + Next.js</h1>
+          <p style={{ color: 'var(--bb-color-text-muted, #666)', margin: '0.5rem 0 0' }}>Server Components calling CDK Blocks API</p>
         </header>
         {children}
       </body>

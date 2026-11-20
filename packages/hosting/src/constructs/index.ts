@@ -64,7 +64,7 @@ export {
 export { FrameworkType, HostingProps, HostingResources } from '../types.js';
 // ── Front doors ───────────────────────────────────────────────────────────────
 // The free-form front-door interface: a door is `defineFrontDoor({ service,
-// build(scope, input) })`. AWS Blocks calls `build` once at synth with the
+// build(scope, input) })`. CDK Blocks calls `build` once at synth with the
 // DoorInput and uses the `url` it returns as the app's address. CloudFront is
 // the default door; ALB, API Gateway, S3-website (`'none'`) and the stacked
 // CloudFront edge are the other built-ins, written the same way.

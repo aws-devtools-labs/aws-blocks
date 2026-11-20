@@ -29,7 +29,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   defaults: BlocksPresets.sandbox,
 });
 
-// SvelteKit SSR deploy. The Blocks SvelteKit adapter runs @sveltejs/adapter-node
+// SvelteKit SSR deploy. The CDK Blocks SvelteKit adapter runs @sveltejs/adapter-node
 // on Lambda via the Lambda Web Adapter (http-server compute). `api: blocksStack`
 // wires the single-origin /cdk-blocks/* CloudFront proxy so client fetches reach
 // the backend with no CORS.

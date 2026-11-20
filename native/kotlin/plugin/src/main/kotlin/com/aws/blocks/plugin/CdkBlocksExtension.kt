@@ -12,13 +12,13 @@ import org.gradle.api.provider.Property
 import org.gradle.api.provider.SetProperty
 
 /**
- * Configuration extension for the AWS Blocks codegen plugin.
+ * Configuration extension for the CDK Blocks codegen plugin.
  *
  * Applied via the `cdkBlocks` block in a module's `build.gradle.kts`.
  */
 abstract class CdkBlocksExtension(project: Project) {
 
-    /** Path to the Blocks spec file. Defaults to `rootProject.file("blocks.spec.json")`. */
+    /** Path to the CDK Blocks spec file. Defaults to `rootProject.file("blocks.spec.json")`. */
     abstract val apiSpec: RegularFileProperty
 
     /** Package name for generated code. Defaults to `"com.aws.blocks.generated"`. */

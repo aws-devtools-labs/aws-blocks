@@ -5,7 +5,7 @@
  * Default container image when the workload didn't set `image`. A stock, public,
  * AWS-hosted Node image on the SAME Node major as the Lambda runtime
  * ({@link DEFAULT_NODE_RUNTIME}, Node 24), so container and function behavior
- * match. Pulled remotely by ECS at task start — Blocks builds NO image, so a
+ * match. Pulled remotely by ECS at task start — CDK Blocks builds NO image, so a
  * deploy never needs a local Docker daemon. The app code is delivered separately
  * as an S3 asset and fetched at boot (see `bootstrap.mjs`).
  *
@@ -20,7 +20,7 @@
  * aren't subject to Docker Hub rate limits.
  *
  * At this digest, `24-slim` was Node 24.22.2 (Debian slim) and the image's
- * default user is root. Blocks doesn't run it as root: the task definition sets
+ * default user is root. CDK Blocks doesn't run it as root: the task definition sets
  * the container user to {@link DEFAULT_CONTAINER_USER} (the image's built-in
  * `node` user) and boots from {@link DEFAULT_CONTAINER_APP_DIR}, which that user
  * owns, starting in {@link DEFAULT_CONTAINER_WORKDIR}. When bumping the digest,

@@ -1,6 +1,6 @@
 # Task: Instrumented Health API
 
-Build an instrumented health/status service in this **backend-only** AWS Blocks app. A `ping` endpoint does its work under full observability — it logs, emits a metric, and runs inside a trace segment — and a small status page shows the configured app name plus a button to ping the service and see the result.
+Build an instrumented health/status service in this **backend-only** CDK Blocks app. A `ping` endpoint does its work under full observability — it logs, emits a metric, and runs inside a trace segment — and a small status page shows the configured app name plus a button to ping the service and see the result.
 
 ## Setup (do this first)
 

@@ -88,7 +88,7 @@ export interface GithubE2eOidcStackProps {
 
 export function buildGithubE2eOidcStack(scope: cdk.App, props: GithubE2eOidcStackProps): cdk.Stack {
   const stack = new cdk.Stack(scope, 'BlocksGithubE2eOidc', {
-    description: 'GitHub Actions OIDC role for AWS Blocks E2E tests. Deploy only into the dedicated E2E account.',
+    description: 'GitHub Actions OIDC role for CDK Blocks E2E tests. Deploy only into the dedicated E2E account.',
     env: {
       account: props.account,
       region: E2E_REGION,

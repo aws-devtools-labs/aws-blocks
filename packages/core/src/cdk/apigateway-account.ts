@@ -23,7 +23,7 @@ const ACCOUNT_KEY = Symbol.for('BLOCKS_APIGATEWAY_ACCOUNT');
  * API Gateway access logging — for both REST (v1) and WebSocket (v2) stages —
  * requires an `AWS::ApiGateway::Account` whose `cloudWatchRoleArn` points at a
  * role trusted by `apigateway.amazonaws.com` and carrying
- * `AmazonAPIGatewayPushToCloudWatchLogs`. Nothing else in a Blocks stack
+ * `AmazonAPIGatewayPushToCloudWatchLogs`. Nothing else in a CDK Blocks stack
  * provisions it, so a clean-account first deploy of any access-logging stage
  * otherwise fails at CreateStage with "CloudWatch Logs role ARN must be set in
  * account settings to enable logging".
@@ -31,18 +31,18 @@ const ACCOUNT_KEY = Symbol.for('BLOCKS_APIGATEWAY_ACCOUNT');
  * Callers should add their stage's dependency on the returned account so the
  * account setting is applied before the stage is created.
  *
- * ⚠️ Single-Blocks-stack-per-region assumption. `AWS::ApiGateway::Account` is an
+ * ⚠️ One CDK Blocks stack per region. `AWS::ApiGateway::Account` is an
  * account/region-level singleton (one effective `cloudWatchRoleArn` per region),
- * but this provisions one per Blocks stack. If two Blocks stacks in the same
+ * but this provisions one per CDK Blocks stack. If two CDK Blocks stacks in the same
  * account+region both enable access logging:
  *   - on deploy, the later stack's role wins (overwrites the account setting); and
  *   - on teardown of that later stack, its role is deleted and the account
  *     setting is left pointing at a now-deleted role — silently breaking access
  *     logging (or blocking `CreateStage`) for the surviving stack until it
  *     redeploys.
- * Enabling `accessLogging` is therefore safe for one Blocks stack per region.
+ * Enabling `accessLogging` is therefore safe for one CDK Blocks stack per region.
  * Multi-stack support (a shared/imported account) is deferred; if you run
- * multiple Blocks stacks per region, manage the account role out-of-band and
+ * multiple CDK Blocks stacks per region, manage the account role out-of-band and
  * leave `accessLogging` to a single owner.
  */
 export function ensureApiGatewayAccount(stack: cdk.Stack): CfnAccount {

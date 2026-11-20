@@ -350,7 +350,7 @@ export class WebFunctionConstruct extends Construct implements iam.IGrantable {
         ExecutionRoleArn: this.role.roleArn,
         TimeoutSeconds: timeoutSeconds,
         MaxConcurrencyPerEnvironment: props.maxConcurrencyPerEnvironment,
-        // Lazy: env vars are added after construction (secrets, Blocks
+        // Lazy: env vars are added after construction (secrets, CDK Blocks
         // config, ISR wiring). Every revision property is create-only, so a
         // changed env var produces a new revision — the same as a new deploy.
         EnvironmentVariables: Lazy.any({ produce: () => ({ ...this.environment }) }),

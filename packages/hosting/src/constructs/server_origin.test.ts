@@ -269,7 +269,7 @@ void describe('server origin lock-down', () => {
   });
 
   void describe('regional web ACL on the stage', () => {
-    void it('is not created when the distribution has no Blocks-managed web ACL', () => {
+    void it('is not created when the distribution has no CDK Blocks-managed web ACL', () => {
       const { template } = synth();
       template.resourceCountIs('AWS::WAFv2::WebACL', 0);
       template.resourceCountIs('AWS::WAFv2::WebACLAssociation', 0);
@@ -421,7 +421,7 @@ void describe('server origin lock-down', () => {
       });
     });
 
-    void it('without a Blocks-managed web ACL, the server origin gets none', () => {
+    void it('without a CDK Blocks-managed web ACL, the server origin gets none', () => {
       const template = hosting(undefined);
       template.resourceCountIs('AWS::WAFv2::WebACL', 0);
     });

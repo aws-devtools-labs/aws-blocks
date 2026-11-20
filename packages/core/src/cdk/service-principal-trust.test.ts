@@ -83,7 +83,7 @@ const CONDITION_RULES =
 	'operator, or with a value that leaves the account open (* alone, a wildcard or empty account); nor do ' +
 	'aws:SourceOrgID and aws:SourceOrgPaths, which admit every account in the organization.';
 
-/** The full error a role AWS Blocks owns fails synth with. */
+/** The full error a role CDK Blocks owns fails synth with. */
 function trustError(rolePath: string, service: string): string {
 	return (
 		`[${rolePath}] IAM role ${rolePath} trusts the service principal ${service} without an ` +
@@ -221,7 +221,7 @@ const FIXTURE_ROOT_APP_ROLES: [string, string][] = [
 	['mine/SM/EventsRole', 'events.amazonaws.com'],
 ];
 
-/** A plain stack covered as a Blocks root, with the trust check registered. */
+/** A plain stack covered as a CDK Blocks root, with the trust check registered. */
 function checkedStack(): { app: cdk.App; stack: cdk.Stack } {
 	const app = new cdk.App();
 	const stack = new cdk.Stack(app, 'TrustCheckStack', { env: { account: '123456789012', region: 'us-east-1' } });
@@ -551,7 +551,7 @@ describe('sourceScopedConditions', () => {
 	});
 });
 
-/** The full error a KMS key AWS Blocks owns fails synth with. */
+/** The full error a KMS key CDK Blocks owns fails synth with. */
 function keyPolicyError(keyPath: string, service: string, statement: number): string {
 	return `[${keyPath}] ${keyPolicyProblem(keyPath, service, statement)}`;
 }

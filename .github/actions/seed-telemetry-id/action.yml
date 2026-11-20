@@ -1,6 +1,6 @@
 name: Seed fixed e2e telemetry installation ID
 description: >-
-  Pins a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+  Pins a fixed AWS CDK Blocks CLI telemetry installation ID for CI e2e runs so this
   traffic is consistent and identifiable (and can be excluded from product
   usage metrics). Also suppresses the first-run telemetry consent notice.
   POSIX/Linux/macOS only (bash, uses $HOME).

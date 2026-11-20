@@ -23,7 +23,7 @@ const id = getSandboxId(projectRoot);
 const stackName = `bb-extending-guide-blocksbackend-${id}`;
 
 /**
- * A user-owned stack that already has its own resources. Blocks drops in
+ * A user-owned stack that already has its own resources. CDK Blocks drops in
  * as a single Construct via BlocksBackend.create — no second CloudFormation
  * stack involved.
  *
@@ -46,7 +46,7 @@ class MyExistingStack extends cdk.Stack {
     // Pretend this queue belongs to the existing app.
     stack.externalQueue = new sqs.Queue(stack, 'work-queue');
 
-    // Drop Blocks in as a Construct.
+    // Drop CDK Blocks in as a Construct.
     stack.blocks = await BlocksBackend.create(stack, 'BlocksApi', {
       backendHandlerPath: join(__dirname, 'index.handler.ts'),
       backendCDKPath: join(__dirname, 'index.ts'),

@@ -52,7 +52,7 @@ const password = 'TestPass123!';
 
 // ─── Setup (don't touch) ─────────────────────────────────────────────────────
 
-// Wait for the Blocks server to be ready without depending on the sample API.
+// Wait for the CDK Blocks server to be ready without depending on the sample API.
 async function waitForServer() {
   for (let i = 0; i < 30; i++) {
     try {
@@ -125,7 +125,7 @@ test.after(async () => {
 
 // ─── App readiness (independent of the sample API) ────────────────────────────
 
-test('app: server serves its Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
+test('app: server serves its AWS CDK Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
   const response = await fetch(readinessUrl);
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // A mistake in how the command was called: exit code 2, and the message names the fix. Marked, not a class with
-// its own name: these errors never leave the command line, so they are not Blocks errors.
+// its own name: these errors never leave the command line, so they are not CDK Blocks errors.
 const usageErrors = new WeakSet<Error>();
 
 export function usageError(message: string): Error {

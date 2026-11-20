@@ -1,7 +1,7 @@
 name: E2E Amplify Interop
 
 # Runs Amplify interop tests on PRs as a required, blocking check.
-# A failure here fails the PR — Blocks must stay compatible with the
+# A failure here fails the PR — CDK Blocks must stay compatible with the
 # Amplify Gen2 integration path.
 #
 # Jobs check out the PR's merge commit (actions/checkout's default), the
@@ -67,7 +67,7 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
-      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # Pin a fixed CDK Blocks CLI telemetry installation ID for CI e2e runs so this
       # traffic is consistent and identifiable (and can be excluded from product
       # usage metrics).
       - uses: ./.github/actions/seed-telemetry-id
@@ -82,7 +82,7 @@ jobs:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
           index: ${{ needs.detect-changes.outputs.e2e-index }}
 
-      - name: Scaffold Amplify + Blocks app
+      - name: Scaffold Amplify + CDK Blocks app
         run: |
           mkdir -p /tmp/amplify-interop-test
           cd /tmp/amplify-interop-test
@@ -94,7 +94,7 @@ jobs:
       # `npm create amplify@latest` installs its OWN aws-cdk-lib/constructs at
       # whatever versions it currently ships, which drift from the versions this
       # repo builds against. The generated cdk-blocks/index.cdk.ts resolves
-      # aws-cdk-lib (Stack/Mixins) from THIS scaffold's tree, while the Blocks
+      # aws-cdk-lib (Stack/Mixins) from THIS scaffold's tree, while the CDK Blocks
       # packages — linked in as `file:` deps (symlinks) — resolve their own
       # constructs/aws-cdk-lib from the REPO's tree via the symlink realpath.
       # tsc dedups modules by package id (name@version), so when the two trees
@@ -184,7 +184,7 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
-      # Pin a fixed Blocks CLI telemetry installation ID for CI e2e runs so this
+      # Pin a fixed CDK Blocks CLI telemetry installation ID for CI e2e runs so this
       # traffic is consistent and identifiable (and can be excluded from product
       # usage metrics).
       - uses: ./.github/actions/seed-telemetry-id

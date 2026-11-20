@@ -23,10 +23,10 @@ export default function ApiTestPage() {
         <p style={{ color: '#666', margin: 0 }}>
           Click any button to invoke a route. Two route classes:
           <span style={{ background: FRAMEWORK, color: '#fff', padding: '2px 8px', borderRadius: 4, marginLeft: 8, fontSize: 12 }}>Framework</span>
-          <span style={{ marginLeft: 4, fontSize: 13 }}>= app/api/* (shadowed by Blocks /api/* CloudFront behavior)</span>
+          <span style={{ marginLeft: 4, fontSize: 13 }}>= app/api/* (shadowed by CDK Blocks /api/* CloudFront behavior)</span>
           <br />
-          <span style={{ background: BLOCKS, color: '#000', padding: '2px 8px', borderRadius: 4, marginRight: 4, fontSize: 12 }}>Blocks</span>
-          = ApiNamespace endpoints (route to Blocks Lambda)
+          <span style={{ background: BLOCKS, color: '#000', padding: '2px 8px', borderRadius: 4, marginRight: 4, fontSize: 12 }}>CDK Blocks</span>
+          = ApiNamespace endpoints (route to CDK Blocks Lambda)
         </p>
         <details style={{ marginTop: 8 }}>
           <summary style={{ cursor: 'pointer' }}>config.json</summary>
@@ -262,13 +262,13 @@ export default function ApiTestPage() {
       </ul>
 
       <h3 style={{ borderTop: '1px solid #eee', paddingTop: 16, marginBottom: 12, marginTop: 24 }}>
-        <span style={{ background: BLOCKS, color: '#000', padding: '3px 10px', borderRadius: 4, fontSize: 14 }}>Blocks</span>
+        <span style={{ background: BLOCKS, color: '#000', padding: '3px 10px', borderRadius: 4, fontSize: 14 }}>CDK Blocks</span>
         {' '}routes — ApiNamespace (<code>cdk-blocks/index.ts</code>)
       </h3>
 
       <ProbeCard
         feature="api.listPosts()"
-        description="Reads the public posts feed from KVStore via the Blocks Lambda. No auth required."
+        description="Reads the public posts feed from KVStore via the CDK Blocks Lambda. No auth required."
         source="cdk-blocks/index.ts → ApiNamespace listPosts"
         buttons={[
           {
@@ -283,7 +283,7 @@ export default function ApiTestPage() {
 
       <ProbeCard
         feature="api.authCheckAuth()"
-        description="Returns the current session info if logged in, or null. Demonstrates Blocks auth round-trip."
+        description="Returns the current session info if logged in, or null. Demonstrates CDK Blocks auth round-trip."
         source="cdk-blocks/index.ts → ApiNamespace authCheckAuth"
         buttons={[
           {
@@ -331,7 +331,7 @@ export default function ApiTestPage() {
 
       <ProbeCard
         feature="api.getProfile() (auth-protected)"
-        description="Calls a protected Blocks endpoint. Returns the current user's profile or 401 if unauthenticated."
+        description="Calls a protected CDK Blocks endpoint. Returns the current user's profile or 401 if unauthenticated."
         source="cdk-blocks/index.ts → getProfile (uses auth.requireAuth)"
         buttons={[
           {
@@ -371,7 +371,7 @@ export default function ApiTestPage() {
 
       <ProbeCard
         feature="authApi (separate ApiNamespace)"
-        description="The authApi namespace is the Blocks-owned alternative to the api namespace. Tests that multiple ApiNamespaces coexist."
+        description="The authApi namespace is the CDK Blocks-owned alternative to the api namespace. Tests that multiple ApiNamespaces coexist."
         source="cdk-blocks/index.ts → authApi"
         buttons={[
           {

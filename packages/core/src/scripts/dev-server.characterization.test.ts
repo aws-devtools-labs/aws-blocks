@@ -379,7 +379,7 @@ const EXPECTED: Record<string, unknown> = {
       "vary": "Origin"
     },
     "cookies": [],
-    "body": "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":415,\"message\":\"Unsupported Media Type: the AWS Blocks JSON-RPC API expects Content-Type: application/json\",\"data\":{\"name\":\"UnsupportedMediaType\"}},\"id\":null}"
+    "body": "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":415,\"message\":\"Unsupported Media Type: the AWS CDK Blocks JSON-RPC API expects Content-Type: application/json\",\"data\":{\"name\":\"UnsupportedMediaType\"}},\"id\":null}"
   },
   "RawRoute POST refused from a non-localhost origin": {
     "status": 403,
@@ -889,7 +889,7 @@ const EXPECTED: Record<string, unknown> = {
       "vary": "Origin"
     },
     "cookies": [],
-    "body": "{\"error\":\"The AWS Blocks JSON-RPC API expects POST, not GET.\",\"expected\":{\"method\":\"POST\",\"path\":\"/cdk-blocks/api\"}}"
+    "body": "{\"error\":\"The AWS CDK Blocks JSON-RPC API expects POST, not GET.\",\"expected\":{\"method\":\"POST\",\"path\":\"/cdk-blocks/api\"}}"
   },
   "GET on a per-namespace RPC path": {
     "status": 404,
@@ -903,7 +903,7 @@ const EXPECTED: Record<string, unknown> = {
       "vary": "Origin"
     },
     "cookies": [],
-    "body": "{\"error\":\"The AWS Blocks JSON-RPC API expects POST, not GET.\",\"expected\":{\"method\":\"POST\",\"path\":\"/cdk-blocks/api/api\"}}"
+    "body": "{\"error\":\"The AWS CDK Blocks JSON-RPC API expects POST, not GET.\",\"expected\":{\"method\":\"POST\",\"path\":\"/cdk-blocks/api/api\"}}"
   },
   "preflight on the RPC path": {
     "status": 200,

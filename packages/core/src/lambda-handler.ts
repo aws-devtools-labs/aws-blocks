@@ -86,7 +86,7 @@ type EventOriginFields = {
  * - Otherwise host comes from `Host`/`host`, protocol from `x-forwarded-proto`
  *   (default `https`), and the prefix is `/{stage}` for a REST API stage. An HTTP
  *   API's `$default` stage has no path, so it gets none.
- * - Behind a Blocks CloudFront front door — which drops the viewer's `Host` and
+ * - Behind a CDK Blocks CloudFront front door — which drops the viewer's `Host` and
  *   stamps it as `x-blocks-public-host` instead — the client called
  *   `https://<that host>` (CloudFront adds the stage as the gateway origin's path).
  *   Taken only when the host is one of the backend's own front-door hosts; see
@@ -153,7 +153,7 @@ function buildEventBaseUrl(event: EventOriginFields): string {
  *   falling back to `event.queryStringParameters`, then `event.rawQueryString` (v2).
  * - When a trusted loopback `X-Forwarded-Host` is present (the sandbox dev-server
  *   front door), the URL is rebuilt as the browser-visible origin: that host and
- *   plain `http`. Behind a Blocks CloudFront front door it is the URL the viewer
+ *   plain `http`. Behind a CDK Blocks CloudFront front door it is the URL the viewer
  *   called (`x-blocks-public-host`, when it names one of the backend's front-door
  *   hosts). Otherwise host comes from `Host`/`host` and protocol from
  *   `x-forwarded-proto` (default `https`). See {@link resolveEventOrigin}.
@@ -232,7 +232,7 @@ const REMAINING_TIME_BUFFER_MS = 1_000;
  * - `'http'`: API Gateway REST (v1) or HTTP (v2) request
  * - `'websocket'`: API Gateway WebSocket (CONNECT/DISCONNECT/MESSAGE)
  * - `'records'`: Event source mapping (SQS, Kinesis, DDB Streams)
- * - `'direct'`: Direct invoke with Blocks-controlled payload (EventBridge Scheduler)
+ * - `'direct'`: Direct invoke with CDK Blocks-controlled payload (EventBridge Scheduler)
  * - `'cognito-trigger'`: A Cognito user pool Lambda trigger (`triggerSource` + `userPoolId`)
  */
 export type EventClass = 'http' | 'websocket' | 'records' | 'direct' | 'cognito-trigger';
@@ -311,7 +311,7 @@ export interface LambdaContext {
 }
 
 /**
- * Create a Lambda handler for the Blocks backend.
+ * Create a Lambda handler for the CDK Blocks backend.
  *
  * Uses the lazy factory pattern with a dynamic import:
  * ```ts
@@ -482,7 +482,7 @@ class HandlerTimeoutError extends Error {
  */
 export class TransientConfigError extends Error {
   constructor() {
-    super('[Blocks] Config not readable yet (transient post-deploy S3 window); will retry on next request');
+    super('[AWS CDK Blocks] Config not readable yet (transient post-deploy S3 window); will retry on next request');
     this.name = 'TransientConfigError';
   }
 }
@@ -531,7 +531,7 @@ function createHandler(backend: any) {
       return handleEventSourceRecords(event, backend);
     }
 
-    // ── Direct invoke with Blocks-controlled payload ──
+    // ── Direct invoke with CDK Blocks-controlled payload ──
     if (eventClass === 'direct') {
       const handlers: Map<string, (record: any) => Promise<void>> =
         (globalThis as any).__BLOCKS_LAMBDA_EVENT_HANDLERS__ ?? new Map();

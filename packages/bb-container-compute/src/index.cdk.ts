@@ -3,13 +3,13 @@
 
 /**
  * A container-backed {@link Compute}: a long-lived AWS Fargate service that runs
- * the Blocks backend as a persistent process and self-starts its owned event
+ * the CDK Blocks backend as a persistent process and self-starts its owned event
  * pollers (see core's `runContainer`). Selected by the public `Compute` block
  * when a workload's capabilities exceed Lambda's envelope (a wall-clock budget
  * over 15 minutes, an explicit CPU request, a long-lived process, or a custom
  * image).
  *
- * The tasks run AS the shared Blocks execution role (`this.executionRole`), so
+ * The tasks run AS the shared CDK Blocks execution role (`this.executionRole`), so
  * every Building Block's grants reach the container exactly as they reach the
  * Lambda handler — no per-compute least-privilege analysis, matching the shared
  * handler's trust boundary.
@@ -269,10 +269,10 @@ export class ContainerCompute extends ComputeBase {
 		// Honor a customer-provided VPC: if `defaults.vpc.network` was set, the
 		// backend published a `source: 'provided'` context before this import, so
 		// it's already discoverable here — reuse it. Otherwise derive the one shared
-		// Blocks VPC on the backend root (fixed id, so N containers share ONE VPC and
+		// CDK Blocks VPC on the backend root (fixed id, so N containers share ONE VPC and
 		// placement is order-independent) and publish it as a `source: 'derived'`
 		// context. The `derived` tag is what keeps a stateful block (Database) from
-		// auto-joining this VPC: joining a Blocks-derived VPC would move an existing
+		// auto-joining this VPC: joining a CDK Blocks-derived VPC would move an existing
 		// cluster on a routine change (e.g. adding this container) and replace it.
 		// Stateless compute (this container, Lambda) shares it freely.
 		const existingContext = getVpcContext(this);
@@ -296,7 +296,7 @@ export class ContainerCompute extends ComputeBase {
 			return;
 		}
 
-		// Run AS the shared Blocks execution role (task role) so every BB grant
+		// Run AS the shared CDK Blocks execution role (task role) so every BB grant
 		// reaches the container. Append the ecs-tasks trust principal to the shared
 		// role's assume policy — added here (not in core) so the role only trusts
 		// ECS when a container compute exists. Done once per stack.
@@ -310,7 +310,7 @@ export class ContainerCompute extends ComputeBase {
 			cpu,
 			memoryLimitMiB,
 			// ARM64 (Graviton): cheaper at equal performance and matches the arm64
-			// Node base image. Blocks defaults Lambda to arm64 too. A custom `image`
+			// Node base image. CDK Blocks defaults Lambda to arm64 too. A custom `image`
 			// must therefore be arm64 (multi-arch images resolve automatically).
 			runtimePlatform: {
 				cpuArchitecture: ecs.CpuArchitecture.ARM64,
@@ -351,7 +351,7 @@ export class ContainerCompute extends ComputeBase {
 			// Stock public Node image by default, or the customer's image verbatim —
 			// either way via fromRegistry (a remote pull, never a local build). The
 			// image supplies the runtime environment (it must provide Node 24 on
-			// PATH); Blocks injects the app code at boot via the command override.
+			// PATH); CDK Blocks injects the app code at boot via the command override.
 			image: ecs.ContainerImage.fromRegistry(options?.image ?? DEFAULT_CONTAINER_IMAGE),
 			// Override the image's entrypoint/command: write the bootstrap to disk
 			// from a base64 arg (so no extra object to fetch), then run it. The
@@ -529,7 +529,7 @@ export class ContainerCompute extends ComputeBase {
 		loadBalancer.connections.allowTo(
 			tasks,
 			ec2.Port.tcpRange(CONTAINER_PORT, READINESS_PORT),
-			'Blocks container API traffic and readiness',
+			'AWS CDK Blocks container API traffic and readiness',
 		);
 
 		// Register the service with the target group at the CloudFormation level.
@@ -859,7 +859,7 @@ export class ContainerCompute extends ComputeBase {
 		if (roleAny[KEY]) return;
 		if (!(role instanceof Role)) {
 			throw new Error(
-				'ContainerCompute requires the shared Blocks execution role to be a concrete iam.Role to add its ecs-tasks trust',
+				'ContainerCompute requires the shared AWS CDK Blocks execution role to be a concrete iam.Role to add its ecs-tasks trust',
 			);
 		}
 		const stack = cdk.Stack.of(role);

@@ -41,7 +41,7 @@ function skipUnlessLocal(t: { skip(message?: string): void }): boolean {
   return true;
 }
 
-// Wait for the Blocks server to be ready without depending on the sample API.
+// Wait for the CDK Blocks server to be ready without depending on the sample API.
 async function waitForServer() {
   for (let i = 0; i < 60; i++) {
     try {
@@ -118,7 +118,7 @@ test.after(async () => {
 
 // App-level readiness — independent of the sample API, so it keeps passing
 // after you replace `greet`/`setValue`/`getValue` with your own methods.
-test('app: server serves its Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
+test('app: server serves its AWS CDK Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
   const response = await fetch(readinessUrl);
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });
@@ -195,7 +195,7 @@ test('auth: custom attribute round-trip', async (t) => {
 test('todos: per-user create and list', async (t) => {
   if (skipUnlessLocal(t)) return;
   const me = await api.whoAmI();
-  const todo = await api.createTodo('Try AWS Blocks', 1);
+  const todo = await api.createTodo('Try AWS CDK Blocks', 1);
   assert.strictEqual(todo.userSub, me.userSub, "the todo is keyed on the owner's userSub");
   const list = await api.listTodos();
   assert.ok(list.some((t) => t.todoId === todo.todoId));

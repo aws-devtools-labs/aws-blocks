@@ -310,7 +310,7 @@ const authCMfa = new Auth(scope, 'authCMfa', {
     selfSignUp: true,
     passwordPolicy: { minLength: 8, requireDigits: true },
   },
-  mfa: { mode: 'optional', types: ['TOTP'], totpIssuer: 'AWS Blocks e2e' },
+  mfa: { mode: 'optional', types: ['TOTP'], totpIssuer: 'AWS CDK Blocks e2e' },
   totpVerification: 'rfc6238',
   codeDelivery: async (username, code, purpose) => {
     await recordDeliveredCode('authCMfa', { username, code, purpose });

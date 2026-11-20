@@ -151,7 +151,7 @@ describe('finalizeVpc — endpoint provisioning', () => {
 		template.resourceCountIs(IFACE, 0);
 	});
 
-	it('scopes the interface-endpoint SG to 443 from the Blocks Lambda SG only', () => {
+	it('scopes the interface-endpoint SG to 443 from the CDK Blocks Lambda SG only', () => {
 		const template = synthWith((scope) => {
 			new FakeBB(scope, 'Job', { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SQS] });
 		});

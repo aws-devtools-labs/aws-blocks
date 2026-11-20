@@ -58,7 +58,7 @@ try {
   await api.hello();
   console.log('FAIL:no_error');
 } catch (e) {
-  if (e.message.includes('Blocks API URL is not configured')) {
+  if (e.message.includes('AWS CDK Blocks API URL is not configured')) {
     console.log('PASS');
   } else {
     console.log('FAIL:' + e.message);
@@ -75,7 +75,7 @@ try {
   await api.hello();
   console.log('FAIL:no_error');
 } catch (e) {
-  if (e.message.includes('Blocks API URL is not configured') || e.message.includes('Blocks API URL not configured')) {
+  if (e.message.includes('AWS CDK Blocks API URL is not configured') || e.message.includes('AWS CDK Blocks API URL not configured')) {
     console.log('PASS');
   } else {
     console.log('FAIL:' + e.message);
@@ -94,7 +94,7 @@ try {
 } catch (e) {
   if (e.message.includes('fetch') || e.message.includes('ENOTFOUND') || e.message.includes('getaddrinfo')) {
     console.log('PASS:url_resolved_fetch_failed');
-  } else if (e.message.includes('Blocks API URL')) {
+  } else if (e.message.includes('AWS CDK Blocks API URL')) {
     console.log('FAIL:url_rejected_valid');
   } else {
     console.log('PASS:other');
@@ -113,7 +113,7 @@ try {
 } catch (e) {
   if (e.message.includes('fetch') || e.message.includes('ENOTFOUND') || e.message.includes('getaddrinfo') || e.message.includes('Invalid URL')) {
     console.log('PASS:url_resolved_fetch_failed');
-  } else if (e.message.includes('Blocks API URL')) {
+  } else if (e.message.includes('AWS CDK Blocks API URL')) {
     console.log('FAIL:url_rejected_relative');
   } else {
     console.log('PASS:other');
@@ -506,7 +506,7 @@ try {
       // The only request is the fetch step: the apiUrl in the config file is never used.
       const requests = result.split('\n').filter((line) => line.startsWith('FETCH:'));
       assert.deepStrictEqual(requests, ['FETCH:/.blocks-sandbox/config.json'], `Expected only the fetch step, got: ${result}`);
-      assert.ok(result.includes('ERROR:Blocks API URL not configured'), `Expected the not-configured error, got: ${result}`);
+      assert.ok(result.includes('ERROR:AWS CDK Blocks API URL not configured'), `Expected the not-configured error, got: ${result}`);
       assert.ok(result.includes('that needs Node.js 22.3 or later'), `Expected the error to name the Node.js requirement, got: ${result}`);
     });
   });

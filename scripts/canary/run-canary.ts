@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Blocks canary.
+ * CDK Blocks canary.
  *
  * Scaffolds a fresh app from a published @aws-cdk-blocks registry, then builds it,
  * runs its local e2e (mocks) and runs `cdk synth` (no AWS credentials).
@@ -123,7 +123,7 @@ function main(): void {
   const args = parseArgs();
   const workDir = mkdtempSync(join(tmpdir(), "blocks-canary-"));
 
-  console.log("=== Blocks canary ===");
+  console.log("=== AWS CDK Blocks canary ===");
   console.log(`  template : ${args.template}`);
   console.log(`  work dir : ${workDir}`);
 
@@ -229,7 +229,7 @@ function main(): void {
     }
 
     console.log(
-      `\n🎉 Blocks canary passed (template: ${args.template}).`,
+      `\n🎉 CDK Blocks canary passed (template: ${args.template}).`,
     );
   } finally {
     if (args.keep) {

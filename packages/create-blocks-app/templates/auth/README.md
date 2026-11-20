@@ -1,6 +1,6 @@
-# Blocks Auth App
+# AWS CDK Blocks Auth App
 
-A frontend on AWS CDK Blocks that exercises the `Auth` Building Block end to end:
+A frontend on CDK Blocks that exercises the `Auth` Building Block end to end:
 email + password sign-up confirmed by an emailed code, groups and role-gated
 methods, profile attributes, password change and sign-out everywhere. Backed by
 Amazon Cognito once deployed; fully local with `npm run dev`. Vite + vanilla DOM

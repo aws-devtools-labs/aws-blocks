@@ -49,7 +49,7 @@ export function authTotpEnrolmentTests(getApis: () => AuthTotpApis) {
       assert.match(sharedSecret, /^[A-Z2-7]+$/);
       assert.strictEqual(
         otpauthUri,
-        `otpauth://totp/AWS%20Blocks%20e2e:${username}?secret=${sharedSecret}&issuer=AWS%20Blocks%20e2e&algorithm=SHA1&digits=6&period=30`,
+        `otpauth://totp/AWS%20CDK%20Blocks%20e2e:${username}?secret=${sharedSecret}&issuer=AWS%20CDK%20Blocks%20e2e&algorithm=SHA1&digits=6&period=30`,
       );
 
       // Verification is on: a code for another secret is refused, and the form stays.

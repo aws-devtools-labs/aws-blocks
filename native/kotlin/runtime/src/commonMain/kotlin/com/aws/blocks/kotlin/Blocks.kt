@@ -6,7 +6,7 @@ package com.aws.blocks.kotlin
 import io.ktor.client.engine.HttpClientEngine
 
 /**
- * The entry point to a Blocks backend.
+ * The entry point to a CDK Blocks backend.
  *
  * One instance holds one [BlocksClient], and therefore one HTTP engine, for every RPC call the
  * generated APIs make and for the [com.aws.blocks.kotlin.oidc.OidcClient] they hand out. File

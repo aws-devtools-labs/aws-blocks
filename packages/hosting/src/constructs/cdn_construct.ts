@@ -274,7 +274,7 @@ export type CdnConstructProps = {
    */
   serverOrigin?: HostingServerOriginConfig;
   /**
-   * Rate limit of the distribution's Blocks-managed web ACL (requests per
+   * Rate limit of the distribution's CDK Blocks-managed web ACL (requests per
    * 5-minute window per IP). When set, each server-origin REST API stage gets
    * a REGIONAL web ACL with the same rules and this limit, with its logs in
    * CloudWatch Logs. `HostingConstruct` sets it when `waf.enabled` builds a
@@ -573,7 +573,7 @@ export class CdnConstruct extends Construct {
       };
     };
     // A REGIONAL web ACL on each server-origin stage, mirroring the
-    // distribution's Blocks-managed web ACL (set only when it has one).
+    // distribution's CDK Blocks-managed web ACL (set only when it has one).
     let originWaf: ServerOriginWaf | undefined;
     const protectStage = (api: RestApi, deferWaf: boolean): void => {
       if (serverOriginOpts.accessLogging) {

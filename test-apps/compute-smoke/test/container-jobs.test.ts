@@ -4,7 +4,7 @@
 /**
  * Container `AsyncJob`s: a `Compute({ type: 'container' })` (Fargate) backs an
  * AsyncJob; submitting drains through an owner-matched SQS poller the container
- * self-starts, and the handler reaches Blocks resources (KVStore + FileBucket)
+ * self-starts, and the handler reaches CDK Blocks resources (KVStore + FileBucket)
  * from the container. A second job proves the per-handler wall-clock limit is
  * ENFORCED by hard-terminating the worker thread.
  *
@@ -38,7 +38,7 @@ async function pollForResult<T>(fetchOne: () => Promise<T | null>): Promise<T | 
 
 export function containerJobTests(ctx: ComputeTestContext) {
   describe('Container AsyncJobs', () => {
-    test('container job — successful dispatch, invocation, and Blocks-resource access', async () => {
+    test('container job — successful dispatch, invocation, and access to CDK Blocks resources', async () => {
       const testId = Date.now().toString(36);
       const key = `ctr-${testId}`;
 
@@ -56,7 +56,7 @@ export function containerJobTests(ctx: ComputeTestContext) {
       // The handler must have run ON the container (not Lambda).
       assert.strictEqual(result.runtime, 'container', 'handler ran on the container runtime');
 
-      // FileBucket artifact proves the container reached a SECOND Blocks resource.
+      // FileBucket artifact proves the container reached a SECOND CDK Blocks resource.
       const artifact = (await pollForResult(
         () => apiRpc(ctx, 'containerJobGetArtifact', key) as Promise<{ value: string } | null>,
       )) as { value: string } | null;

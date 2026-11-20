@@ -25,7 +25,7 @@ settings that might look like Logger options live elsewhere:
   on a Logger. (`LoggingOptions` has no `retention` option.)
 - **Log level** is purely per-instance *runtime* behavior. A `Logger`'s `level`
   is applied by the logger instance itself; a logger without an explicit `level`
-  defaults to `'info'` (see *Log Level Resolution* below). Blocks does **not**
+  defaults to `'info'` (see *Log Level Resolution* below). AWS CDK Blocks does **not**
   stamp an app-wide default — there is no `defaults.logLevel`, no `LOG_LEVEL`
   env var, and the CDK layer provisions nothing for level. This is why multiple
   Loggers with different levels coexist without fighting over shared config.

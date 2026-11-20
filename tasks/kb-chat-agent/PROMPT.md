@@ -1,6 +1,6 @@
 # Task: Knowledge-Base Chat Agent with Tool Use
 
-Build a chat assistant in this AWS Blocks app. A user types a question; an AI **agent** answers it. The agent must be able to (a) look facts up in a **knowledge base** you seed from a local folder of documents, and (b) call at least one **tool** to take an action.
+Build a chat assistant in this CDK Blocks app. A user types a question; an AI **agent** answers it. The agent must be able to (a) look facts up in a **knowledge base** you seed from a local folder of documents, and (b) call at least one **tool** to take an action.
 
 The core of this task is **using the framework**: the agent turn — retrieval, tool calls, and the final answer — runs through an **`api` namespace** method backed by the **agent block**. The chat page is a thin client over that API.
 

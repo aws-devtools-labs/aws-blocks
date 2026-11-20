@@ -163,7 +163,7 @@ const EXECUTE_API_HOST_PATTERN = /^[a-z0-9]+\.execute-api\.[a-z0-9-]+\.amazonaws
 
 /**
  * Every host the backend serves over HTTPS, for the callback `request`: each
- * Blocks CloudFront front door's hosts (`BLOCKS_PUBLIC_HOSTS`, core-owned config
+ * CDK Blocks CloudFront front door's hosts (`BLOCKS_PUBLIC_HOSTS`, core-owned config
  * read by its literal key like `BLOCKS_PUBLIC_ORIGIN`: a door's CloudFront domain
  * and custom domains, wildcard aliases included), and the gateway's own
  * `execute-api` host when the request reached the backend through it over HTTPS.

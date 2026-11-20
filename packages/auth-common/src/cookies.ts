@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Shared session-cookie security policy for all Blocks auth Building Blocks.
+ * Shared session-cookie security policy for all CDK Blocks auth Building Blocks.
  *
  * Historically each of the three auth BBs that `Auth` (`bb-auth`) has since
  * replaced — the removed `bb-auth-basic`, `bb-auth-cognito` and
@@ -109,7 +109,7 @@ export interface CookieSecurityAttributes {
  *   is plain-HTTP localhost.
  * @returns The `sameSite` / `secure` / `partitioned` values to apply.
  * @throws `AuthErrors.InsecureTransport` (`InsecureTransportException`, a
- *   branded Blocks error) for a same-origin cookie over a plain-HTTP front door
+ *   branded CDK Blocks error) for a same-origin cookie over a plain-HTTP front door
  *   (`plainHttpOrigin`, not localhost) outside a sandbox deploy: a session is
  *   never issued without `Secure` in production. A clearing cookie
  *   (`clearing`) is never refused, and neither is a cookie behind a door that
@@ -213,7 +213,7 @@ export function buildCookieSecurityAttrs(input: CookieSecurityInput): string {
  * The removed OIDC BB instead decided localhost-ness at construction time via
  * its runtime entry point (mock vs aws), so it did not call this.
  *
- * We can't sniff `https://` reliably because the Blocks dev server always
+ * We can't sniff `https://` reliably because the CDK Blocks dev server always
  * serves plain HTTP even when fronted by HTTPS in production.
  *
  * @param ctx - The request context.
@@ -231,12 +231,12 @@ export function isLoopbackRequest(ctx: BlocksContext): boolean {
  *
  * The local-vs-deployed half comes from deploy configuration
  * (`getDeploymentType()`, which reads the config synth stamps on every
- * Blocks-configured compute), never from a request header. So on deployed
+ * CDK Blocks-configured compute), never from a request header. So on deployed
  * compute a request that sends `Origin: http://localhost` cannot drop `Secure`
  * or `Partitioned`; the header only picks between loopback and non-loopback
  * callers of the local dev server and tests.
  *
- * On compute Blocks does not configure (no deploy config present) this falls
+ * On compute CDK Blocks does not configure (no deploy config present) this falls
  * back to the header check alone, the same boundary `getDeploymentType()`
  * documents.
  *
@@ -249,7 +249,7 @@ export function isLocalDevRequest(ctx: BlocksContext): boolean {
 
 /**
  * Whether the DEPLOYED public front door serves over plain HTTP, decided from
- * its OWN scheme rather than a request header. Blocks Hosting registers the
+ * its OWN scheme rather than a request header. CDK Blocks Hosting registers the
  * public origin as `BLOCKS_PUBLIC_ORIGIN` (the front door's URL: `https://…` for
  * CloudFront / a TLS ALB / a custom domain, `http://…` for an S3-website
  * endpoint or a TLS-less ALB). A `Secure` cookie set over such an HTTP door is

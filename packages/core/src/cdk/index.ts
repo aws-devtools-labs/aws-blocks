@@ -114,7 +114,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	 * `globalThis.CURRENT_BLOCKS_STACK.backendModulePath`.
 	 */
 	public readonly backendModulePath: string;
-	/** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
+	/** Shared IAM role assumed by all CDK Blocks compute. Building Blocks grant to this role. */
 	public readonly executionRole: cdk.aws_iam.IRole;
 	/** Infrastructure defaults for Building Blocks created under this stack. */
 	public readonly defaults: BlocksDefaults;
@@ -200,7 +200,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	private requireDefaultCompute(): LambdaShapedCompute {
 		if (!this._defaultCompute) {
 			throw new Error(
-				'Blocks stack not fully initialized — access .gateway/.apiUrl after BlocksStack.create() resolves.',
+				'AWS CDK Blocks stack not fully initialized — access .gateway/.apiUrl after BlocksStack.create() resolves.',
 			);
 		}
 		return this._defaultCompute as LambdaShapedCompute;
@@ -335,7 +335,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 			finalizeVpc(stack, options);
 			cdk.Annotations.of(stack).addInfoV2(
 				'blocks:vpc:derived',
-				'A Building Block required a VPC and none was provided, so Blocks created one ' +
+				'A Building Block required a VPC and none was provided, so AWS CDK Blocks created one ' +
 					'(with a NAT gateway, which has an ongoing cost). Pass `defaults.vpc: { network }` to ' +
 					'BlocksStack.create to bring your own. See packages/blocks/VPC.md.',
 			);
@@ -353,7 +353,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 
 		addBlocksStackMetadata(stack);
 
-		// The stack-level children AWS Blocks itself added: everything now on the
+		// The stack-level children CDK Blocks itself added: everything now on the
 		// stack except what the backend module added. Roles under the rest (the
 		// backend module's own constructs, and whatever the app adds after this
 		// returns) are app-owned unless a Building Block or framework helper sits
@@ -379,7 +379,7 @@ export class Scope extends Construct {
 	readonly bbVersion?: string;
 
 	/**
-	 * The owning stack/backend (the root of the Blocks construct tree), resolved
+	 * The owning stack/backend (the root of the CDK Blocks construct tree), resolved
 	 * once at construction: the nearest BlocksStack/BlocksBackend up the construct
 	 * tree, or the ambient `globalThis.CURRENT_BLOCKS_STACK` fallback. All
 	 * root-derived accessors below read from this instead of each repeating the
@@ -436,7 +436,7 @@ export class Scope extends Construct {
 		// exist, so they are checked when the tree is validated at synth.
 		ensureResourceNameCheck(this);
 		// An official Building Block (its `bbName` is one of OFFICIAL_BB_NAMES) marks
-		// the roles it creates as AWS Blocks' own for the service-principal trust
+		// the roles it creates as CDK Blocks' own for the service-principal trust
 		// check (see isAppOwnedRole in blocks-roles.ts). A plain `new Scope(...)`
 		// namespace and a `Scope` subclass the app writes (a custom block) stay
 		// unmarked, so their roles are the app's. Computes, `RawRoute` and
@@ -468,7 +468,7 @@ export class Scope extends Construct {
 	}
 
 	/**
-	 * The shared IAM role assumed by all Blocks compute. Building Blocks grant
+	 * The shared IAM role assumed by all CDK Blocks compute. Building Blocks grant
 	 * their permissions to this role; CDK's `grant*()` / `addToPrincipalPolicy()`
 	 * route those grants to the role's default (inline) policy.
 	 */
@@ -538,7 +538,7 @@ export class Scope extends Construct {
 	get backendStackName(): string {
 		const name = this.root instanceof BlocksBackend ? this.root.fullId : this.root.id;
 		if (!name) {
-			throw new Error('Owning Blocks stack/backend has no id to derive BLOCKS_STACK_NAME');
+			throw new Error('Owning AWS CDK Blocks stack/backend has no id to derive BLOCKS_STACK_NAME');
 		}
 		return name;
 	}
@@ -580,10 +580,10 @@ export class Scope extends Construct {
 		if (ambient) return ambient;
 		// No owning BlocksStack/BlocksBackend in the tree and none ambient — this is
 		// usually a deliberate test stub, but could be a real misconfiguration (a
-		// block built outside any Blocks backend). Fall back to the safe production
+		// block built outside any CDK Blocks backend). Fall back to the safe production
 		// posture, and log so it's debuggable if it fires unexpectedly.
 		console.warn(
-			`[Blocks] Scope "${this.id}" resolved infrastructure defaults with no owning ` +
+			`[AWS CDK Blocks] Scope "${this.id}" resolved infrastructure defaults with no owning ` +
 				'BlocksStack/BlocksBackend in scope; falling back to BlocksPresets.production.',
 		);
 		return BlocksPresets.production;

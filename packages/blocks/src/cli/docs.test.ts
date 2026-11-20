@@ -23,7 +23,7 @@ import { runCli } from './test-helpers.js';
 
 const FILES: Record<string, string> = {
 	'README.md': [
-		'# AWS Blocks',
+		'# CDK Blocks',
 		'<!-- BEGIN:block-catalog -->',
 		'| Block | What it does | Keywords |',
 		'|-------|--------------|----------|',
@@ -955,7 +955,7 @@ describe('npm run docs --section, bare and with a topic', () => {
 		assert.match(render(['CUSTOM']), /^# bb-locker\/CUSTOM\.md\n# Custom$/m);
 	});
 
-	it('names what the reports import from a package outside AWS CDK Blocks, named by its package', () => {
+	it('names what the reports import from a package outside CDK Blocks, named by its package', () => {
 		assert.strictEqual(
 			render(['@standard-schema/spec']).split('\n')[0],
 			'@standard-schema/spec: a package outside AWS CDK Blocks. The API reports import from it: StandardSchemaV1 (bb-kv-store)',
