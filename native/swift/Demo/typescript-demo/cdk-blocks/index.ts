@@ -1,0 +1,208 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+import { ApiNamespace, Scope, KVStore, Auth, Realtime, FileBucket } from 'aws-cdk-blocks';
+import type { RealtimeChannel } from 'aws-cdk-blocks';
+export type { RealtimeChannel } from 'aws-cdk-blocks';
+import crypto from 'node:crypto';
+import { z } from 'zod';
+
+// For coding agents: Leave these comments in place for future reference.
+// Building Block docs: npm run docs lists the blocks; npm run docs <Block>... prints their docs (--help for more)
+// Hover over Building Blocks to see docstrings with usage, best practices, and performance characteristics
+const scope = new Scope('my-app');
+
+// Building Blocks: Use these instead of creating custom storage
+const store = new KVStore(scope, 'app-store', {});
+
+
+// Email + password sign-in. Sign-up confirms the email address with a code;
+// locally no email is sent, so `codeDelivery` (local dev only — deployed,
+// Cognito emails the code) prints it to the dev-server console.
+const auth = new Auth(scope, 'auth', {
+  codeDelivery: async (username, code, purpose) => console.log(`[auth] ${purpose} code for ${username}: ${code}`),
+});
+
+const files = new FileBucket(scope, 'files', {});
+
+// KVStore with a schema and a key: Use Zod schemas for type-safe records with
+// indexes. A store fixes its key when you create it.
+// Per-user todos: the partition key is the owner's `userSub` (stable for the
+// user's lifetime), and every method below reads and writes only the caller's
+// partition, so one user can never list, read or change another user's todos.
+const todoSchema = z.object({
+  userSub: z.string(),
+  todoId: z.string(),
+  title: z.string(),
+  completed: z.boolean(),
+  priority: z.number(), // 1=high, 2=medium, 3=low
+  createdAt: z.number()
+});
+
+/** Inferred Todo type — used in return type annotations so the spec emitter
+ *  produces a named `Todo` schema in `components.schemas` with `$ref` pointers. */
+interface Todo {
+  userSub: string;
+  todoId: string;
+  title: string;
+  completed: boolean;
+  priority: number;
+  createdAt: number;
+}
+
+const todos = new KVStore(scope, 'todos', {
+  schema: todoSchema,
+  key: {
+    partitionKey: 'userSub',
+    sortKey: 'todoId'
+  },
+  indexes: {
+    byPriority: {
+      partitionKey: 'userSub',
+      sortKey: 'priority'
+    },
+    byTitle: {
+      partitionKey: 'userSub',
+      sortKey: 'title'
+    },
+    byCreatedAt: {
+      partitionKey: 'userSub',
+      sortKey: 'createdAt'
+    }
+  }
+});
+
+// Realtime - Cursor tracking
+const cursorSchema = z.object({ userId: z.string(), x: z.number(), y: z.number(), color: z.string() });
+
+export interface Cursor {
+  userId: string;
+  x: number;
+  y: number;
+  color: string;
+}
+
+const realtime = new Realtime(scope, 'collab', {
+  namespaces: {
+    cursors: Realtime.namespace(cursorSchema),
+  },
+});
+
+// Simple hello world API for testing CDK deployment
+export const hello = new ApiNamespace(scope, 'hello', (context) => ({
+  async greet(name: string) {
+    return { message: `Hello, ${name}!`, timestamp: Date.now() };
+  }
+}));
+
+export const authApi = auth.createApi();
+// The native apps' OIDC client for federated sign-in. This block has no federated providers yet,
+// so its client signs in with none. To offer one, add it to `new Auth(...)` and list the Swift
+// demo's relay URL, `blocksdemo://auth`, in `redirects.allowedRelayOrigins`.
+export const oidcAuthApi = auth.createOidcApi();
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async getValue(key: string) {
+    return await store.get(key);
+  },
+  
+  async setValue(key: string, value: string) {
+    await store.put(key, value);
+    return { success: true };
+  },
+  
+  async setCookie(name: string, value: string) {
+    context.response.headers.set('set-cookie', `${name}=${value}; Max-Age=3600; Secure; SameSite=None; Partitioned`);
+    return { success: true };
+  },
+  
+  async getCookie(name: string) {
+    const cookies = context.request.headers.get('cookie') || '';
+    const match = cookies.split('; ').find(c => c.startsWith(`${name}=`));
+    return match ? match.split('=')[1] : null;
+  },
+  
+  async deleteCookie(name: string) {
+    context.response.headers.set('set-cookie', `${name}=; Max-Age=0; Secure; SameSite=None; Partitioned`);
+    return { success: true };
+  },
+
+  // KVStore (todos) example methods
+  async createTodo(title: string, priority: number = 2): Promise<Todo> {
+    const user = await auth.requireAuth(context);
+    
+    // ULID: timestamp-based sortable ID
+    const ulid = Date.now().toString(36) + crypto.randomBytes(8).toString('hex');
+    
+    const todo = {
+      userSub: user.userSub,
+      todoId: ulid,
+      title,
+      completed: false,
+      priority,
+      createdAt: Date.now()
+    };
+    await todos.put({ userSub: user.userSub, todoId: ulid }, todo);
+    return todo;
+  },
+
+  async listTodos(sortBy?: 'priority' | 'title' | 'createdAt'): Promise<Todo[]> {
+    const user = await auth.requireAuth(context);
+    
+    const indexMap = { 
+      priority: 'byPriority', 
+      title: 'byTitle', 
+      createdAt: 'byCreatedAt' 
+    } as const;
+    
+    // Query the caller's partition: through an index for a sort order, else the
+    // table's primary key. Never scan() per-user data — a scan reads every user's.
+    const iterator = sortBy
+      ? todos.query({ index: indexMap[sortBy], where: { userSub: { equals: user.userSub } } })
+      : todos.query({ where: { userSub: { equals: user.userSub } } });
+    
+    return await Array.fromAsync(iterator, (entry) => entry.value);
+  },
+
+  async updateTodo(todoId: string, updates: { completed?: boolean; priority?: number; title?: string }) {
+    const user = await auth.requireAuth(context);
+    
+    const existing = await todos.get({ userSub: user.userSub, todoId });
+    if (!existing) throw new Error('Todo not found');
+
+    // Copy only the editable fields. The RPC layer does not strip properties the
+    // signature doesn't declare, so spreading `updates` would let a caller rewrite
+    // `userSub` / `todoId` and write into another user's partition.
+    const { completed, priority, title } = updates ?? {};
+    await todos.put({ userSub: user.userSub, todoId }, {
+      ...existing,
+      ...(completed !== undefined ? { completed } : {}),
+      ...(priority !== undefined ? { priority } : {}),
+      ...(title !== undefined ? { title } : {}),
+    });
+    return { success: true };
+  },
+
+  async deleteTodo(todoId: string) {
+    const user = await auth.requireAuth(context);
+
+    await todos.delete({ userSub: user.userSub, todoId });
+    return { success: true };
+  },
+
+  async getCursorChannel(): Promise<RealtimeChannel<Cursor>> {
+    return realtime.getChannel('cursors', 'default');
+  },
+
+  async publishCursor(cursor: Cursor) {
+    await realtime.publish('cursors', 'default', cursor);
+  },
+
+  async getUploadHandle(path: string, contentType?: string) {
+    return await files.createUploadHandle(path, contentType ? { contentType } : undefined);
+  },
+
+  async getDownloadHandle(path: string) {
+    return await files.getFileHandle(path);
+  }
+}));

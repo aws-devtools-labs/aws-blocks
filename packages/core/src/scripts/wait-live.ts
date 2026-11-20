@@ -21,10 +21,10 @@
 // check runs.
 
 import { BLOCKS_BUILD_ID_CONFIG_KEY } from '../common/constants.js';
-import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
+import { BLOCKS_SANDBOX_SERVED_DIR } from '../common/constants.js';
 
 /** Public path of the runtime config, relative to the frontend origin. */
-export const CONFIG_PROBE_PATH = `/${BLOCKS_SANDBOX_DIR}/config.json`;
+export const CONFIG_PROBE_PATH = `/${BLOCKS_SANDBOX_SERVED_DIR}/config.json`;
 
 export { BLOCKS_BUILD_ID_CONFIG_KEY };
 

@@ -5,7 +5,7 @@ import { test, describe, mock, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { BedrockAgentRuntimeClient } from '@aws-sdk/client-bedrock-agent-runtime';
 import { BedrockAgentClient } from '@aws-sdk/client-bedrock-agent';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { KnowledgeBaseErrors, KnowledgeBase, type IngestionFailureCause } from './index.aws.js';
 
 // ── SDK mock helpers ───────────────────────────────────────────────────────

@@ -17,7 +17,7 @@ import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import * as realCore from '@aws-blocks/core/scripts';
+import * as realCore from '@aws-cdk-blocks/core/scripts';
 import type { SpawnSpec } from './context.js';
 import { type FakeRun, fixtureApp, runCli } from './test-helpers.js';
 
@@ -144,7 +144,7 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 				outputs.join(''),
 				/^Usage: npm run db -- <command> \[options\]\n[\s\S]*\n {2}types \[--name <name>\] \[--schema <schema>\] \[--out <file>\]\n/,
 			);
-			assert.deepStrictEqual(readdirSync(root).sort(), ['.blocks', 'aws-blocks', 'package.json']);
+			assert.deepStrictEqual(readdirSync(root).sort(), ['.cdk-blocks', 'cdk-blocks', 'package.json']);
 		}
 	});
 
@@ -157,15 +157,15 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 			outputs.join(''),
 			/^Usage: npm run db -- <command> \[options\]\n[\s\S]*\n {2}migrate \[dir\] \[--name <name>\] \[--schema <schema>\] \[--types <file> \| --no-types\]\n/,
 		);
-		assert.ok(!existsSync(join(root, '.bb-data')));
+		assert.ok(!existsSync(join(root, '.cdk-blocks/local/data')));
 	});
 
 	it('vendorize help prints usage without starting the vendorize process', async () => {
 		for (const argv of [
-			['help', 'vendorize', '@aws-blocks/bb-kv-store'],
-			['vendorize', '@aws-blocks/bb-kv-store', '--help'],
+			['help', 'vendorize', '@aws-cdk-blocks/bb-kv-store'],
+			['vendorize', '@aws-cdk-blocks/bb-kv-store', '--help'],
 		]) {
-			const root = fixtureApp({ workspaces: ['aws-blocks'] });
+			const root = fixtureApp({ workspaces: ['cdk-blocks'] });
 			const run = await runCli(argv, { cwd: root, onSpawn: realSpawn([]) });
 			assert.strictEqual(run.code, 0, run.stderr);
 			assert.match(run.stdout, /Usage: npm run vendorize/);
@@ -175,12 +175,12 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 	});
 
 	it('the real vendorize bin prints usage for --help anywhere, before it copies or installs', () => {
-		const root = fixtureApp({ workspaces: ['aws-blocks'] });
+		const root = fixtureApp({ workspaces: ['cdk-blocks'] });
 		const bin = fileURLToPath(new URL('../vendorize.js', import.meta.url));
-		const child = spawnSync(process.execPath, [bin, '@aws-blocks/bb-kv-store', '--force', '--help'], {
+		const child = spawnSync(process.execPath, [bin, '@aws-cdk-blocks/bb-kv-store', '--force', '--help'], {
 			cwd: root,
 			encoding: 'utf-8',
-			env: { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1' },
+			env: { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1' },
 		});
 		assert.strictEqual(child.status, 0, child.stderr);
 		assert.match(child.stdout, /^Usage: npm run vendorize <package-name> \[-- --force\]/);
@@ -258,7 +258,7 @@ describe('delegated commands: input, confirmations and usage errors', () => {
 			assert.strictEqual(run.code, 2, run.stderr + outputs.join(''));
 			assert.deepStrictEqual(run.spawned[0].args.slice(1), ['connect', '--no-input']);
 			assert.match(outputs.join(''), /pass the connection string on stdin with --value-stdin/);
-			assert.ok(!existsSync(join(cwd, '.bb-data')));
+			assert.ok(!existsSync(join(cwd, '.cdk-blocks/local/data')));
 		}
 	});
 });

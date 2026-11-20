@@ -1,4 +1,4 @@
-import { Auth, AuthErrors } from '@aws-blocks/bb-auth';
+import { Auth, AuthErrors } from '@aws-cdk-blocks/bb-auth';
 
 // Re-exported under their old names: a local export of a renamed import.
 export { Auth as AuthCognito, AuthErrors as AuthCognitoErrors };

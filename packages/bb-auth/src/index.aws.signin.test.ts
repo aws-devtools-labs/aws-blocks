@@ -17,7 +17,7 @@ import assert from 'node:assert';
 import crypto from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { AuthErrors, type SignInNextStep } from './index.aws.js';
 import {
 	Browser,
@@ -39,8 +39,8 @@ function stepSession(step: SignInNextStep): string {
 	return 'session' in step ? step.session : '';
 }
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 describe('AWS signIn (USER_PASSWORD_AUTH)', () => {
 	test('sends InitiateAuth with USER_PASSWORD_AUTH, the client id, and USERNAME/PASSWORD', async () => {

@@ -58,7 +58,7 @@ const ALLOW_EXACT = new Set([
 	'AWS_REGION',
 	'AWS_DEFAULT_REGION',
 	// the framework's telemetry opt-out (a flag, not a credential)
-	'AWS_BLOCKS_DISABLE_TELEMETRY',
+	'CDK_DISABLE_CLI_TELEMETRY',
 	// the scaffolded app the builder works in
 	'WORKSPACE',
 ]);
@@ -79,7 +79,7 @@ const ALLOW_PREFIXES = ['LC_', 'NPM_CONFIG_', 'npm_config_', 'PLAYWRIGHT_', 'BLO
 // PATH keeps only system dirs and the dir of the node running the harness (the exec-path lockdown in
 // isolation.mjs verifies the agent user cannot write either); NODE_OPTIONS keeps only flags that
 // load no code.
-const AWS_NON_CREDENTIAL = new Set(['AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_BLOCKS_DISABLE_TELEMETRY']);
+const AWS_NON_CREDENTIAL = new Set(['AWS_REGION', 'AWS_DEFAULT_REGION', 'CDK_DISABLE_CLI_TELEMETRY']);
 const HARD_CREDENTIAL_EXACT = new Set([
 	'GITHUB_TOKEN',
 	'GH_TOKEN',

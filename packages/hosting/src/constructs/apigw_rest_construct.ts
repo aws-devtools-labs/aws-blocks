@@ -19,8 +19,8 @@
  *   - each static route pattern   → the asset-proxy Lambda (streams from the
  *     PRIVATE S3 bucket) — the REST analogue of CloudFront's S3+OAC.
  *   - the image prefix            → the image-opt Lambda.
- *   - every API path (`/aws-blocks/*` plus the backend's raw routes, or
- *     `/aws-blocks/api/<ns>/*`) → an `HTTP_PROXY` integration straight to the
+ *   - every API path (`/cdk-blocks/*` plus the backend's raw routes, or
+ *     `/cdk-blocks/api/<ns>/*`) → an `HTTP_PROXY` integration straight to the
  *     backend (same-origin; no forwarder Lambda).
  *
  * SSR streams: a streaming server is integrated with
@@ -34,7 +34,7 @@
  * response headers and error pages are applied by the asset proxy with the
  * CloudFront door's semantics; responses routed straight to the server, the
  * image function or the backend don't pass through it, which synth reports
- * (`@aws-blocks/hosting:DoorRulesNotApplied`).
+ * (`@aws-cdk-blocks/hosting:DoorRulesNotApplied`).
  *
  * Trade-offs: no global edge cache, no per-route response headers on
  * server/API responses (synth names them), no skew protection, a ~10 MB
@@ -70,6 +70,7 @@ import {
 	apiPathToRoutes,
 	routableApiPaths,
 	backendBaseUrl,
+	BLOCKS_PATH_PREFIXES,
 	DEFAULT_API_PATHS,
 	globToProxyPath,
 	hasInnerWildcard,
@@ -88,9 +89,9 @@ export type ApiGatewayRestConstructProps = {
 	domain?: ApiGwCustomDomain;
 	/**
 	 * Every path pattern the single-compute (`'*'`) backend serves — the
-	 * `DoorInput.origins.api.paths`: `/aws-blocks/*` plus the backend's raw
+	 * `DoorInput.origins.api.paths`: `/cdk-blocks/*` plus the backend's raw
 	 * routes. Each becomes a resource proxied to the same path on the backend.
-	 * @default ['/aws-blocks/*']
+	 * @default ['/cdk-blocks/*', '/aws-blocks/*']
 	 */
 	apiPaths?: readonly string[];
 	/**
@@ -209,7 +210,7 @@ export class ApiGatewayRestConstruct extends Construct {
 
 		// Same-origin backend routing via native HTTP_PROXY (no forwarder Lambda).
 		// A lone `'*'` origin is the single-compute case (every API path → one
-		// backend); a named namespace path-routes `/aws-blocks/api/<ns>/*` to that
+		// backend); a named namespace path-routes `/cdk-blocks/api/<ns>/*` to that
 		// compute's ingress.
 		const httpProxy = (uri: string): Integration =>
 			new Integration({
@@ -240,13 +241,13 @@ export class ApiGatewayRestConstruct extends Construct {
 		};
 		const backendPaths = new Set<string>();
 		for (const origin of plan.backend?.origins ?? []) {
-			// Split the ingress URL on the `/aws-blocks/api` suffix (token-safe) to
+			// Split the ingress URL on the `/cdk-blocks/api` suffix (token-safe) to
 			// get the backend base — same shape whether Lambda API Gateway, an ALB,
 			// or a BYOC endpoint.
 			const base = backendBaseUrl(origin.ingress.url); // https://…/prod
 			if (origin.namespace === '*') {
-				// Every API path: `/aws-blocks/*` (RPC, and sign-in at
-				// `/aws-blocks/auth/*`) plus the backend's raw routes.
+				// Every API path: `/cdk-blocks/*` (RPC, and sign-in at
+				// `/cdk-blocks/auth/*`) plus the backend's raw routes.
 				for (const pattern of routableApiPaths(this, 'API Gateway (REST)', props.apiPaths ?? DEFAULT_API_PATHS)) {
 					for (const route of apiPathToRoutes(pattern, 'API Gateway (REST)')) {
 						if (backendPaths.has(route.path)) continue;
@@ -257,7 +258,9 @@ export class ApiGatewayRestConstruct extends Construct {
 				}
 			} else {
 				const ns = origin.namespace;
-				addProxyRoute(`/aws-blocks/api/${ns}/{proxy+}`, `${base}/aws-blocks/api/${ns}/{proxy}`);
+				for (const prefix of BLOCKS_PATH_PREFIXES) {
+					addProxyRoute(`${prefix}/api/${ns}/{proxy+}`, `${base}/cdk-blocks/api/${ns}/{proxy}`);
+				}
 			}
 		}
 
@@ -274,7 +277,7 @@ export class ApiGatewayRestConstruct extends Construct {
 				continue;
 			}
 			if (path === null || seen.has(path) || backendPaths.has(path)) continue;
-			if (path.startsWith('/aws-blocks/')) continue; // backend owns these
+			if (path.startsWith('/cdk-blocks/') || path.startsWith('/aws-blocks/')) continue; // backend owns these
 			seen.add(path);
 			this.api.root.resourceForPath(path).addMethod('ANY', assetIntegration);
 		}
@@ -287,7 +290,7 @@ export class ApiGatewayRestConstruct extends Construct {
 			}
 			const path = globToProxyPath(entry.pattern);
 			if (path === null || seen.has(path) || backendPaths.has(path)) continue;
-			if (path.startsWith('/aws-blocks/')) continue; // backend owns these
+			if (path.startsWith('/cdk-blocks/') || path.startsWith('/aws-blocks/')) continue; // backend owns these
 			seen.add(path);
 			this.api.root.resourceForPath(path).addMethod('ANY', integrationForKind(entry.kind));
 		}

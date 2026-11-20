@@ -2,7 +2,7 @@
 
 Design document for the Email Building Block. For usage, examples, best practices, and scaling guidance, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-email-client`
+**Package:** `@aws-cdk-blocks/bb-email-client`
 **Type:** Primitive (new infrastructure)
 **AWS Service:** Amazon SES
 
@@ -17,7 +17,7 @@ Creates no SES resources. The CDK layer only:
 - **IAM Permissions:** grants `ses:SendEmail` and `ses:SendBulkEmail` to the parent scope's handler automatically, on this account's SES identities and configuration sets in the stack's own region and partition
 - **VPC endpoint requirement:** declares the SES interface endpoint, which the shared VPC layer provisions when the app's compute runs in a VPC
 - **Synth warning:** prints a prerequisite notice that the domain for `fromAddress` must be verified in SES, with a link to the [SES identity setup guide](https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html). A sender on a reserved domain gets the reserved-domain warning below instead, which links the same guide. SES itself is not queried at synth or deploy time.
-- **Reserved-domain check:** at synth, a `fromAddress` on a reserved domain (`example.com`/`.net`/`.org` and subdomains; the `.test`, `.example`, `.invalid` and `.localhost` TLDs, per RFC 2606 and RFC 6761) adds the acknowledgeable CDK warning `@aws-blocks/bb-email-client:UnverifiableSender`, because such a domain can never be verified and every send would fail. A reserved `replyTo` address adds `@aws-blocks/bb-email-client:UndeliverableReplyTo`. Both are warnings on every stage (sandbox and production); the check is purely on the address string.
+- **Reserved-domain check:** at synth, a `fromAddress` on a reserved domain (`example.com`/`.net`/`.org` and subdomains; the `.test`, `.example`, `.invalid` and `.localhost` TLDs, per RFC 2606 and RFC 6761) adds the acknowledgeable CDK warning `@aws-cdk-blocks/bb-email-client:UnverifiableSender`, because such a domain can never be verified and every send would fail. A reserved `replyTo` address adds `@aws-cdk-blocks/bb-email-client:UndeliverableReplyTo`. Both are warnings on every stage (sandbox and production); the check is purely on the address string.
 
 **Prerequisites (out of band):**
 
@@ -36,7 +36,7 @@ No SNS topics for bounce/complaint handling, no SES templates, no dedicated IP p
 	  Subject:   Welcome!
 	  Body:      Thanks for signing up.
 	```
-- Emails are also written to `.bb-data/{scope.fullId}/emails.json` as a JSON array for programmatic inspection. Each entry includes `to`, `subject`, `body`, `html` (if provided), `from`, `messageId`, and `timestamp` (ISO 8601).
+- Emails are also written to `.cdk-blocks/local/data/{scope.fullId}/emails.json` as a JSON array for programmatic inspection. Each entry includes `to`, `subject`, `body`, `html` (if provided), `from`, `messageId`, and `timestamp` (ISO 8601).
 - `sendBatch()` calls `send()` once per message, so each message is appended to the same file in its own write.
 - Mock validates email address format (basic RFC 5322 check) and throws `InvalidInputException` for malformed addresses.
 
@@ -46,6 +46,7 @@ The mock and the AWS entry point run the same checks from `src/validation.ts` be
 
 - every address (To, CC, BCC, the sender and any reply-to) is a basic RFC 5322 addr-spec, or a name-addr, which SES also accepts. The display name must be a phrase of atoms separated by spaces (`Jane Doe <jane@example.com>`) or a single quoted-string (`"Doe, Jane" <jane@example.com>`), so a comma or semicolon outside quotes can't make one entry a list of addresses. The raw string is checked as given (no trimming). C0 and C1 control characters (CR, LF and NEL included), DEL, U+2028 and U+2029 are rejected, and the address is shown in the error message with control characters escaped;
 - at most 50 recipients per message (To + CC + BCC) → `InvalidInputException`;
+- the subject contains no C0 or C1 control characters (CR, LF and NEL included), DEL, U+2028 or U+2029 → `InvalidInputException`. A subject is one header line and SES rejects one with a line break; the subject is rejected rather than stripped, and is not echoed in the error message. SES documents no subject length limit, so none is checked;
 - at most 40 MB per message → `EmailSendFailedException`. This is an approximate early check: it measures the message as JSON, without MIME headers or transfer-encoding overhead (base64 or quoted-printable adds about a third), so a message somewhat under 40 MB can still be rejected by SES once encoded, with an SES error instead.
 
 `send()` throws; within `sendBatch()` an invalid message is marked `failed` in the per-entry results and not sent.

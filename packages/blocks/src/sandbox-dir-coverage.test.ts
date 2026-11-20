@@ -1,59 +1,56 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import assert from 'node:assert';
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 /**
- * Regression guard: the sandbox state directory and the URL it is served at must
- * rename TOGETHER, everywhere.
+ * Regression guard: the sandbox state directory finished its rename.
  *
- * `.cdk-blocks-sandbox` is two things wearing one string. It is a path on disk
- * (`<projectRoot>/.cdk-blocks-sandbox/sandbox-id.txt`) and it is a public URL
- * path (`GET /.cdk-blocks-sandbox/config.json`, published by the Hosting
- * construct as a CloudFront static behaviour and answered by the dev server).
- * The two populations are indistinguishable as text, which is exactly how the
- * `aws-blocks/` → `cdk-blocks/` rename broke 24 tests: a sweep that renames the
- * disk paths and misses the published path leaves a browser asking for a URL
- * nothing serves, and the client cannot resolve its API URL at all.
+ * The directory holding an app's per-deploy state moved from `.blocks-sandbox` to
+ * `.cdk-blocks-sandbox` for the CDK Blocks rebrand. The PUBLISHED path did not move
+ * with it — it is a public URL an already-deployed frontend asks for, so it stayed
+ * (D-031), and it is guarded separately in `sandbox-url-decoupling.test.ts`.
  *
- * Neither name is centralized enough to make this a type error. `BLOCKS_SANDBOX_DIR`
- * (disk) and `BLOCKS_SANDBOX_PREFIX` (URL) are two separate constants with, between
- * them, a handful of callers; the overwhelming majority of references are hardcoded
- * literals in templates, test apps, gitignores, `cdk.json` watch-excludes and CI
- * workflows. Renaming the constants compiles clean while hundreds of literals still
- * say the old name, and nothing goes red.
+ * That leaves the old string legitimately live, which is what shapes this guard. It
+ * cannot simply forbid the old name: a test spells both, because it asserts on each.
+ * So the scan is scoped to SHIPPED SOURCE, where the rule is exact — product code
+ * reaches for a constant, and only two declarations may name the old string: the
+ * migration's source directory and the published directory.
  *
- * So this guard checks BOTH directions:
+ * The rename itself was never type-checked. The overwhelming majority of references
+ * were hardcoded literals in templates, test apps, gitignores, `cdk.json`
+ * watch-excludes and CI workflows, so renaming the constants compiled clean while
+ * hundreds of literals still said the old name. The `aws-blocks/` → `cdk-blocks/`
+ * rename broke 24 tests the same way.
  *
- *  1. NEGATIVE — no live reference to the old name survives. Every git-tracked
- *     file is scanned for `.blocks-sandbox`. Historical records that must keep the
- *     old name (published changelogs, decision records, the legacy-app migration
- *     fixture) are named in {@link HISTORICAL_FILES} with a reason. Shipped source
- *     may name the old directory ONLY as the migration's legacy-source constant
- *     (see {@link LEGACY_CONSTANT}), because the copy-forward step has to know
- *     where to read from.
+ * It checks two things:
  *
- *  2. POSITIVE — every COUPLED site carries the new name. A sweep that renames the
- *     disk constant and forgets the CloudFront behaviour would pass a
- *     "no old references" check in isolation only if it also deleted the site; these
- *     assertions pin each coupled site by content, so a missing edit fails loudly
- *     and names the site. {@link COUPLED_SITES} is the list the PR had to move as
- *     one unit.
+ *  1. No filesystem path in shipped source still names the old directory. A missed
+ *     one reads or writes a directory the current toolchain does not maintain — for
+ *     `sandbox-id.txt` that means minting a new id and orphaning the customer's
+ *     stack.
+ *
+ *  2. Every site that had to move carries the new name, pinned by surrounding content
+ *     rather than by line number, so a deleted edit fails as loudly as a stale one.
  *
  * It is a TEXT scan, not a runtime import: most of the surface is JSON, YAML,
  * gitignores and template files that no import can reach.
  *
  * Run: node --test dist/sandbox-dir-coverage.test.js
  */
+import assert from 'node:assert';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const pkgRoot = fileURLToPath(new URL('..', import.meta.url));
 const repoRoot = join(pkgRoot, '..', '..');
 
-/** The directory and served path this repo uses now. */
+/**
+ * The ON-DISK directory this repo uses now. The PUBLISHED path is deliberately
+ * still the old name and is guarded separately (`sandbox-url-decoupling.test.ts`,
+ * D-031), so this file no longer asserts anything about the served path.
+ */
 const CURRENT = '.cdk-blocks-sandbox';
 
 /** The name it was renamed FROM. Spelled in pieces so this file is not itself a hit. */
@@ -61,40 +58,29 @@ const LEGACY = `.blocks${'-'}sandbox`;
 
 /**
  * The one declaration allowed to name the legacy directory in shipped source: the
- * migration reads the old location to copy state forward (D-030). Any OTHER
+ * migration reads the old location to copy state forward (D-031). Any OTHER
  * occurrence in a shipped `src` tree is a missed rename.
  */
 const LEGACY_CONSTANT = 'LEGACY_SANDBOX_DIR';
 
 /**
- * Files that must KEEP the legacy name, each with a reason. Keep this list SHORT —
- * every entry is a record of the past, not a place to park a missed rename.
+ * The other declaration allowed to name it: the PUBLISHED directory, which kept the
+ * old name on purpose because it is a public URL an already-deployed frontend asks
+ * for (D-031). Guarded in `sandbox-url-decoupling.test.ts`.
  */
-const HISTORICAL_FILES: Record<string, string> = {
-	'docs/DECISIONS.md': 'decision records are preserved as originally written; D-030 records the rename',
-	'packages/blocks/test-fixtures/migrate-apps.json':
-		'fixtures of pre-migration apps — the migrate test asserts against the OLD layout',
-	'.changeset/cdk-blocks-sandbox-dir-rename.md':
-		'the release note for the rename itself — it has to name the directory it renames FROM, and tell users which path stops being served',
-	'native/kotlin/.changeset/cdk-blocks-sandbox-dir-rename.md':
-		"the Kotlin release note for the same rename: it names the directory the codegen task's error message used to point at",
-};
-
-/** Published changelog entries describe shipped releases and cannot be rewritten. */
-const isChangelog = (path: string): boolean => path.endsWith('CHANGELOG.md');
+const SERVED_CONSTANT = 'BLOCKS_SANDBOX_SERVED_DIR';
 
 /**
- * Individual lines that must KEEP the legacy name, keyed by file and matched by a
- * substring that identifies them. Unlike {@link HISTORICAL_FILES} this leaves the
- * rest of the file guarded, so a NEW stale reference in one of them still fails.
+ * Shipped source naming the published path as TEXT: a comment has no interpolation to
+ * make, and `@aws-cdk-blocks/hosting` cannot import the constant at all. Each entry is safe
+ * only because the file has no disk-facing sandbox path to confuse it with, which
+ * `sandbox-url-decoupling.test.ts` asserts. Do not add a file that touches both.
  */
-const LEGACY_NAME_REQUIRED_LINES: Record<string, readonly string[]> = {
-	// The copy-forward leaves the old directory on disk, so it must stay ignored.
-	'.gitignore': [`${LEGACY}/`],
-	// Prose about an app's state BEFORE upgrading, which really was at the old path.
-	'.changeset/core-deploy-config-per-stage.md': ['may still have a deployed URL in'],
-	// The harness deploys a release from before the rename and reads the outputs file that the release wrote.
-	'test-apps/comprehensive/test/upgrade-sql-blocks.ts': ["for (const dir of ['.cdk-blocks-sandbox',"],
+const SERVED_PATH_AS_TEXT: Record<string, string> = {
+	'packages/hosting/src/': 'does not depend on core, so it cannot interpolate the served-path constant at all',
+	'packages/core/src/hosting.ts':
+		'comments and JSDoc describing the published path, including the customer-facing warning',
+	'packages/core/src/scripts/wait-live.ts': 'comments describing the published path it probes',
 };
 
 /** Every git-tracked file, repo-relative. */
@@ -116,24 +102,22 @@ function readText(path: string): string | null {
 	}
 }
 
-test('no live reference to the legacy sandbox directory survives', () => {
+test('shipped source names the pre-rename directory only where it must', () => {
 	const offenders: string[] = [];
 
+	// Scoped to shipped source: a test spells both names, so a scan over tests could not
+	// tell a missed rename from a deliberate published path.
 	for (const path of trackedFiles()) {
-		if (path === 'packages/blocks/src/sandbox-dir-coverage.test.ts') continue;
-		if (isChangelog(path) || path in HISTORICAL_FILES) continue;
+		if (!/^packages\/[^/]+\/src\//.test(path) || path.includes('.test.')) continue;
+		if (Object.keys(SERVED_PATH_AS_TEXT).some((prefix) => path.startsWith(prefix))) continue;
 
 		const text = readText(path);
 		if (text === null || !text.includes(LEGACY)) continue;
 
-		const isShippedSource = /^packages\/[^/]+\/src\//.test(path) && !path.includes('.test.');
-		const allowedProse = LEGACY_NAME_REQUIRED_LINES[path] ?? [];
-
 		for (const [i, line] of text.split('\n').entries()) {
 			if (!line.includes(LEGACY)) continue;
-			// The migration's legacy-source constant is the one permitted mention in source.
-			if (isShippedSource && line.includes(LEGACY_CONSTANT)) continue;
-			if (allowedProse.some((marker) => line.includes(marker))) continue;
+			// The migration's source directory, and the published directory (D-031).
+			if (line.includes(LEGACY_CONSTANT) || line.includes(SERVED_CONSTANT)) continue;
 			offenders.push(`${path}:${i + 1}: ${line.trim()}`);
 		}
 	}
@@ -141,21 +125,21 @@ test('no live reference to the legacy sandbox directory survives', () => {
 	assert.deepStrictEqual(
 		offenders,
 		[],
-		`${offenders.length} reference(s) still name the legacy sandbox directory "${LEGACY}".\n` +
-			`The directory name is ALSO the public URL the browser client fetches its config from, so a partial\n` +
-			`rename leaves a deployed page unable to resolve its API URL. Rename every site below, or — if the\n` +
-			`mention is a record of the past — name the file in HISTORICAL_FILES with a reason.\n\n` +
-			`${offenders.join('\n')}\n`,
+		`${offenders.length} line(s) of shipped source name "${LEGACY}" outside the two declarations allowed to.\n` +
+			`The state directory moved to "${CURRENT}"; only the PUBLISHED path kept the old name, and it is read\n` +
+			`through ${SERVED_CONSTANT}. A literal anywhere else is either a missed disk rename — which for the\n` +
+			`sandbox id means minting a new one and orphaning the customer's stack — or a published path that\n` +
+			`should be reading the constant.\n\n${offenders.join('\n')}\n`,
 	);
 });
 
 /**
- * The sites that had to move as ONE unit: the disk constant, the URL constant, the
- * published CloudFront behaviour and its invalidation paths, the S3 key prefix, the
- * dual-purpose build-output site that is both a disk path and the S3 key, the
- * browser fetch, the dev server's local mirror of the published path, both committed
- * Next.js route directories, and the gitignore pair that keeps those routes
- * committed while ignoring the state directory.
+ * The sites the rename had to move, pinned by content: the disk constant itself, and
+ * the three gitignore entries that decide what is committable — the state directory
+ * ignored under its new name, the pre-rename directory still ignored because the
+ * migration leaves it on disk, and the negation that keeps the template's route
+ * directory committed. The publishing sites are pinned in
+ * `sandbox-url-decoupling.test.ts` instead, since they follow the served name.
  */
 const COUPLED_SITES: ReadonlyArray<{
 	readonly site: string;
@@ -170,48 +154,6 @@ const COUPLED_SITES: ReadonlyArray<{
 		why: 'the on-disk state directory every script reads and writes',
 	},
 	{
-		site: 'URL constant',
-		file: 'packages/core/src/constants.ts',
-		needle: `export const BLOCKS_SANDBOX_PREFIX = '/${CURRENT}';`,
-		why: 'the served path the dev server answers, mirroring CloudFront',
-	},
-	{
-		site: 'CloudFront static behaviour',
-		file: 'packages/core/src/hosting.ts',
-		needle: `pattern: \`/\${BLOCKS_SANDBOX_DIR}/*\``,
-		why: 'publishes the config path from S3 instead of routing it to compute',
-	},
-	{
-		site: 'S3 key prefix',
-		file: 'packages/core/src/hosting.ts',
-		needle: 'const configKeyPrefix = hosting.websiteBucket ? BLOCKS_SANDBOX_DIR',
-		why: 'the key the resolved config is uploaded to — it IS the URL path',
-	},
-	{
-		site: 'CloudFront invalidation paths',
-		file: 'packages/core/src/hosting.ts',
-		needle: 'distributionPaths: [`/builds/${buildId}/${BLOCKS_SANDBOX_DIR}/*`',
-		why: 'a redeploy must clear the edge entry at the path it actually publishes',
-	},
-	{
-		site: 'build-output coupling site',
-		file: 'packages/core/src/hosting.ts',
-		needle: 'const blocksSandboxDir = join(staticDir, BLOCKS_SANDBOX_DIR);',
-		why: 'a path on disk that becomes the S3 key, hence the URL — both roles at once',
-	},
-	{
-		site: 'browser fetch',
-		file: 'packages/core/src/client/index.ts',
-		needle: 'await fetch(`${BLOCKS_SANDBOX_PREFIX}/config.json`)',
-		why: 'the request a deployed page makes to resolve its API URL',
-	},
-	{
-		site: 'static-asset exclusion',
-		file: 'packages/hosting/src/constructs/s3_website_construct.ts',
-		needle: `exclude: ['${CURRENT}/*'`,
-		why: 'keeps the build-time placeholder from clobbering the real config',
-	},
-	{
 		site: 'root gitignore: ignore the state directory',
 		file: '.gitignore',
 		needle: `${CURRENT}/`,
@@ -220,8 +162,8 @@ const COUPLED_SITES: ReadonlyArray<{
 	{
 		site: 'root gitignore: keep the committed route directories',
 		file: '.gitignore',
-		needle: `!/packages/create-blocks-app/templates/*/src/app/${CURRENT}/`,
-		why: 'without this negation the template route silently stops being committed, and a scaffolded app 404s on its own config',
+		needle: `!/packages/create-blocks-app/templates/*/src/app/${LEGACY}/`,
+		why: "the route directory's name is the PUBLISHED path, which kept the old name (D-031); without this negation the template route silently stops being committed and a scaffolded app 404s on its own config",
 	},
 	{
 		site: 'root gitignore: keep ignoring the pre-rename directory',
@@ -252,35 +194,17 @@ test('every coupled site carries the current name', () => {
 	);
 });
 
-test('the disk constant and the served-path constant name the same directory', () => {
-	const disk = readText('packages/core/src/common/constants.ts') ?? '';
-	const url = readText('packages/core/src/constants.ts') ?? '';
-
-	const diskMatch = disk.match(/export const BLOCKS_SANDBOX_DIR = '([^']+)';/);
-	const urlMatch = url.match(/export const BLOCKS_SANDBOX_PREFIX = '([^']+)';/);
-
-	assert.ok(diskMatch, 'BLOCKS_SANDBOX_DIR declaration not found in packages/core/src/common/constants.ts');
-	assert.ok(urlMatch, 'BLOCKS_SANDBOX_PREFIX declaration not found in packages/core/src/constants.ts');
-	assert.strictEqual(
-		urlMatch[1],
-		`/${diskMatch[1]}`,
-		`BLOCKS_SANDBOX_PREFIX (${urlMatch[1]}) is not BLOCKS_SANDBOX_DIR (${diskMatch[1]}) served at the root.\n` +
-			`The Hosting construct publishes the directory under its own name, so the served path is the disk name\n` +
-			`with a leading slash. If these diverge, the browser fetches a path nothing publishes.`,
-	);
-});
-
 /** The served route is a committed directory whose NAME is the URL, in both the template and its test-app twin. */
 const SERVED_ROUTE_DIRS: readonly string[] = [
-	`packages/create-blocks-app/templates/nextjs/src/app/${CURRENT}/config.json/route.ts`,
-	`test-apps/hosting-ssr/src/app/${CURRENT}/config.json/route.ts`,
+	`packages/create-blocks-app/templates/nextjs/src/app/${LEGACY}/config.json/route.ts`,
+	`test-apps/hosting-ssr/src/app/${LEGACY}/config.json/route.ts`,
 ];
 
-test('the committed served-route directories are renamed, and read the renamed directory', () => {
+test('the committed served-route directories keep the published name and read the renamed directory', () => {
 	for (const route of SERVED_ROUTE_DIRS) {
 		assert.ok(
 			existsSync(join(repoRoot, route)),
-			`${route} is missing. The directory NAME under src/app is the URL the route answers, so it renames with the served path.`,
+			`${route} is missing. The directory NAME under src/app is the URL the route answers, so it follows the PUBLISHED path, which kept the old name (D-031).`,
 		);
 		const text = readText(route) ?? '';
 		assert.ok(

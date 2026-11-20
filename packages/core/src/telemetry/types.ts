@@ -14,7 +14,20 @@ export type CommandName =
   | 'cleanup'
   | 'console'
   | 'dashboard'
-  | 'vendorize';
+  | 'vendorize'
+  | 'sandbox:deploy'
+  | 'sandbox:preview'
+  | 'dev:stop'
+  | 'whoami'
+  | 'secret'
+  | 'config'
+  | 'generate:client'
+  | 'generate:spec'
+  | 'generate:types'
+  | 'db'
+  | 'migrate'
+  | 'docs'
+  | 'help';
 
 /**
  * Terminal state of a command execution.
@@ -45,7 +58,7 @@ export type ReportedFramework = (typeof REPORTED_FRAMEWORKS)[number];
  * blocks. Events are kept for up to 1 year, and logs of all requests,
  * blocked or not, for up to 10 years.
  * Keep the first-run notice (`FIRST_RUN_NOTICE` in `identifiers.ts` and in
- * `create-blocks-app`'s `telemetry.ts`) and the `@aws-blocks/blocks` README in
+ * `create-blocks-app`'s `telemetry.ts`) and the `aws-cdk-blocks` README in
  * sync with this list.
  */
 export interface BlocksTelemetryEvent {
@@ -89,6 +102,8 @@ export interface BlocksTelemetryEvent {
  * Options for the `trackCommand` utility.
  */
 export interface TrackCommandOptions {
+  /** Project root for the consent lookup; see {@link isTelemetryEnabled}. */
+  projectRoot?: string;
   template?: string;
   templateVersion?: string;
   framework?: ReportedFramework;
@@ -114,4 +129,6 @@ export interface BuildAndSendEventOptions {
     templateVersion?: string;
   };
   counters?: { blocksCount: number; customBuildingBlocks?: number };
+  /** Project root for the consent lookup; see {@link isTelemetryEnabled}. */
+  projectRoot?: string;
 }

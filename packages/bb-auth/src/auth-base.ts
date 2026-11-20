@@ -24,11 +24,11 @@
  * with {@link defineAuthLayer}.
  */
 
-import type { AuthActionInput, AuthState } from '@aws-blocks/auth-common';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
-import { ApiError, ApiNamespace, DEFAULT_API_ERROR_NAME, isBlocksError, Scope } from '@aws-blocks/core';
+import type { AuthActionInput, AuthState } from '@aws-cdk-blocks/auth-common';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
+import { ApiError, ApiNamespace, DEFAULT_API_ERROR_NAME, isBlocksError, Scope } from '@aws-cdk-blocks/core';
 import { buildAdminSurface, markServerOnly } from './auth-admin.js';
 import { bearerTokenOf, poolBearerIdentity } from './bearer.js';
 import { bearerAuthEnabled, requiresUserPool } from './cdk/contract.js';
@@ -173,8 +173,8 @@ import { BB_NAME, BB_VERSION } from './version.js';
 const DEFAULT_FRESH_AGE_SECONDS = 900;
 /** Auto-sign-in bridge lifetime (`AuthCognito`'s): 15 minutes. */
 const AUTO_SIGN_IN_TTL_SECONDS = 15 * 60;
-const DEFAULT_CALLBACK_PATH = '/aws-blocks/auth/callback';
-const DEFAULT_SIGN_OUT_PATH = '/aws-blocks/auth/signout';
+const DEFAULT_CALLBACK_PATH = '/cdk-blocks/auth/callback';
+const DEFAULT_SIGN_OUT_PATH = '/cdk-blocks/auth/signout';
 
 /** The per-factor settings `updateMfaPreference` accepts. */
 const MFA_SETTINGS: readonly MfaSetting[] = ['ENABLED', 'DISABLED', 'PREFERRED', 'NOT_PREFERRED'];
@@ -369,7 +369,7 @@ function layerFor(target: object): AuthLayer {
 		const layer = LAYERS.get(c);
 		if (layer) return layer;
 	}
-	throw new Error('Auth: no runtime layer is registered for this class. Import Auth from @aws-blocks/bb-auth.');
+	throw new Error('Auth: no runtime layer is registered for this class. Import Auth from @aws-cdk-blocks/bb-auth.');
 }
 
 /**
@@ -594,7 +594,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 *
 	 * A request authenticated by a bearer token (`allowBearerAuth`) has no
 	 * server-side session: it returns `{ tokens: undefined, userSub }` — the
-	 * client already holds its token, and refreshes it at `/aws-blocks/auth/refresh`.
+	 * client already holds its token, and refreshes it at `/cdk-blocks/auth/refresh`.
 	 */
 	async getAuthSession(context: BlocksContext, options?: GetAuthSessionOptions): Promise<AuthSession> {
 		let subject: GuardSubject | null;

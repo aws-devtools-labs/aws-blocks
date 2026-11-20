@@ -1,6 +1,6 @@
-# AWS Blocks Swift
+# AWS CDK Blocks Swift
 
-A Swift Package and code generator that produces type-safe Swift client code from an AWS Blocks spec. It reads your spec at build time and emits idiomatic Swift `struct`s, `enum`s, and `async throws` API methods that call your backend with full type safety on iOS and macOS.
+A Swift Package and code generator that produces type-safe Swift client code from an AWS CDK Blocks spec. It reads your spec at build time and emits idiomatic Swift `struct`s, `enum`s, and `async throws` API methods that call your backend with full type safety on iOS and macOS.
 
 ## Quick Start
 
@@ -61,7 +61,7 @@ _ = try await blocks.authApi.setAuthState(input: .signUp(.init(
 
 The input is the shared `AuthActionInput` (`AuthActionInput.SignIn`) when the backend's spec names the input type (the `x-blocks-type-name` hint from #1599), and `AuthApi.SetAuthState.Input` against an older backend; `.signIn(.init(…))` compiles with either.
 
-`Blocks()` uses the first server in the spec: `Servers.local` after `npm run dev`, `Servers.sandbox` after `npm run sandbox`. Switching backends is a regeneration, not an edit. To pin one server from a multi-server spec, name it: `Blocks(server: Servers.sandbox)`. A server the spec doesn't list takes its full RPC URL: `Blocks(server: BlocksServer(name: "prod", url: "https://api.example.com/prod/aws-blocks/api"))`. Pass `session:` a `URLSession` you own. A signed-in session is a cookie the runtime keeps in the Keychain, so it survives app restarts with no setup. `tokenStore:` holds OIDC bearer tokens when the backend issues them; a cookie session needs none. Each OIDC block keeps its own keys there. An `OIDCClient` sign-in asks for no bearer tokens (`tokens: false`), so its `getAccessToken()` returns `nil` afterwards: requests carry the session cookie.
+`Blocks()` uses the first server in the spec: `Servers.local` after `npm run dev`, `Servers.sandbox` after `npm run sandbox`. Switching backends is a regeneration, not an edit. To pin one server from a multi-server spec, name it: `Blocks(server: Servers.sandbox)`. A server the spec doesn't list takes its full RPC URL: `Blocks(server: BlocksServer(name: "prod", url: "https://api.example.com/prod/cdk-blocks/api"))`. Pass `session:` a `URLSession` you own. A signed-in session is a cookie the runtime keeps in the Keychain, so it survives app restarts with no setup. `tokenStore:` holds OIDC bearer tokens when the backend issues them; a cookie session needs none. Each OIDC block keeps its own keys there. An `OIDCClient` sign-in asks for no bearer tokens (`tokens: false`), so its `getAccessToken()` returns `nil` afterwards: requests carry the session cookie.
 
 Create one `Blocks` in app-scoped state, such as the Demo's `AppState`, not in a `View` initializer or a `@State` default. Each `blocks.<namespace>` is a stored, `Sendable` wrapper over the same client. `close()` makes later calls throw `ClientClosedError`, lets calls in flight finish, then releases the instance's `URLSession`; an instance that is never closed releases it once nothing references it. That session carries RPC and OIDC calls; realtime channels and file transfers use a shared one and keep working. Generated types are `nonisolated`, so they behave the same under Xcode's default `MainActor` isolation: create, call and close `Blocks` from any actor or task. A file that imports two generated modules names the one it means: `FeatureA.Blocks()`.
 
@@ -72,7 +72,7 @@ The `Auth` block's `createApi()` namespace (here `authApi`) is a sign-in state m
 Federated sign-in goes through an `OIDCClient`. Export the block's `createOidcApi()` beside `createApi()`, and `getClient()` returns the client, typed by the block's provider ids and carrying the block's own routes:
 
 ```ts
-// aws-blocks/index.ts
+// cdk-blocks/index.ts
 export const authApi = auth.createApi();
 export const oidcAuthApi = auth.createOidcApi();
 ```

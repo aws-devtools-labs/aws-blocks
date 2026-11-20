@@ -17,7 +17,7 @@ import { isLoopbackForwardedHost, trustedPublicHost } from './request-context.js
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 // The request base URL store (see `buildEventBaseUrl`, which the dispatcher puts
-// in it) lives with `getRequestBaseUrl()`, shared across copies of `@aws-blocks/core`.
+// in it) lives with `getRequestBaseUrl()`, shared across copies of `@aws-cdk-blocks/core`.
 export { requestBaseUrl } from './common/request-base-url.js';
 
 // The request-scoped stores and the forwarded-host gate live in request-context.ts
@@ -306,7 +306,7 @@ export function computeHttpDeadlineMs(context?: LambdaContext): number {
  */
 export interface LambdaContext {
   getRemainingTimeInMillis(): number;
-  /** The invocation's request id; Building Blocks read it with `currentRequestId()` from `@aws-blocks/core/bb-utils`. */
+  /** The invocation's request id; Building Blocks read it with `currentRequestId()` from `@aws-cdk-blocks/core/bb-utils`. */
   awsRequestId?: string;
 }
 
@@ -573,7 +573,7 @@ function toDispatchRequest(event: any, signal?: AbortSignal): DispatchRequest {
     origin: event.headers?.origin || event.headers?.Origin || '',
     // Extract cookies from the inbound request (both header casings occur).
     cookie: event.headers?.cookie || event.headers?.Cookie || '',
-    clientUserAgent: event.headers?.[CLIENT_USER_AGENT_HEADER] || event.headers?.['X-Blocks-User-Agent'],
+    clientUserAgent: singleEventHeader(event, CLIENT_USER_AGENT_HEADER),
     headers: () => new Headers(event.headers || {}),
     url: () => buildEventUrl(event),
     baseUrl: () => buildEventBaseUrl(event),

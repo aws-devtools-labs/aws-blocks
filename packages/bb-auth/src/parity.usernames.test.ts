@@ -28,13 +28,13 @@ import assert from 'node:assert';
 import crypto from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { ScopeParent } from '@aws-blocks/core';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
 import { Auth as MockAuth } from './index.mock.js';
 import { type AwsAuthHarness, Browser, cognitoError, makeAwsAuth, wireView } from './test-support/aws-harness.js';
 import type { AuthOptions, CodeDeliveryPurpose } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
 let n = 0;

@@ -13,15 +13,15 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { AuthState } from '@aws-blocks/auth-common';
-import { ApiError } from '@aws-blocks/core';
+import type { AuthState } from '@aws-cdk-blocks/auth-common';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { AuthErrors } from './errors.js';
 import { Auth } from './index.mock.js';
 import { Browser, captureLogger, makeAuth } from './test-helpers.js';
 import type { AuthOptions, SignInNextStep } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const delivery = { destination: '+*******0100', deliveryMedium: 'SMS' as const, attributeName: 'phone_number' };
 const STEPS = {

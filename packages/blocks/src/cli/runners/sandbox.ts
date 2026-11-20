@@ -10,7 +10,7 @@
  * `npm run sandbox:console` reads the record.
  */
 
-import * as core from '@aws-blocks/core/scripts';
+import * as core from '@aws-cdk-blocks/core/scripts';
 import { exitWithError } from './fail.js';
 import { recordLastDeploy } from './last-deploy.js';
 

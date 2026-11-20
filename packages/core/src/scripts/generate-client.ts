@@ -35,7 +35,7 @@ export async function generateClientCode(foundationPath: string): Promise<string
 	const lines: string[] = [];
 	const namespaceNames: string[] = [];
 
-	imports.add(`import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from '@aws-blocks/blocks/client';`);
+	imports.add(`import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from 'aws-cdk-blocks/client';`);
 
 	for (const specifier of middleware) {
 		imports.add(`import '${specifier}';`);
@@ -74,7 +74,7 @@ export async function generateClientCode(foundationPath: string): Promise<string
 }
 
 /**
- * Generate client code and write it to the aws-blocks subpackage.
+ * Generate client code and write it to the cdk-blocks subpackage.
  */
 export async function writeClientCode(foundationPath: string, outputPath: string): Promise<void> {
 	const code = await generateClientCode(foundationPath);

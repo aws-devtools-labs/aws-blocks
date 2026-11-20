@@ -19,11 +19,11 @@
   },
   "include": [
     "src/**/*",
-    ".blocks/**/*.d.ts"
+    ".cdk-blocks/**/*.d.ts"
   ],
   "references": [
     {
-      "path": "./aws-blocks"
+      "path": "./cdk-blocks"
     }
   ]
 }

@@ -1,6 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import assert from 'node:assert';
+import { existsSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 /**
  * Tests for the deployed (AWS) EmailClient with the SES client stubbed:
  * - it validates input exactly like the mock (shared `validation.ts`), so a
@@ -11,20 +14,20 @@
  *   (which names identities, regions, configuration sets and account state). The
  *   SES error stays server-side on the non-enumerable `cause` and in the block's log.
  */
-import { test, describe, mock, beforeEach, afterEach } from 'node:test';
-import assert from 'node:assert';
-import { existsSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { afterEach, beforeEach, describe, mock, test } from 'node:test';
 import { inspect } from 'node:util';
-import { Scope, isBlocksError, isWireSafeError } from '@aws-blocks/core';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import { isBlocksError, isWireSafeError, Scope } from '@aws-cdk-blocks/core';
 import { SESv2Client, SendBulkEmailCommand, type SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { EmailClient as AwsEmailClient, EmailErrors } from './index.aws.js';
 import { EmailClient as MockEmailClient } from './index.mock.js';
 import type { EmailMessage } from './types.js';
 
 beforeEach(() => {
-	try { rmSync('.bb-data', { recursive: true, force: true }); } catch {}
+	try {
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
+		rmSync('.bb-data', { recursive: true, force: true });
+	} catch {}
 });
 
 type Sent = SendEmailCommand | SendBulkEmailCommand;
@@ -41,8 +44,13 @@ interface StubOptions {
 
 /** An AWS EmailClient whose SES client records every command instead of calling SES. */
 function awsClient(options: StubOptions | string = {}): { email: AwsEmailClient; sent: Sent[] } {
-	const { fromAddress = 'noreply@example.com', replyTo, failEntryFor, throwCallFor, maxBatchSize } =
-		typeof options === 'string' ? { fromAddress: options } : options;
+	const {
+		fromAddress = 'noreply@example.com',
+		replyTo,
+		failEntryFor,
+		throwCallFor,
+		maxBatchSize,
+	} = typeof options === 'string' ? { fromAddress: options } : options;
 	const email = new AwsEmailClient(new Scope('app'), 'mail', { fromAddress, replyTo, maxBatchSize });
 	const sent: Sent[] = [];
 	(email as unknown as { client: { send: (c: Sent) => Promise<unknown> } }).client.send = async (command: Sent) => {
@@ -71,28 +79,87 @@ const fiftyOne = Array.from({ length: 51 }, (_, i) => `user${i}@example.com`);
 // Inputs the mock has always rejected. The deployed client must reject them the
 // same way, with the same error name, and without calling SES.
 const INVALID_MESSAGES: Array<{ label: string; message: EmailMessage; from?: string; error: string }> = [
-	{ label: 'malformed recipient', message: { to: 'not-an-email', subject: 's', body: 'b' }, error: EmailErrors.InvalidInput },
-	{ label: 'malformed address in a list', message: { to: ['ok@example.com', 'bad'], subject: 's', body: 'b' }, error: EmailErrors.InvalidInput },
-	{ label: 'malformed cc', message: { to: 'ok@example.com', cc: ['bad'], subject: 's', body: 'b' }, error: EmailErrors.InvalidInput },
-	{ label: 'malformed bcc', message: { to: 'ok@example.com', bcc: ['bad'], subject: 's', body: 'b' }, error: EmailErrors.InvalidInput },
-	{ label: 'CR/LF in an address', message: { to: 'ok@example.com\r\nBcc: victim@example.com', subject: 's', body: 'b' }, error: EmailErrors.InvalidInput },
-	{ label: 'malformed sender', message: { to: 'ok@example.com', subject: 's', body: 'b' }, from: 'not-a-sender', error: EmailErrors.InvalidInput },
-	{ label: 'a comma-separated list in one entry', message: { to: 'a@x.com, b <c@d.com>', subject: 's', body: 'b' }, error: EmailErrors.InvalidInput },
-	{ label: 'a semicolon in the display name', message: { to: 'x;y <c@d.com>', subject: 's', body: 'b' }, error: EmailErrors.InvalidInput },
-	{ label: 'surrounding whitespace', message: { to: ' a@b.com ', subject: 's', body: 'b' }, error: EmailErrors.InvalidInput },
-	{ label: 'NEL (U+0085) in an address', message: { to: 'Jane\u0085Doe <a@b.com>', subject: 's', body: 'b' }, error: EmailErrors.InvalidInput },
-	{ label: 'U+2028 in an address', message: { to: 'Jane\u2028Doe <a@b.com>', subject: 's', body: 'b' }, error: EmailErrors.InvalidInput },
-	{ label: 'more than 50 recipients', message: { to: fiftyOne, subject: 's', body: 'b' }, error: EmailErrors.InvalidInput },
-	{ label: 'more than 40 MB', message: { to: 'ok@example.com', subject: 's', body: 'x'.repeat(40 * 1024 * 1024 + 1) }, error: EmailErrors.SendFailed },
+	{
+		label: 'malformed recipient',
+		message: { to: 'not-an-email', subject: 's', body: 'b' },
+		error: EmailErrors.InvalidInput,
+	},
+	{
+		label: 'malformed address in a list',
+		message: { to: ['ok@example.com', 'bad'], subject: 's', body: 'b' },
+		error: EmailErrors.InvalidInput,
+	},
+	{
+		label: 'malformed cc',
+		message: { to: 'ok@example.com', cc: ['bad'], subject: 's', body: 'b' },
+		error: EmailErrors.InvalidInput,
+	},
+	{
+		label: 'malformed bcc',
+		message: { to: 'ok@example.com', bcc: ['bad'], subject: 's', body: 'b' },
+		error: EmailErrors.InvalidInput,
+	},
+	{
+		label: 'CR/LF in an address',
+		message: { to: 'ok@example.com\r\nBcc: victim@example.com', subject: 's', body: 'b' },
+		error: EmailErrors.InvalidInput,
+	},
+	{
+		label: 'malformed sender',
+		message: { to: 'ok@example.com', subject: 's', body: 'b' },
+		from: 'not-a-sender',
+		error: EmailErrors.InvalidInput,
+	},
+	{
+		label: 'a comma-separated list in one entry',
+		message: { to: 'a@x.com, b <c@d.com>', subject: 's', body: 'b' },
+		error: EmailErrors.InvalidInput,
+	},
+	{
+		label: 'a semicolon in the display name',
+		message: { to: 'x;y <c@d.com>', subject: 's', body: 'b' },
+		error: EmailErrors.InvalidInput,
+	},
+	{
+		label: 'surrounding whitespace',
+		message: { to: ' a@b.com ', subject: 's', body: 'b' },
+		error: EmailErrors.InvalidInput,
+	},
+	{
+		label: 'NEL (U+0085) in an address',
+		message: { to: 'Jane\u0085Doe <a@b.com>', subject: 's', body: 'b' },
+		error: EmailErrors.InvalidInput,
+	},
+	{
+		label: 'U+2028 in an address',
+		message: { to: 'Jane\u2028Doe <a@b.com>', subject: 's', body: 'b' },
+		error: EmailErrors.InvalidInput,
+	},
+	{
+		label: 'more than 50 recipients',
+		message: { to: fiftyOne, subject: 's', body: 'b' },
+		error: EmailErrors.InvalidInput,
+	},
+	{
+		label: 'more than 40 MB',
+		message: { to: 'ok@example.com', subject: 's', body: 'x'.repeat(40 * 1024 * 1024 + 1) },
+		error: EmailErrors.SendFailed,
+	},
 ];
 
 for (const { label, message, from, error } of INVALID_MESSAGES) {
 	test(`send() rejects ${label} on both the mock and AWS, without calling SES`, async () => {
 		const mock = new MockEmailClient(new Scope('app'), 'mail', { fromAddress: from ?? 'noreply@example.com' });
-		await assert.rejects(() => mock.send(message), (e: unknown) => isBlocksError(e, error));
+		await assert.rejects(
+			() => mock.send(message),
+			(e: unknown) => isBlocksError(e, error),
+		);
 
 		const { email, sent } = awsClient(from);
-		await assert.rejects(() => email.send(message), (e: unknown) => isBlocksError(e, error));
+		await assert.rejects(
+			() => email.send(message),
+			(e: unknown) => isBlocksError(e, error),
+		);
 		assert.strictEqual(sent.length, 0, 'an invalid message must not reach SES');
 	});
 }
@@ -110,10 +177,19 @@ for (const to of ['Jane Doe <jane@example.com>', '"Doe, Jane" <jane@example.com>
 
 test('send() rejects an invalid reply-to address on both the mock and AWS, without calling SES', async () => {
 	const message: EmailMessage = { to: 'ok@example.com', subject: 's', body: 'b' };
-	const mock = new MockEmailClient(new Scope('app'), 'mail', { fromAddress: 'noreply@example.com', replyTo: ['not-a-reply-to'] });
-	await assert.rejects(() => mock.send(message), (e: unknown) => isBlocksError(e, EmailErrors.InvalidInput));
+	const mock = new MockEmailClient(new Scope('app'), 'mail', {
+		fromAddress: 'noreply@example.com',
+		replyTo: ['not-a-reply-to'],
+	});
+	await assert.rejects(
+		() => mock.send(message),
+		(e: unknown) => isBlocksError(e, EmailErrors.InvalidInput),
+	);
 	const { email, sent } = awsClient({ replyTo: ['not-a-reply-to'] });
-	await assert.rejects(() => email.send(message), (e: unknown) => isBlocksError(e, EmailErrors.InvalidInput));
+	await assert.rejects(
+		() => email.send(message),
+		(e: unknown) => isBlocksError(e, EmailErrors.InvalidInput),
+	);
 	assert.strictEqual(sent.length, 0);
 });
 
@@ -169,7 +245,9 @@ test('sendBatch() sends a text-only message with no HTML part', async () => {
 	const content = input.DefaultContent?.Template?.TemplateContent;
 	assert.strictEqual(content?.Html, undefined, 'a text-only message must not get an HTML part');
 	assert.strictEqual(content?.Text, '{{body}}');
-	const data = JSON.parse(input.BulkEmailEntries?.[0].ReplacementEmailContent?.ReplacementTemplate?.ReplacementTemplateData ?? '{}');
+	const data = JSON.parse(
+		input.BulkEmailEntries?.[0].ReplacementEmailContent?.ReplacementTemplate?.ReplacementTemplateData ?? '{}',
+	);
 	assert.strictEqual(data.body, body);
 	assert.ok(!('html' in data), 'the plain-text body must not be passed as html');
 });
@@ -179,7 +257,9 @@ test('sendBatch() keeps the HTML part for messages that set html', async () => {
 	await email.sendBatch([{ to: 'ok@example.com', subject: 'Rich', body: 'text', html: '<p>rich</p>' }]);
 	const input = (sent[0] as SendBulkEmailCommand).input;
 	assert.strictEqual(input.DefaultContent?.Template?.TemplateContent?.Html, '{{html}}');
-	const data = JSON.parse(input.BulkEmailEntries?.[0].ReplacementEmailContent?.ReplacementTemplate?.ReplacementTemplateData ?? '{}');
+	const data = JSON.parse(
+		input.BulkEmailEntries?.[0].ReplacementEmailContent?.ReplacementTemplate?.ReplacementTemplateData ?? '{}',
+	);
 	assert.strictEqual(data.html, '<p>rich</p>');
 	assert.strictEqual(data.body, 'text');
 });
@@ -191,16 +271,27 @@ test('sendBatch() with mixed messages returns results in input order', async () 
 		{ to: 'b@example.com', subject: 'b', body: 'b', html: '<p>b</p>' },
 		{ to: 'c@example.com', subject: 'c', body: 'c' },
 	]);
-	assert.deepStrictEqual(results.map((r) => r.status), ['success', 'success', 'success']);
+	assert.deepStrictEqual(
+		results.map((r) => r.status),
+		['success', 'success', 'success'],
+	);
 	assert.strictEqual(sent.length, 2, 'one call with an HTML part, one without');
-	const destinations = (c: Sent) => ((c as SendBulkEmailCommand).input.BulkEmailEntries ?? []).map((e) => e.Destination?.ToAddresses?.[0]);
-	const htmlCall = sent.find((c) => (c as SendBulkEmailCommand).input.DefaultContent?.Template?.TemplateContent?.Html);
-	const textCall = sent.find((c) => !(c as SendBulkEmailCommand).input.DefaultContent?.Template?.TemplateContent?.Html);
+	const destinations = (c: Sent) =>
+		((c as SendBulkEmailCommand).input.BulkEmailEntries ?? []).map((e) => e.Destination?.ToAddresses?.[0]);
+	const htmlCall = sent.find(
+		(c) => (c as SendBulkEmailCommand).input.DefaultContent?.Template?.TemplateContent?.Html,
+	);
+	const textCall = sent.find(
+		(c) => !(c as SendBulkEmailCommand).input.DefaultContent?.Template?.TemplateContent?.Html,
+	);
 	assert.deepStrictEqual(htmlCall && destinations(htmlCall), ['b@example.com']);
 	assert.deepStrictEqual(textCall && destinations(textCall), ['a@example.com', 'c@example.com']);
 	// The html group is sent first (call 1), the text-only group second (call 2);
 	// each result still carries the id of the entry it was sent as, in input order.
-	assert.deepStrictEqual(results.map((r) => r.messageId), ['bulk-2-0', 'bulk-1-0', 'bulk-2-1']);
+	assert.deepStrictEqual(
+		results.map((r) => r.messageId),
+		['bulk-2-0', 'bulk-1-0', 'bulk-2-1'],
+	);
 });
 
 test('sendBatch() maps a FAILED bulk entry to its own input position', async () => {
@@ -219,7 +310,11 @@ test('sendBatch() maps a FAILED bulk entry to its own input position', async () 
 
 test('sendBatch() chunks 51 text-only + 1 html message into 3 calls with indices kept across the 50-entry boundary', async () => {
 	const { email, sent } = awsClient();
-	const messages: EmailMessage[] = Array.from({ length: 51 }, (_, i) => ({ to: `t${i}@example.com`, subject: 's', body: 'b' }));
+	const messages: EmailMessage[] = Array.from({ length: 51 }, (_, i) => ({
+		to: `t${i}@example.com`,
+		subject: 's',
+		body: 'b',
+	}));
 	messages.splice(25, 0, { to: 'h@example.com', subject: 's', body: 'b', html: '<p>h</p>' });
 	const { results } = await email.sendBatch(messages);
 
@@ -230,11 +325,13 @@ test('sendBatch() chunks 51 text-only + 1 html message into 3 calls with indices
 	assert.strictEqual(results[50].messageId, 'bulk-2-49', 'last entry of the first text-only chunk');
 	assert.strictEqual(results[51].messageId, 'bulk-3-0', 'first entry of the second text-only chunk');
 	assert.ok(results.every((r) => r.status === 'success'));
-	const sentTo = sent.flatMap((c) => ((c as SendBulkEmailCommand).input.BulkEmailEntries ?? []).map((e) => e.Destination?.ToAddresses?.[0]));
+	const sentTo = sent.flatMap((c) =>
+		((c as SendBulkEmailCommand).input.BulkEmailEntries ?? []).map((e) => e.Destination?.ToAddresses?.[0]),
+	);
 	assert.strictEqual(new Set(sentTo).size, 52, 'every message sent exactly once');
 });
 
-test('sendBatch() marks only the failing call\'s messages failed when a whole SendBulkEmail call throws', async () => {
+test("sendBatch() marks only the failing call's messages failed when a whole SendBulkEmail call throws", async () => {
 	const { email, sent } = awsClient({ throwCallFor: 'b@example.com' });
 	const { results } = await email.sendBatch([
 		{ to: 'a@example.com', subject: 'a', body: 'a' },
@@ -243,11 +340,17 @@ test('sendBatch() marks only the failing call\'s messages failed when a whole Se
 	]);
 	assert.strictEqual(sent.length, 2, 'the text-only group is still sent');
 	assert.strictEqual(results[1].status, 'failed');
-	assert.ok(results[1].error?.startsWith(EmailErrors.RateLimited), `expected a RateLimited message, got ${results[1].error}`);
-	assert.deepStrictEqual([results[0], results[2]], [
-		{ status: 'success', messageId: 'bulk-2-0' },
-		{ status: 'success', messageId: 'bulk-2-1' },
-	]);
+	assert.ok(
+		results[1].error?.startsWith(EmailErrors.RateLimited),
+		`expected a RateLimited message, got ${results[1].error}`,
+	);
+	assert.deepStrictEqual(
+		[results[0], results[2]],
+		[
+			{ status: 'success', messageId: 'bulk-2-0' },
+			{ status: 'success', messageId: 'bulk-2-1' },
+		],
+	);
 });
 
 // sendBatch() takes at most `maxBatchSize` messages per call (default 100), on the
@@ -269,42 +372,66 @@ test('sendBatch() accepts the default cap of 100 messages on both the mock and A
 test('sendBatch() rejects more than 100 messages on both the mock and AWS, without sending any', async () => {
 	const mock = new MockEmailClient(new Scope('app'), 'mail', { fromAddress: 'noreply@example.com' });
 	let mockError: unknown;
-	await assert.rejects(() => mock.sendBatch(batchOf(101)), (e: unknown) => {
-		mockError = e;
-		return isBlocksError(e, EmailErrors.InvalidInput);
-	});
-	assert.ok(!existsSync(join('.bb-data', 'app-mail', 'emails.json')), 'the mock must not record any message');
+	await assert.rejects(
+		() => mock.sendBatch(batchOf(101)),
+		(e: unknown) => {
+			mockError = e;
+			return isBlocksError(e, EmailErrors.InvalidInput);
+		},
+	);
+	assert.ok(
+		!existsSync(join('.cdk-blocks/local/data', 'app-mail', 'emails.json')),
+		'the mock must not record any message',
+	);
 
 	const { email, sent } = awsClient();
-	await assert.rejects(() => email.sendBatch(batchOf(101)), (e: unknown) => {
-		assert.ok(isWireSafeError(e), 'the error is branded so its name crosses the wire');
-		assert.strictEqual((e as Error).message, (mockError as Error).message, 'same message on the mock and AWS');
-		return isBlocksError(e, EmailErrors.InvalidInput);
-	});
+	await assert.rejects(
+		() => email.sendBatch(batchOf(101)),
+		(e: unknown) => {
+			assert.ok(isWireSafeError(e), 'the error is branded so its name crosses the wire');
+			assert.strictEqual((e as Error).message, (mockError as Error).message, 'same message on the mock and AWS');
+			return isBlocksError(e, EmailErrors.InvalidInput);
+		},
+	);
 	assert.strictEqual(sent.length, 0, 'an over-cap batch must not reach SES');
 	assert.match((mockError as Error).message, /Batch size 101 exceeds the maximum of 100 messages/);
 });
 
 test('sendBatch() honours a custom maxBatchSize on both the mock and AWS', async () => {
 	const mock = new MockEmailClient(new Scope('app'), 'mail', { fromAddress: 'noreply@example.com', maxBatchSize: 2 });
-	await assert.rejects(() => mock.sendBatch(batchOf(3)), (e: unknown) => isBlocksError(e, EmailErrors.InvalidInput));
+	await assert.rejects(
+		() => mock.sendBatch(batchOf(3)),
+		(e: unknown) => isBlocksError(e, EmailErrors.InvalidInput),
+	);
 	assert.strictEqual((await mock.sendBatch(batchOf(2))).results.length, 2);
 
-	const raised = new MockEmailClient(new Scope('app'), 'raised', { fromAddress: 'noreply@example.com', maxBatchSize: 150 });
+	const raised = new MockEmailClient(new Scope('app'), 'raised', {
+		fromAddress: 'noreply@example.com',
+		maxBatchSize: 150,
+	});
 	assert.ok((await raised.sendBatch(batchOf(150))).results.every((r) => r.status === 'success'));
 
 	const { email, sent } = awsClient({ maxBatchSize: 2 });
-	await assert.rejects(() => email.sendBatch(batchOf(3)), (e: unknown) => isBlocksError(e, EmailErrors.InvalidInput));
+	await assert.rejects(
+		() => email.sendBatch(batchOf(3)),
+		(e: unknown) => isBlocksError(e, EmailErrors.InvalidInput),
+	);
 	assert.strictEqual(sent.length, 0, 'an over-cap batch must not reach SES');
 	const atLimit = await email.sendBatch(batchOf(2));
 	assert.strictEqual(atLimit.results.length, 2);
-	assert.ok(atLimit.results.every((r) => r.status === 'success'), 'a batch at the cap is sent');
+	assert.ok(
+		atLimit.results.every((r) => r.status === 'success'),
+		'a batch at the cap is sent',
+	);
 	assert.strictEqual(sent.length, 1);
 
 	const { email: raisedAws, sent: raisedSent } = awsClient({ maxBatchSize: 150 });
 	const raisedResult = await raisedAws.sendBatch(batchOf(150));
 	assert.strictEqual(raisedResult.results.length, 150);
-	assert.ok(raisedResult.results.every((r) => r.status === 'success'), 'a raised cap lets a 150-message batch through');
+	assert.ok(
+		raisedResult.results.every((r) => r.status === 'success'),
+		'a raised cap lets a 150-message batch through',
+	);
 	assert.strictEqual(raisedSent.length, 3, '150 messages go out as 3 SendBulkEmail calls of 50');
 	assert.ok(raisedSent.every((c) => c instanceof SendBulkEmailCommand));
 });
@@ -313,13 +440,15 @@ for (const maxBatchSize of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
 	test(`the mock and AWS constructors reject maxBatchSize ${maxBatchSize}`, () => {
 		const options = { fromAddress: 'noreply@example.com', maxBatchSize };
 		const rejected = (e: unknown) =>
-			isBlocksError(e, EmailErrors.InvalidInput) && (e as Error).message.includes(`(got ${String(maxBatchSize)})`);
+			isBlocksError(e, EmailErrors.InvalidInput) &&
+			(e as Error).message.includes(`(got ${String(maxBatchSize)})`);
 		assert.throws(() => new MockEmailClient(new Scope('app'), 'mail', options), rejected);
 		assert.throws(() => new AwsEmailClient(new Scope('app'), 'mail', options), rejected);
 	});
 }
 
-const RAW_DETAIL = 'Email address is not verified. The following identities failed the check in region US-EAST-1: internal@corp.example (arn:aws:ses:us-east-1:123456789012:identity/corp.example)';
+const RAW_DETAIL =
+	'Email address is not verified. The following identities failed the check in region US-EAST-1: internal@corp.example (arn:aws:ses:us-east-1:123456789012:identity/corp.example)';
 
 function sesError(name: string, message = RAW_DETAIL): Error {
 	const err = new Error(message);
@@ -345,7 +474,10 @@ function recordingLogger(): { logger: ChildLogger; errors: unknown[] } {
 
 let counter = 0;
 function makeClient(logger?: ChildLogger): AwsEmailClient {
-	return new AwsEmailClient(new Scope(`email-aws-${++counter}`), 'email', { fromAddress: 'noreply@example.com', logger });
+	return new AwsEmailClient(new Scope(`email-aws-${++counter}`), 'email', {
+		fromAddress: 'noreply@example.com',
+		logger,
+	});
 }
 
 afterEach(() => {
@@ -401,7 +533,10 @@ describe('EmailClient.sendBatch per-entry errors (aws runtime)', () => {
 		mock.method(SESv2Client.prototype, 'send', async () => ({
 			BulkEmailEntryResults: [
 				{ Status: 'SUCCESS', MessageId: 'm-1' },
-				{ Status: 'CONFIGURATION_SET_DOES_NOT_EXIST', Error: `ConfigurationSet internal-cs does not exist (${RAW_DETAIL})` },
+				{
+					Status: 'CONFIGURATION_SET_DOES_NOT_EXIST',
+					Error: `ConfigurationSet internal-cs does not exist (${RAW_DETAIL})`,
+				},
 			],
 		}));
 		const { logger, errors } = recordingLogger();
@@ -415,7 +550,10 @@ describe('EmailClient.sendBatch per-entry errors (aws runtime)', () => {
 		assert.deepStrictEqual(results[0], { status: 'success', messageId: 'm-1' });
 		assert.strictEqual(results[1].status, 'failed');
 		assert.ok(results[1].error, 'a failed entry still reports an error');
-		assert.ok(!results[1].error.includes('internal-cs'), `entry error must not embed SES text: ${results[1].error}`);
+		assert.ok(
+			!results[1].error.includes('internal-cs'),
+			`entry error must not embed SES text: ${results[1].error}`,
+		);
 		assert.ok(!results[1].error.includes('123456789012'));
 		assert.ok(JSON.stringify(errors).includes('internal-cs'), 'the raw entry error is logged server-side');
 	});

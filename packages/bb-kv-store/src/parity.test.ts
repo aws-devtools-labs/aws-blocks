@@ -10,13 +10,14 @@
 import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
 import { beforeEach, describe, test } from 'node:test';
-import { ApiError, isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-cdk-blocks/core';
 import { z } from 'zod';
 import { KVStore as AwsKVStore } from './index.aws.js';
 import { KVStore, KVStoreErrors } from './index.mock.js';
 
 beforeEach(() => {
 	try {
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 		rmSync('.bb-data', { recursive: true, force: true });
 	} catch {}
 });
@@ -695,7 +696,9 @@ describe('a bad order, an unknown index and a bad indexes option fail the same w
 
 	test("query() rejects an order other than 'asc' and 'desc'", async () => {
 		assert.match(
-			await rejectsOnBoth('order-text', options, (store) => Array.fromAsync(store.query({ where, order: 'DESC' }))),
+			await rejectsOnBoth('order-text', options, (store) =>
+				Array.fromAsync(store.query({ where, order: 'DESC' })),
+			),
 			/query\(\) order must be 'asc' or 'desc' \(received 'DESC'\)$/,
 		);
 		assert.match(
@@ -738,7 +741,10 @@ describe('a bad order, an unknown index and a bad indexes option fail the same w
 	test('the constructor rejects indexes given as an array, and takes null as no indexes', async () => {
 		const arrayIndexes = { ...options, indexes: [{ partitionKey: 'status', sortKey: 'postId' }] };
 		const messages: string[] = [];
-		for (const build of [() => mockStore('indexes-array', arrayIndexes), () => awsStore('indexes-array', arrayIndexes)]) {
+		for (const build of [
+			() => mockStore('indexes-array', arrayIndexes),
+			() => awsStore('indexes-array', arrayIndexes),
+		]) {
 			messages.push((await rejects(build, KVStoreErrors.InvalidQuery)).message);
 		}
 		assert.equal(messages[0], messages[1]);
@@ -767,7 +773,10 @@ describe('a bad order, an unknown index and a bad indexes option fail the same w
 			ddbError('ConditionalCheckFailedException', 'The conditional request failed'),
 		);
 		for (const store of [mock, aws.store]) {
-			const error = await rejects(store.put('k', 'v2', { ifNotExists: true }), KVStoreErrors.ConditionalCheckFailed);
+			const error = await rejects(
+				store.put('k', 'v2', { ifNotExists: true }),
+				KVStoreErrors.ConditionalCheckFailed,
+			);
 			assert.equal(error.message, 'ConditionalCheckFailedException: The conditional request failed');
 		}
 	});

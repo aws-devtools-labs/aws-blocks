@@ -134,7 +134,7 @@ test.describe('SvelteKit SSR Hosting', () => {
   });
 
   test('backend API reachable via single-origin proxy', async ({ request }) => {
-    const r = await request.post(`${hostingUrl}/aws-blocks/api`, {
+    const r = await request.post(`${hostingUrl}/cdk-blocks/api`, {
       headers: { 'Content-Type': 'application/json' },
       data: { jsonrpc: '2.0', method: 'api.ping', params: [], id: 1 },
     });

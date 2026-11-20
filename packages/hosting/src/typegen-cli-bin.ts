@@ -8,7 +8,7 @@
  * `.d.ts` so the getters narrow to your declared keys (autocomplete + typo errors)
  * with no call-site change. Runs statically — no app import, no AWS credentials.
  *
- *   npx hosting-typegen                 # scan + write .blocks/hosting-values.d.ts
+ *   npx hosting-typegen                 # scan + write .cdk-blocks/hosting-values.d.ts
  *   npx hosting-typegen --check         # CI: fail if the generated file is stale
  *   npx hosting-typegen --watch         # regenerate on every save (Ctrl+C to stop)
  *   npx hosting-typegen --out <path> --include <glob> --module <spec> --cwd <dir>

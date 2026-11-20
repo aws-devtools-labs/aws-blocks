@@ -174,7 +174,7 @@ final class DateFormatCodegenTests: XCTestCase {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let instant = formatter.date(from: wire)!
-        let api = Api(server: BlocksServer(name: "local", url: "http://127.0.0.1:\(port)/aws-blocks/api"))
+        let api = Api(server: BlocksServer(name: "local", url: "http://127.0.0.1:\(port)/cdk-blocks/api"))
         do {
             print(formatter.string(from: try await api.echo(at: instant)))
             let event = try await api.getEvent(event: Event(at: instant, title: "launch"))

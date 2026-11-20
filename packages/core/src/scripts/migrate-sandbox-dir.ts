@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Copy an app's sandbox state forward after the directory rename (D-030).
+ * Copy an app's sandbox state forward after the directory rename (D-031).
  *
  * The directory holding per-deploy state was renamed to `.cdk-blocks-sandbox`; the
  * name it had before is {@link LEGACY_SANDBOX_DIR}. An app that upgrades still has

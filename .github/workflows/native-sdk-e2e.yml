@@ -133,20 +133,20 @@ jobs:
         working-directory: test-apps/native-bindings
         run: |
           npm run spec
-          echo "path=test-apps/native-bindings/aws-blocks/blocks.spec.json" >> $GITHUB_OUTPUT
+          echo "path=test-apps/native-bindings/cdk-blocks/blocks.spec.json" >> $GITHUB_OUTPUT
 
       # Codegen fixtures 18-hybrid-arm and 23-cognito-nested-unions are the Auth
       # block's sign-in state machine and sign-in results. regenerate-all.sh only
       # proves the generators are stable against the committed spec.json; this
       # proves those specs still match what the live block emits.
       - name: Check auth codegen fixtures against the live Auth spec
-        run: node native/codegen-fixtures/check-live-auth-fixtures.mjs test-apps/native-bindings/aws-blocks/blocks.spec.json
+        run: node native/codegen-fixtures/check-live-auth-fixtures.mjs test-apps/native-bindings/cdk-blocks/blocks.spec.json
 
       - name: Upload spec artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: blocks-spec
-          path: test-apps/native-bindings/aws-blocks/blocks.spec.json
+          path: test-apps/native-bindings/cdk-blocks/blocks.spec.json
           retention-days: 1
 
   # Dart E2E (local server) — no AWS, so it runs on fork PRs too
@@ -184,7 +184,7 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: blocks-spec
-          path: test-apps/native-bindings/aws-blocks/
+          path: test-apps/native-bindings/cdk-blocks/
 
       - name: Pick a free port for the local server
         run: |
@@ -195,7 +195,7 @@ jobs:
           # BLOCKS_URL) agree on it without a hardcoded literal.
           PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()' 2>/dev/null || echo 3001)"
           echo "PORT=${PORT}" >> "$GITHUB_ENV"
-          echo "BLOCKS_URL=http://localhost:${PORT}/aws-blocks/api" >> "$GITHUB_ENV"
+          echo "BLOCKS_URL=http://localhost:${PORT}/cdk-blocks/api" >> "$GITHUB_ENV"
           echo "Picked local server port ${PORT}"
 
       - name: Start native-bindings server
@@ -203,7 +203,7 @@ jobs:
         run: |
           # Inherits PORT from $GITHUB_ENV; server.ts honors it (3001 fallback).
           # Keep the server's output: a later step prints it if the job fails.
-          npx tsx aws-blocks/scripts/server.ts > "$RUNNER_TEMP/native-bindings-server.log" 2>&1 &
+          npx tsx cdk-blocks/scripts/server.ts > "$RUNNER_TEMP/native-bindings-server.log" 2>&1 &
           for i in $(seq 1 30); do
             curl -s -X POST "$BLOCKS_URL" \
               -H "Content-Type: application/json" \
@@ -220,7 +220,7 @@ jobs:
           printf 'dependency_overrides:\n  blocks_runtime:\n    path: ../blocks_runtime\n' > pubspec_overrides.yaml
           dart pub get
           dart run bin/blocks_codegen.dart \
-            --spec ../../../../test-apps/native-bindings/aws-blocks/blocks.spec.json \
+            --spec ../../../../test-apps/native-bindings/cdk-blocks/blocks.spec.json \
             --output ../../example/lib/blocks_client.dart
 
       - name: Verify generated client compiles
@@ -299,9 +299,9 @@ jobs:
         working-directory: test-apps/native-bindings
         run: |
           # Keep the server's output: a later step prints it if the job fails.
-          npx tsx aws-blocks/scripts/server.ts > "$RUNNER_TEMP/native-bindings-server.log" 2>&1 &
+          npx tsx cdk-blocks/scripts/server.ts > "$RUNNER_TEMP/native-bindings-server.log" 2>&1 &
           for i in $(seq 1 30); do
-            curl -s -X POST http://localhost:3001/aws-blocks/api \
+            curl -s -X POST http://localhost:3001/cdk-blocks/api \
               -H "Content-Type: application/json" \
               -d '{"jsonrpc":"2.0","method":"api.kvGet","params":{"key":"healthcheck"},"id":1}' && break
             sleep 1
@@ -311,7 +311,7 @@ jobs:
         if: matrix.label != 'Android'
         working-directory: native/kotlin/e2e
         env:
-          BLOCKS_URL: http://localhost:3001/aws-blocks/api
+          BLOCKS_URL: http://localhost:3001/cdk-blocks/api
         run: ./gradlew ${{ matrix.gradle-task }}
 
       # `adb reverse` forwards the device's own localhost:3001 to the runner's,
@@ -326,7 +326,7 @@ jobs:
         uses: ./.github/actions/android-emulator
         with:
           working-directory: native/kotlin/e2e
-          blocks-url: http://localhost:3001/aws-blocks/api
+          blocks-url: http://localhost:3001/cdk-blocks/api
           script: |
             adb reverse tcp:3001 tcp:3001
             ./gradlew ${{ matrix.gradle-task }}
@@ -378,7 +378,7 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: blocks-spec
-          path: test-apps/native-bindings/aws-blocks/
+          path: test-apps/native-bindings/cdk-blocks/
 
       - name: Pick a free port for the local server
         run: |
@@ -389,14 +389,14 @@ jobs:
           # BLOCKS_URL) agree on it without a hardcoded literal.
           PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()' 2>/dev/null || echo 3001)"
           echo "PORT=${PORT}" >> "$GITHUB_ENV"
-          echo "BLOCKS_URL=http://localhost:${PORT}/aws-blocks/api" >> "$GITHUB_ENV"
+          echo "BLOCKS_URL=http://localhost:${PORT}/cdk-blocks/api" >> "$GITHUB_ENV"
           echo "Picked local server port ${PORT}"
 
       - name: Run Swift codegen
         working-directory: native/swift
         run: |
           swift run swift-code-generator \
-            ../../test-apps/native-bindings/aws-blocks/blocks.spec.json \
+            ../../test-apps/native-bindings/cdk-blocks/blocks.spec.json \
             Tests/BlocksE2ETests/Generated
 
       - name: Start native-bindings server
@@ -404,7 +404,7 @@ jobs:
         run: |
           # Inherits PORT from $GITHUB_ENV; server.ts honors it (3001 fallback).
           # Keep the server's output: a later step prints it if the job fails.
-          npx tsx aws-blocks/scripts/server.ts > "$RUNNER_TEMP/native-bindings-server.log" 2>&1 &
+          npx tsx cdk-blocks/scripts/server.ts > "$RUNNER_TEMP/native-bindings-server.log" 2>&1 &
           for i in $(seq 1 30); do
             curl -s -X POST "$BLOCKS_URL" \
               -H "Content-Type: application/json" \
@@ -470,9 +470,9 @@ jobs:
 
   # Sandbox E2E — deploys a per-run stack to the shared repo AWS account.
   # Runs on same-repo PRs (fork PRs can't access secrets/OIDC) and on manual
-  # dispatch. Deploy uses `npm run deploy:sandbox` (aws-blocks/scripts/deploy-sandbox.ts
-  # -> startSandbox deployOnly -> aws-blocks/index.cdk.ts with sandboxMode); the
-  # API serves JSON-RPC under `/aws-blocks/api`.
+  # dispatch. Deploy uses `npm run deploy:sandbox` (cdk-blocks/scripts/deploy-sandbox.ts
+  # -> startSandbox deployOnly -> cdk-blocks/index.cdk.ts with sandboxMode); the
+  # API serves JSON-RPC under `/cdk-blocks/api`.
   #
   # Native OIDC sign-in against the sandbox. The OIDC relay suites (Dart
   # oidc_test.dart, Swift OIDCE2ETests, Kotlin OidcE2ETest) always run in the
@@ -498,7 +498,7 @@ jobs:
   #     test IdP that auto-approves a fixed user; a real Google/Okta tenant
   #     will not work);
   #   - accept the per-run redirect URI
-  #     https://<api-id>.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/auth/callback
+  #     https://<api-id>.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/auth/callback
   #     — each run deploys a new API, so it must allow any `<api-id>`;
   #   - issue ID tokens signed with an asymmetric key published in its JWKS,
   #     with `aud` set to the client id.
@@ -518,7 +518,7 @@ jobs:
     # Deploy sandbox used to take ~21 min (sequential DynamoDB GSI custom-resource
     # backfill); 30 min left too little headroom (the job tripped the wall and
     # Destroy could be skipped -> leaked stacks).
-    # test-apps/native-bindings/aws-blocks/index.cdk.ts now defaults sandboxMode
+    # test-apps/native-bindings/cdk-blocks/index.cdk.ts now defaults sandboxMode
     # on, so the GSIs are built with the table and the deploy takes about 3
     # minutes. 45 stays until this job has 10 green runs with sandboxMode on,
     # then drops to 30 unless the slowest of them came within 5 min of that
@@ -539,7 +539,7 @@ jobs:
       NATIVE_E2E_OIDC_ISSUER: ${{ vars.NATIVE_E2E_OIDC_ISSUER }}
       NATIVE_E2E_OIDC_CLIENT_ID: ${{ vars.NATIVE_E2E_OIDC_CLIENT_ID }}
       # The deployed pools send mail through this verified SES identity, not
-      # Cognito's default sender (test-apps/native-bindings/aws-blocks/index.ts).
+      # Cognito's default sender (test-apps/native-bindings/cdk-blocks/index.ts).
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
       # The sandbox always serves a headless IdP: the deployed stub, or the real one above.
       RUN_OIDC: '1'
@@ -595,10 +595,10 @@ jobs:
         working-directory: test-apps/native-bindings
         run: |
           URL=$(python3 -c "import json; print(json.load(open('.cdk-blocks-sandbox/config.sandbox.json'))['apiUrl'])")
-          # apiUrl is already the full JSON-RPC endpoint (…/prod/aws-blocks/api),
-          # so emit it as-is. (Appending /aws-blocks/api here previously doubled
+          # apiUrl is already the full JSON-RPC endpoint (…/prod/cdk-blocks/api),
+          # so emit it as-is. (Appending /cdk-blocks/api here previously doubled
           # the path: the non-OIDC suites still worked because API Gateway routes
-          # /prod/aws-blocks/api/* to the JSON-RPC Lambda, but the OIDC suite
+          # /prod/cdk-blocks/api/* to the JSON-RPC Lambda, but the OIDC suite
           # derived a wrong origin and misrouted its /auth/* relay request.)
           echo "blocks_url=${URL}" >> $GITHUB_OUTPUT
 
@@ -650,7 +650,7 @@ jobs:
           printf 'dependency_overrides:\n  blocks_runtime:\n    path: ../blocks_runtime\n' > pubspec_overrides.yaml
           dart pub get
           dart run bin/blocks_codegen.dart \
-            --spec ../../../../test-apps/native-bindings/aws-blocks/blocks.spec.json \
+            --spec ../../../../test-apps/native-bindings/cdk-blocks/blocks.spec.json \
             --output ../../example/lib/blocks_client.dart
 
       - name: Run Dart E2E against sandbox
@@ -700,7 +700,7 @@ jobs:
       NATIVE_E2E_OIDC_ISSUER: ${{ vars.NATIVE_E2E_OIDC_ISSUER }}
       NATIVE_E2E_OIDC_CLIENT_ID: ${{ vars.NATIVE_E2E_OIDC_CLIENT_ID }}
       # The deployed pools send mail through this verified SES identity, not
-      # Cognito's default sender (test-apps/native-bindings/aws-blocks/index.ts).
+      # Cognito's default sender (test-apps/native-bindings/cdk-blocks/index.ts).
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
       # The sandbox always serves a headless IdP: the deployed stub, or the real one above.
       RUN_OIDC: '1'
@@ -758,7 +758,7 @@ jobs:
         working-directory: native/swift
         run: |
           swift run swift-code-generator \
-            ../../test-apps/native-bindings/aws-blocks/blocks.spec.json \
+            ../../test-apps/native-bindings/cdk-blocks/blocks.spec.json \
             Tests/BlocksE2ETests/Generated
 
       - name: Warm up sandbox API
@@ -861,7 +861,7 @@ jobs:
       NATIVE_E2E_OIDC_ISSUER: ${{ vars.NATIVE_E2E_OIDC_ISSUER }}
       NATIVE_E2E_OIDC_CLIENT_ID: ${{ vars.NATIVE_E2E_OIDC_CLIENT_ID }}
       # The deployed pools send mail through this verified SES identity, not
-      # Cognito's default sender (test-apps/native-bindings/aws-blocks/index.ts).
+      # Cognito's default sender (test-apps/native-bindings/cdk-blocks/index.ts).
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
       # JVM: the suite runs against the deployed stub IdP, like Dart and Swift
       # (verified against a real sandbox, 2026-10-05). iOS (Kotlin/Native) and
@@ -910,9 +910,9 @@ jobs:
         working-directory: test-apps/native-bindings
         run: |
           URL=$(python3 -c "import json; print(json.load(open('.cdk-blocks-sandbox/config.sandbox.json'))['apiUrl'])")
-          # apiUrl is already the full JSON-RPC endpoint (…/prod/aws-blocks/api),
-          # so emit it as-is. Appending /aws-blocks/api here doubled the path;
-          # API Gateway still routed /prod/aws-blocks/api/* to the JSON-RPC Lambda
+          # apiUrl is already the full JSON-RPC endpoint (…/prod/cdk-blocks/api),
+          # so emit it as-is. Appending /cdk-blocks/api here doubled the path;
+          # API Gateway still routed /prod/cdk-blocks/api/* to the JSON-RPC Lambda
           # so the suite "worked", but keeping the URL clean avoids surprises.
           echo "blocks_url=${URL}" >> $GITHUB_OUTPUT
 

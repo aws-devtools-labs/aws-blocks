@@ -66,7 +66,7 @@ export function ensureTestSupportSecret(): void {
  * so a hung deploy kept going after the run had "stopped" it.
  */
 export function runSandboxScript(scriptPath: string, timeoutMs: number): Promise<void> {
-  const backendPath = join(projectRoot, 'aws-blocks', 'index.cdk.ts');
+  const backendPath = join(projectRoot, 'cdk-blocks', 'index.cdk.ts');
   return new Promise((resolve, reject) => {
     const child = spawn('npx', ['tsx', scriptPath, backendPath], {
       cwd: projectRoot,

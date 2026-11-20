@@ -11,8 +11,8 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { type DevServerPidRecord, parsePidRecord, pidCommand } from '@aws-blocks/core/scripts/dev-pidfile';
-import { type AwsIdentity, describeDeploymentCredentials, OUTPUTS_FILE as CORE_OUTPUTS_FILE, runSecretCli, type StopResult } from '@aws-blocks/core/scripts';
+import { type DevServerPidRecord, parsePidRecord, pidCommand } from '@aws-cdk-blocks/core/scripts/dev-pidfile';
+import { type AwsIdentity, describeDeploymentCredentials, OUTPUTS_FILE as CORE_OUTPUTS_FILE, runSecretCli, type StopResult } from '@aws-cdk-blocks/core/scripts';
 import { DEV_RESTART_POLICY, decideDevRestart, redactArgs } from './commands.js';
 import { type ChildResult, type SpawnSpec, stageEnv } from './context.js';
 import { blocksCommand } from './errors.js';
@@ -62,7 +62,7 @@ function withSandboxId(root: string): string {
 describe('passthrough commands', () => {
 	it('forwards secret and config arguments verbatim, from the project root', async () => {
 		const root = fixtureApp();
-		const sub = join(root, 'aws-blocks');
+		const sub = join(root, 'cdk-blocks');
 		const calls: string[][] = [];
 		const argv = ['set', 'API_KEY', '--value-stdin', '--stage', 'production', '--prefix', '/p'];
 		const run = await runCli(['secret', ...argv], {
@@ -123,9 +123,9 @@ describe('passthrough commands', () => {
 		assert.deepStrictEqual(calls.at(-1), ['set', 'K', '--', '--profile', '-q']);
 		assert.strictEqual(literal.env.AWS_PROFILE, undefined);
 
-		const vendorize = await runCli(['vendorize', '@aws-blocks/bb-kv-store', '--no-input', '-y'], { cwd: root });
+		const vendorize = await runCli(['vendorize', '@aws-cdk-blocks/bb-kv-store', '--no-input', '-y'], { cwd: root });
 		assert.strictEqual(vendorize.code, 0, vendorize.stderr);
-		assert.deepStrictEqual(vendorize.spawned[0].args.slice(1), ['@aws-blocks/bb-kv-store']);
+		assert.deepStrictEqual(vendorize.spawned[0].args.slice(1), ['@aws-cdk-blocks/bb-kv-store']);
 		// bb-database has the same two answers: they are passed on after the tool's tokens, as its own options.
 		const db = await runCli(['db', 'types', '--no-input', '-y'], { cwd: root });
 		assert.strictEqual(db.code, 0, db.stderr);
@@ -137,7 +137,7 @@ describe('passthrough commands', () => {
 			['config', 'list', '--output', 'json'],
 			['secret', 'list', '--query', 'keys'],
 			['secret', 'list', '--region', 'nowhere'],
-			['vendorize', '@aws-blocks/bb-kv-store', '--output', 'json'],
+			['vendorize', '@aws-cdk-blocks/bb-kv-store', '--output', 'json'],
 			['db', 'status', '--output', 'json'],
 			['config', 'set', 'K', 'v', '--profile'],
 		]) {
@@ -178,7 +178,7 @@ describe('passthrough commands', () => {
 
 	it('gives db the directory the command runs in, and resolves the relative paths of generate types', async () => {
 		const root = fixtureApp();
-		const sub = join(root, 'aws-blocks');
+		const sub = join(root, 'cdk-blocks');
 		// bb-database runs from the project root and resolves the paths of its own options, so it gets the
 		// tokens as typed and the directory they were typed in. These runs have no terminal: each ends with --no-input.
 		const db = await runCli(['db', 'status', './migrations', '--stage', 'sandbox', '--name', 'main'], {
@@ -227,7 +227,7 @@ describe('passthrough commands', () => {
 		);
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(argvs, [
-			['--out', join(sub, 'mine.d.ts'), '--include', 'aws-blocks/*.ts', '--include', '!aws-blocks/skip/**'],
+			['--out', join(sub, 'mine.d.ts'), '--include', 'cdk-blocks/*.ts', '--include', '!cdk-blocks/skip/**'],
 		]);
 	});
 
@@ -253,6 +253,53 @@ describe('passthrough commands', () => {
 		assert.deepStrictEqual(argvs, []);
 	});
 
+	it('stops generate types --watch on SIGINT through its signal, and removes its listeners', { timeout: 10_000 }, async () => {
+		const cwd = fixtureApp();
+		const before = { SIGINT: process.listenerCount('SIGINT'), SIGTERM: process.listenerCount('SIGTERM') };
+		let received: AbortSignal | undefined;
+		let started!: () => void;
+		const watching = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const core = {
+			// Stands in for hosting's watcher: it only resolves when its signal is aborted.
+			runTypegenCli: async (_argv: string[], deps?: { signal?: AbortSignal }) => {
+				received = deps?.signal;
+				started();
+				await new Promise((resolve) => deps?.signal?.addEventListener('abort', resolve, { once: true }));
+				return 0;
+			},
+		};
+		const run = runCli(['generate', 'types', '--watch'], { cwd, core });
+		await watching;
+		assert.ok(received, 'the watcher was given no signal');
+		// Emitting the event runs the CLI's listener without signalling the test process itself.
+		process.emit('SIGINT');
+		const result = await run;
+		assert.strictEqual(result.code, 0, result.stderr);
+		assert.strictEqual(received.aborted, true);
+		assert.deepStrictEqual(
+			{ SIGINT: process.listenerCount('SIGINT'), SIGTERM: process.listenerCount('SIGTERM') },
+			before,
+		);
+	});
+
+	it('passes no signal to a one-shot generate types, so Ctrl-C keeps its default handling', async () => {
+		const cwd = fixtureApp();
+		const seen: Array<{ signal?: AbortSignal } | undefined> = [];
+		const run = await runCli(['generate', 'types'], {
+			cwd,
+			core: {
+				runTypegenCli: async (_argv: string[], deps?: { signal?: AbortSignal }) => {
+					seen.push(deps);
+					return 0;
+				},
+			},
+		});
+		assert.strictEqual(run.code, 0, run.stderr);
+		assert.deepStrictEqual(seen, [undefined]);
+	});
+
 	it('runs generate client and spec outside an app when the paths are given', async () => {
 		const outside = mkdtempSync(join(tmpdir(), 'blocks-cli-outside-'));
 		writeFileSync(join(outside, 'backend.ts'), 'export {};\n');
@@ -273,7 +320,7 @@ describe('passthrough commands', () => {
 		]) {
 			const run = await runCli(argv, { cwd: outside });
 			assert.strictEqual(run.code, 1, argv.join(' '));
-			assert.match(run.stderr, /^Error: not inside an AWS Blocks app/);
+			assert.match(run.stderr, /^Error: not inside an AWS CDK Blocks app/);
 		}
 	});
 
@@ -303,20 +350,20 @@ describe('passthrough commands', () => {
 		const root = fixtureApp({ blocks: { dev: { generateClient: false } } });
 		const refused = await runCli(['generate', 'client'], { cwd: root });
 		assert.strictEqual(refused.code, 2);
-		assert.match(refused.stderr, /generates its own aws-blocks\/client\.js/);
+		assert.match(refused.stderr, /generates its own cdk-blocks\/client\.js/);
 		assert.match(refused.stderr, /Try: npm run blocks:generate-client, or npm run generate-client -- --force/);
 		assert.strictEqual(refused.spawned.length, 0);
 		const forced = await runCli(['generate', 'client', '--force'], { cwd: root });
 		assert.strictEqual(forced.code, 0, forced.stderr);
 		assert.strictEqual(forced.spawned.length, 1);
 		// Another output file leaves the app's client alone.
-		const other = await runCli(['generate', 'client', 'aws-blocks/index.ts', 'other.js'], { cwd: root });
+		const other = await runCli(['generate', 'client', 'cdk-blocks/index.ts', 'other.js'], { cwd: root });
 		assert.strictEqual(other.code, 0, other.stderr);
 	});
 
 	it('rejects a generate types --out that names a directory', async () => {
 		const root = fixtureApp();
-		const run = await runCli(['generate', 'types', '--out', 'aws-blocks'], { cwd: root });
+		const run = await runCli(['generate', 'types', '--out', 'cdk-blocks'], { cwd: root });
 		assert.strictEqual(run.code, 2);
 		assert.match(run.stderr, /option --out names a directory/);
 	});
@@ -344,7 +391,7 @@ describe('passthrough commands', () => {
 			['set', '--help'],
 		]);
 		// No verb (or an unknown one): the CLI's own help, and nothing runs.
-		const vendorize = await runCli(['vendorize', '@aws-blocks/bb-kv-store', '--force', '--help'], { cwd: root });
+		const vendorize = await runCli(['vendorize', '@aws-cdk-blocks/bb-kv-store', '--force', '--help'], { cwd: root });
 		assert.strictEqual(vendorize.code, 0, vendorize.stderr);
 		assert.match(vendorize.stdout, /Usage: npm run vendorize/);
 		assert.strictEqual(vendorize.spawned.length, 0);
@@ -376,11 +423,11 @@ describe('passthrough commands', () => {
 	});
 
 	it('forwards vendorize arguments verbatim', async () => {
-		const run = await runCli(['vendorize', '@aws-blocks/bb-kv-store', '--force'], { cwd: fixtureApp() });
+		const run = await runCli(['vendorize', '@aws-cdk-blocks/bb-kv-store', '--force'], { cwd: fixtureApp() });
 		assert.strictEqual(run.code, 0, run.stderr);
 		const [spec] = run.spawned;
 		assert.match(spec.args[0], /dist[\\/]vendorize\.js$/);
-		assert.deepStrictEqual(spec.args.slice(1), ['@aws-blocks/bb-kv-store', '--force']);
+		assert.deepStrictEqual(spec.args.slice(1), ['@aws-cdk-blocks/bb-kv-store', '--force']);
 	});
 
 	it('exits 2 when vendorize gets no package, two packages or an unknown option', async () => {
@@ -401,26 +448,6 @@ describe('passthrough commands', () => {
 		}
 	});
 
-	it('maps telemetry subcommands and flags to the core telemetry argv', async () => {
-		const seen: string[][] = [];
-		const core = {
-			telemetry: async (options?: { argv?: string[] }) => {
-				seen.push(options?.argv ?? []);
-			},
-		};
-		const cwd = fixtureApp();
-		for (const argv of [['telemetry'], ['telemetry', 'disable', '--global'], ['telemetry', '--enable']]) {
-			const run = await runCli(argv, { cwd, core });
-			assert.strictEqual(run.code, 0, run.stderr);
-		}
-		assert.deepStrictEqual(seen, [
-			['node', 'cdk-blocks', '--status'],
-			['node', 'cdk-blocks', '--disable', '--global'],
-			['node', 'cdk-blocks', '--enable'],
-		]);
-		const conflict = await runCli(['telemetry', 'enable', '--disable'], { cwd, core });
-		assert.strictEqual(conflict.code, 2);
-	});
 });
 
 describe('lifecycle commands', () => {
@@ -433,7 +460,7 @@ describe('lifecycle commands', () => {
 		assert.strictEqual(spec.args[1], 'watch');
 		assert.strictEqual(spec.args[2], runnerPath('dev-server'));
 		assert.deepStrictEqual(JSON.parse(spec.env[DEV_OPTIONS_ENV] ?? ''), {
-			backendPath: join(root, 'aws-blocks', 'index.ts'),
+			backendPath: join(root, 'cdk-blocks', 'index.ts'),
 			port: 4000,
 			frontendCommand: 'npx vite --host 127.0.0.1 --port 3100 --strictPort',
 			frontendPort: 3100,
@@ -452,7 +479,7 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(
 			{ ...options, devCommand: undefined },
 			{
-				backendPath: join(root, 'aws-blocks', 'index.cdk.ts'),
+				backendPath: join(root, 'cdk-blocks', 'index.cdk.ts'),
 				deployOnly: false,
 				preview: false,
 				devCommand: undefined,
@@ -474,7 +501,7 @@ describe('lifecycle commands', () => {
 		assert.ok(options.devCommand.includes(join(fileURLToPath(loader), '..', 'cli.mjs')), options.devCommand);
 		// package.json "blocks.dev" without a frontendCommand keeps auto-detection on.
 		assert.deepStrictEqual(JSON.parse(spec.env[DEV_OPTIONS_ENV] ?? ''), {
-			backendPath: join(root, 'aws-blocks', 'index.ts'),
+			backendPath: join(root, 'cdk-blocks', 'index.ts'),
 			port: 3005,
 			frontendCommand: 'npx next dev --webpack --hostname 127.0.0.1 --port 3100',
 			frontendPort: 3100,
@@ -494,7 +521,7 @@ describe('lifecycle commands', () => {
 			runnerPath('sandbox-destroy'),
 		]);
 		assert.deepStrictEqual(runnerOptions(spec, 'sandbox-destroy'), {
-			backendPath: join(root, 'aws-blocks', 'index.cdk.ts'),
+			backendPath: join(root, 'cdk-blocks', 'index.cdk.ts'),
 			invocation: 'npm run sandbox:destroy',
 		});
 		assert.match(run.stderr, /production stack is not affected/);
@@ -520,7 +547,7 @@ describe('lifecycle commands', () => {
 		assert.strictEqual(run.code, 0, run.stderr);
 		const [spec] = run.spawned;
 		assert.deepStrictEqual(runnerOptions(spec, 'deploy'), {
-			cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'),
+			cdkAppPath: join(root, 'cdk-blocks', 'index.cdk.ts'),
 			projectRoot: root,
 			invocation: 'npm run deploy',
 		});
@@ -563,7 +590,12 @@ describe('lifecycle commands', () => {
 		await runCli(['--profile', 'prod', 'whoami'], {
 			cwd: root,
 			env: AWS_ENV,
-			core: { readAwsIdentity: async ({ invocation }) => (seen.push(invocation), IDENTITY) },
+			core: {
+				readAwsIdentity: async ({ invocation }) => {
+					seen.push(invocation);
+					return IDENTITY;
+				},
+			},
 		});
 		assert.deepStrictEqual(seen, ['npm run whoami -- --profile prod']);
 	});
@@ -623,7 +655,13 @@ describe('lifecycle commands', () => {
 		const lookups: unknown[] = [];
 		const noId = await runCli(['sandbox', 'console'], {
 			cwd: fixtureApp(),
-			core: { ...core, deployedStackExists: async (options) => (lookups.push(options), true) },
+			core: {
+				...core,
+				deployedStackExists: async (options) => {
+					lookups.push(options);
+					return true;
+				},
+			},
 		});
 		assert.strictEqual(noId.code, 1);
 		assert.match(noId.stderr, /^Error: no sandbox on this machine/);
@@ -635,7 +673,10 @@ describe('lifecycle commands', () => {
 		const lookups: { stackName: string; region?: string; projectRoot?: string; env?: NodeJS.ProcessEnv }[] = [];
 		const withLookup = (exists: boolean | undefined) => ({
 			openConsole: async (options: unknown) => void opened.push(options),
-			deployedStackExists: async (options: (typeof lookups)[number]) => (lookups.push(options), exists),
+			deployedStackExists: async (options: (typeof lookups)[number]) => {
+				lookups.push(options);
+				return exists;
+			},
 		});
 		// A sandbox that the old npm-script wrappers deployed records no last-deploy.json, and a production
 		// deploy then rewrote outputs.json with its own stack alone.
@@ -769,45 +810,18 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(read('config.sandbox.json'), { apiUrl: 'https://s', environment: 'sandbox' });
 	});
 
-	it('refuses a project telemetry change outside an app, and reads status from the -C directory', async () => {
-		const shell = mkdtempSync(join(tmpdir(), 'blocks-cli-shell-'));
-		const other = mkdtempSync(join(tmpdir(), 'blocks-cli-other-'));
-		const seen: string[][] = [];
-		const core = {
-			telemetry: async (options?: { argv?: string[] }) => {
-				seen.push(options?.argv ?? []);
-			},
-		};
-		const disable = await runCli(['-C', other, 'telemetry', 'disable'], { cwd: shell, core });
-		assert.strictEqual(disable.code, 2);
-		assert.match(
-			disable.stderr,
-			/^Error: not inside an AWS Blocks app, so there is no project to disable telemetry for\./,
-		);
-		assert.deepStrictEqual(seen, []);
-		const status = await runCli(['-C', other, 'telemetry'], { cwd: shell, core });
-		assert.strictEqual(status.code, 0, status.stderr);
-		assert.deepStrictEqual(status.chdirs, [other]);
-		const global = await runCli(['telemetry', 'disable', '--global'], { cwd: shell, core });
-		assert.strictEqual(global.code, 0, global.stderr);
-		assert.deepStrictEqual(seen, [
-			['node', 'cdk-blocks', '--status'],
-			['node', 'cdk-blocks', '--disable', '--global'],
-		]);
-	});
-
 	it('makes --telemetry-file absolute in the argv that in-process core functions read', async () => {
 		const root = fixtureApp();
 		const shell = mkdtempSync(join(tmpdir(), 'blocks-cli-shell-'));
-		const core = { telemetry: async () => {} };
+		const core = { runConfigCli: async () => {} };
 		for (const [argv, expected] of [
 			[
-				['-C', root, '--telemetry-file', 'rel.json', 'telemetry'],
-				['-C', root, '--telemetry-file', join(shell, 'rel.json'), 'telemetry'],
+				['-C', root, '--telemetry-file', 'rel.json', 'config', 'list'],
+				['-C', root, '--telemetry-file', join(shell, 'rel.json'), 'config', 'list'],
 			],
 			[
-				['-C', root, 'telemetry', '--telemetry-file=rel.json'],
-				['-C', root, 'telemetry', `--telemetry-file=${join(shell, 'rel.json')}`],
+				['-C', root, 'config', 'list', '--telemetry-file=rel.json'],
+				['-C', root, 'config', 'list', `--telemetry-file=${join(shell, 'rel.json')}`],
 			],
 		] as const) {
 			const run = await runCli([...argv], { cwd: shell, core });
@@ -877,11 +891,11 @@ describe('lifecycle commands', () => {
 		assert.strictEqual(deployOptions.preview, false);
 	});
 
-	it("points the runners' tsx at aws-blocks/tsconfig.json when the backend has one", async () => {
+	it("points the runners' tsx at cdk-blocks/tsconfig.json when the backend has one", async () => {
 		// A Vite template's root tsconfig.json only lists project references, so tsx would
 		// compile backend files with no options (no jsx, no paths) without this.
 		const root = fixtureApp();
-		const backend = join(root, 'aws-blocks', 'tsconfig.json');
+		const backend = join(root, 'cdk-blocks', 'tsconfig.json');
 		const without = await runCli(['dev'], { cwd: root });
 		assert.strictEqual(without.code, 0, without.stderr);
 		assert.strictEqual(without.spawned[0].env[TSX_TSCONFIG_ENV], undefined);
@@ -1269,7 +1283,7 @@ describe('help for passthrough subcommands', () => {
 		const db = await runCli(['help', 'db', 'migrate', './dir', '--yes'], { cwd: root });
 		assert.strictEqual(db.code, 0, db.stderr);
 		assert.deepStrictEqual(db.spawned[0].args.slice(1), ['migrate', '--help']);
-		const vendorize = await runCli(['help', 'vendorize', '@aws-blocks/bb-kv-store'], { cwd: root });
+		const vendorize = await runCli(['help', 'vendorize', '@aws-cdk-blocks/bb-kv-store'], { cwd: root });
 		assert.match(vendorize.stdout, /Usage: npm run vendorize/);
 		assert.strictEqual(vendorize.spawned.length, 0);
 	});
@@ -1332,7 +1346,7 @@ describe('help for passthrough subcommands', () => {
 		// Running a verb still needs the app.
 		const run = await runCli(['secret', 'list'], { cwd: outside, core });
 		assert.strictEqual(run.code, 1);
-		assert.match(run.stderr, /^Error: not inside an AWS Blocks app/);
+		assert.match(run.stderr, /^Error: not inside an AWS CDK Blocks app/);
 	});
 });
 
@@ -1386,14 +1400,14 @@ describe('destroy safety', () => {
 		assert.strictEqual(run.spawned.length, 1);
 		// Core refuses when the CDK app does not define this stack, and says "nothing to delete" when it does not exist.
 		assert.deepStrictEqual(runnerOptions(run.spawned[0], 'destroy'), {
-			cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'),
+			cdkAppPath: join(root, 'cdk-blocks', 'index.cdk.ts'),
 			projectRoot: root,
 			stackName: 'demo-prod',
 			invocation: 'npm run destroy',
 		});
 	});
 
-	it('says when CDK deployed another stack than the one .blocks/config.json names', async () => {
+	it('says when CDK deployed another stack than the one .cdk-blocks/config.json names', async () => {
 		const root = fixtureApp();
 		const record = (stack: string) => () => {
 			mkdirSync(join(root, '.cdk-blocks-sandbox'), { recursive: true });
@@ -1405,7 +1419,7 @@ describe('destroy safety', () => {
 		assert.strictEqual(other.code, 0, other.stderr);
 		assert.match(
 			other.stderr,
-			/Warning: CDK deployed the stack my-blocks-stack-prod, not demo-prod, which \.blocks\/config\.json names\.\n.*so that <stackId>-prod is my-blocks-stack-prod\./,
+			/Warning: CDK deployed the stack my-blocks-stack-prod, not demo-prod, which \.cdk-blocks\/config\.json names\.\n.*so that <stackId>-prod is my-blocks-stack-prod\./,
 		);
 		const same = await runCli(['deploy'], { cwd: root, env: AWS_ENV, onSpawn: record('demo-prod') });
 		assert.doesNotMatch(same.stderr, /Warning/);
@@ -1413,7 +1427,7 @@ describe('destroy safety', () => {
 
 	it('without a stackId, says <id>-prod must be the existing production stack, with a Try line', async () => {
 		const root = fixtureApp();
-		writeFileSync(join(root, '.blocks', 'config.json'), '{}');
+		writeFileSync(join(root, '.cdk-blocks', 'config.json'), '{}');
 		for (const argv of [['deploy'], ['destroy', '--yes']]) {
 			const run = await runCli(argv, { cwd: root, env: AWS_ENV });
 			assert.strictEqual(run.code, 1, argv.join(' '));
@@ -1526,14 +1540,14 @@ describe('verbose echo', () => {
 
 	it('quotes the words of the echoed command line that a shell would split', async () => {
 		const root = join(fixtureApp(), 'app x');
-		mkdirSync(join(root, 'aws-blocks'), { recursive: true });
+		mkdirSync(join(root, 'cdk-blocks'), { recursive: true });
 		writeFileSync(join(root, 'package.json'), '{}');
-		writeFileSync(join(root, 'aws-blocks', 'index.ts'), 'export {};\n');
+		writeFileSync(join(root, 'cdk-blocks', 'index.ts'), 'export {};\n');
 		const run = await runCli(['-v', 'generate', 'spec'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		const options = JSON.stringify({
-			backendPath: join(root, 'aws-blocks', 'index.ts'),
-			outputPath: join(root, 'aws-blocks', 'blocks.spec.json'),
+			backendPath: join(root, 'cdk-blocks', 'index.ts'),
+			outputPath: join(root, 'cdk-blocks', 'blocks.spec.json'),
 		});
 		assert.ok(run.stderr.includes(` '${options}'`), run.stderr);
 		assert.doesNotMatch(run.stderr, / \{"backendPath"/);
@@ -1588,7 +1602,7 @@ describe('error format', () => {
 		assert.strictEqual(plain.code, 1);
 		assert.doesNotMatch(plain.stderr, /Run with/);
 		const debug = await runCli(['generate', 'spec', '--debug'], { cwd: outside });
-		assert.match(debug.stderr, /^Error: not inside an AWS Blocks app[\s\S]*\n {4}at /);
+		assert.match(debug.stderr, /^Error: not inside an AWS CDK Blocks app[\s\S]*\n {4}at /);
 		// An underlying error has a stack to show.
 		const cause = await runCli(['secret', 'list'], {
 			cwd: root,
@@ -1897,22 +1911,22 @@ describe('JSON output', () => {
 		assert.match(run.stderr, /Try: npm run whoami -- --region <region>/);
 	});
 
-	it('whoami tells a malformed .blocks/config.json from a missing one or a missing stackId', async () => {
+	it('whoami tells a malformed .cdk-blocks/config.json from a missing one or a missing stackId', async () => {
 		const root = fixtureApp();
 		const core = { readAwsIdentity: async () => IDENTITY };
-		const config = join(root, '.blocks', 'config.json');
+		const config = join(root, '.cdk-blocks', 'config.json');
 		writeFileSync(config, '{bad json');
 		const bad = await runCli(['whoami'], { cwd: root, core });
 		assert.strictEqual(bad.code, 0, bad.stderr);
-		assert.match(bad.stdout, /Production: {2}\(invalid \.blocks\/config\.json\)/);
-		assert.match(bad.stderr, /Warning: \.blocks\/config\.json is not valid JSON/);
+		assert.match(bad.stdout, /Production: {2}\(invalid \.cdk-blocks\/config\.json\)/);
+		assert.match(bad.stderr, /Warning: \.cdk-blocks\/config\.json is not valid JSON/);
 		const deploy = await runCli(['deploy'], { cwd: root, env: AWS_ENV });
-		assert.match(deploy.stderr, /^Error: \.blocks\/config\.json is not valid JSON/);
+		assert.match(deploy.stderr, /^Error: \.cdk-blocks\/config\.json is not valid JSON/);
 		assert.doesNotMatch(deploy.stderr, /Try:/);
 		writeFileSync(config, '{}');
-		assert.match((await runCli(['whoami'], { cwd: root, core })).stdout, /\(no stackId in \.blocks\/config\.json\)/);
+		assert.match((await runCli(['whoami'], { cwd: root, core })).stdout, /\(no stackId in \.cdk-blocks\/config\.json\)/);
 		rmSync(config);
-		assert.match((await runCli(['whoami'], { cwd: root, core })).stdout, /\(no \.blocks\/config\.json\)/);
+		assert.match((await runCli(['whoami'], { cwd: root, core })).stdout, /\(no \.cdk-blocks\/config\.json\)/);
 	});
 
 	/** Write `.cdk-blocks-sandbox/last-deploy.json`, as the deploy runners do. */
@@ -1962,7 +1976,7 @@ describe('JSON output', () => {
 				);
 				writeFileSync(
 					join(root, '.cdk-blocks-sandbox', 'config.json'),
-					JSON.stringify({ apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'local' }),
+					JSON.stringify({ apiUrl: 'http://localhost:3000/cdk-blocks/api', environment: 'local' }),
 				);
 				return { code: 0 };
 			},
@@ -2246,7 +2260,7 @@ describe('the deploy runners record the result', () => {
 	 * deploy of the same app rewrites outputs.json with only its own stack.
 	 */
 	function runRunner(root: string, runner: RunnerName, options: unknown, args: string[] = [], failLive = false): void {
-		const coreUrl = import.meta.resolve('@aws-blocks/core/scripts');
+		const coreUrl = import.meta.resolve('@aws-cdk-blocks/core/scripts');
 		const fixture = `
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { mock } from 'node:test';
@@ -2298,7 +2312,7 @@ await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
 
 	it('npm run deploy: the outputs core read before its wait, not the outputs.json rewritten during it', () => {
 		const root = fixtureApp();
-		runRunner(root, 'deploy', { cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'), projectRoot: root });
+		runRunner(root, 'deploy', { cdkAppPath: join(root, 'cdk-blocks', 'index.cdk.ts'), projectRoot: root });
 		assert.deepStrictEqual(lastDeploy(root), {
 			production: { stack: 'demo-prod', apiUrl: prodUrl, url: 'https://d111.cloudfront.net', ...target },
 		});
@@ -2308,8 +2322,8 @@ await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
 		const root = fixtureApp();
 		mkdirSync(join(root, '.cdk-blocks-sandbox'));
 		writeFileSync(join(root, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'jdoe-abc123');
-		runRunner(root, 'deploy', { cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'), projectRoot: root });
-		runRunner(root, 'sandbox', { backendPath: join(root, 'aws-blocks', 'index.cdk.ts'), deployOnly: true });
+		runRunner(root, 'deploy', { cdkAppPath: join(root, 'cdk-blocks', 'index.cdk.ts'), projectRoot: root });
+		runRunner(root, 'sandbox', { backendPath: join(root, 'cdk-blocks', 'index.cdk.ts'), deployOnly: true });
 		assert.deepStrictEqual(lastDeploy(root), {
 			production: { stack: 'demo-prod', apiUrl: prodUrl, url: 'https://d111.cloudfront.net', ...target },
 			sandbox: { stack: 'demo-jdoe-abc123', apiUrl: sandboxUrl, url: null, ...target },
@@ -2318,7 +2332,7 @@ await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
 
 	it('npm run sandbox (watch mode): records the sandbox after its first deploy', () => {
 		const root = fixtureApp();
-		runRunner(root, 'sandbox', { backendPath: join(root, 'aws-blocks', 'index.cdk.ts'), deployOnly: false });
+		runRunner(root, 'sandbox', { backendPath: join(root, 'cdk-blocks', 'index.cdk.ts'), deployOnly: false });
 		assert.deepStrictEqual(lastDeploy(root), {
 			sandbox: { stack: 'demo-jdoe-abc123', apiUrl: sandboxUrl, url: null, ...target },
 		});
@@ -2326,7 +2340,7 @@ await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
 
 	it('npm run deploy -- --wait-live: records the deploy with live false when the wait fails, and exits 1', () => {
 		const root = fixtureApp();
-		const options = { cdkAppPath: join(root, 'aws-blocks', 'index.cdk.ts'), projectRoot: root };
+		const options = { cdkAppPath: join(root, 'cdk-blocks', 'index.cdk.ts'), projectRoot: root };
 		runRunner(root, 'deploy', options, ['--wait-live', '--wait-live-timeout=5'], true);
 		assert.strictEqual(lastDeploy(root).production?.live, false);
 		runRunner(root, 'deploy', options, ['--wait-live']);

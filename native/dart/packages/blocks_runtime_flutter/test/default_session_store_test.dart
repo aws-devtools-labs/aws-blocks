@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 import 'dart:convert';
 
 import 'package:blocks_runtime/blocks_runtime.dart';
@@ -14,7 +17,7 @@ final _device = <String, String>{};
 
 const _channel = MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
 
-const _api = 'https://api.example.com/aws-blocks/api';
+const _api = 'https://api.example.com/cdk-blocks/api';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

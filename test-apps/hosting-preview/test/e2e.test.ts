@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, '..');
-const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
+const backendPath = join(__dirname, '..', 'cdk-blocks', 'index.cdk.ts');
 
 let hostingUrl: string;
 /** The deployed stack's test-support secret (sandbox only). Never log it. */
@@ -22,7 +22,7 @@ let testSupportSecret = '';
 test.beforeAll(async () => {
   if (ENV === 'sandbox') {
     // The deploy and the tests share this run's test-support secret (see "Sandbox
-    // e2e test support" in aws-blocks/index.ts). Never log it.
+    // e2e test support" in cdk-blocks/index.ts). Never log it.
     if (!process.env.BLOCKS_TEST_SUPPORT_SECRET) process.env.BLOCKS_TEST_SUPPORT_SECRET = randomBytes(32).toString('hex');
     testSupportSecret = process.env.BLOCKS_TEST_SUPPORT_SECRET;
     console.log('🚀 Deploying hosting-preview sandbox...\n');
@@ -56,7 +56,7 @@ test.afterAll(async () => {
 
 /** Call `testSupport.provisionUser` and return the raw JSON-RPC response body. */
 async function callProvisionUser(request: APIRequestContext, secret: string, username: string, password: string) {
-  const resp = await request.post(`${hostingUrl}/aws-blocks/api`, {
+  const resp = await request.post(`${hostingUrl}/cdk-blocks/api`, {
     headers: { 'Content-Type': 'application/json' },
     data: JSON.stringify({
       jsonrpc: '2.0',
@@ -70,7 +70,7 @@ async function callProvisionUser(request: APIRequestContext, secret: string, use
 
 /**
  * Create a confirmed user through the backend's `testSupport.provisionUser`
- * RPC (sandbox only — see `aws-blocks/index.ts`).
+ * RPC (sandbox only — see `cdk-blocks/index.ts`).
  */
 async function provisionUser(request: APIRequestContext, username: string, password: string) {
   const body = await callProvisionUser(request, testSupportSecret, username, password);
@@ -101,11 +101,11 @@ test.describe('Notes Manager — Hosting preview mode', () => {
   });
 
   test('2. config.json is served with apiUrl', async ({ request }) => {
-    const resp = await request.get(`${hostingUrl}/.cdk-blocks-sandbox/config.json`);
+    const resp = await request.get(`${hostingUrl}/.blocks-sandbox/config.json`);
     expect(resp.status()).toBe(200);
     const config = await resp.json();
     expect(config.apiUrl).toBeTruthy();
-    expect(config.apiUrl).toBe('/aws-blocks/api');
+    expect(config.apiUrl).toBe('/cdk-blocks/api');
   });
 
   test('3. SPA fallback — deep path still loads the app', async ({ page }) => {
@@ -157,7 +157,7 @@ test.describe('Notes Manager — Hosting preview mode', () => {
     // up, and the record returned belongs to the user asked for. Called over
     // JSON-RPC directly — testUser signed up in the previous serial test.
     const rpc = async (method: string, args: unknown[]) => {
-      const resp = await request.post(`${hostingUrl}/aws-blocks/api`, {
+      const resp = await request.post(`${hostingUrl}/cdk-blocks/api`, {
         headers: { 'Content-Type': 'application/json' },
         data: { jsonrpc: '2.0', method: `api.${method}`, params: args, id: 1 },
       });

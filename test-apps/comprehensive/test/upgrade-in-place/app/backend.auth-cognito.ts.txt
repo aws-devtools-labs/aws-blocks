@@ -4,7 +4,7 @@
 /**
  * BEFORE: the backend an existing customer runs today — `AuthCognito`.
  *
- * Materialized as `aws-blocks/index.ts` in the pre-refactor checkout (stored as
+ * Materialized as `cdk-blocks/index.ts` in the pre-refactor checkout (stored as
  * `.ts.txt`: `@aws-blocks/bb-auth-cognito` exists only there, so this workspace
  * never compiles or resolves it). The
  * scope id (`upgrade`), the block id (`auth`), the API namespace and its method
@@ -12,8 +12,8 @@
  * is exactly the customer's upgrade.
  */
 
-import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
-import { ApiNamespace, Scope } from '@aws-blocks/blocks';
+import { AuthCognito } from '@aws-cdk-blocks/bb-auth-cognito';
+import { ApiNamespace, Scope } from 'aws-cdk-blocks';
 
 const scope = new Scope('upgrade');
 

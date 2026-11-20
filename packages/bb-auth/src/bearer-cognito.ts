@@ -23,7 +23,7 @@
  * @internal
  */
 
-import { getSdkIdentifiers } from '@aws-blocks/core';
+import { getSdkIdentifiers } from '@aws-cdk-blocks/core';
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import { jwtHeaderAlg } from './bearer.js';
 import {

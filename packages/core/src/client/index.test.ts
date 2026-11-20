@@ -104,7 +104,7 @@ try {
     assert.ok(result.includes('PASS'), `Expected PASS, got: ${result}`);
   });
 
-  it('resolveApiUrl accepts relative URLs (e.g. /aws-blocks/api for SPA hosting)', () => {
+  it('resolveApiUrl accepts relative URLs (e.g. /cdk-blocks/api for SPA hosting)', () => {
     const result = runScript(`
 const api = ApiNamespaceClient('test');
 try {
@@ -119,19 +119,19 @@ try {
     console.log('PASS:other');
   }
 }
-`, { BLOCKS_API_URL: '/aws-blocks/api' });
+`, { BLOCKS_API_URL: '/cdk-blocks/api' });
     assert.ok(result.includes('PASS'), `Expected PASS, got: ${result}`);
   });
 
   it('calls a relative apiUrl from the fetched config.json at the page origin', () => {
-    // A dev server bound to all interfaces serves {"apiUrl": "/aws-blocks/api"}. The browser
+    // A dev server bound to all interfaces serves {"apiUrl": "/cdk-blocks/api"}. The browser
     // resolves each request against the page, so the client must pass the path on as it is.
     const result = runScript(`
 const calls = [];
 globalThis.fetch = async (input) => {
   calls.push(String(input));
   const body = calls.length === 1
-    ? { apiUrl: '/aws-blocks/api', environment: 'local' }
+    ? { apiUrl: '/cdk-blocks/api', environment: 'local' }
     : { jsonrpc: '2.0', result: 'ok', id: 1 };
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 };
@@ -140,13 +140,13 @@ console.log(JSON.stringify({ result: await api.hello(), calls }));
 `, {});
     assert.deepStrictEqual(JSON.parse(result.split('\n').at(-1) ?? ''), {
       result: 'ok',
-      calls: ['/.cdk-blocks-sandbox/config.json', '/aws-blocks/api/greet'],
+      calls: ['/.blocks-sandbox/config.json', '/cdk-blocks/api/greet'],
     });
   });
 });
 
 describe('ApiNamespaceClient — per-namespace request path', () => {
-  // The typed client POSTs to `/aws-blocks/api/{namespace}` so a gateway can
+  // The typed client POSTs to `/cdk-blocks/api/{namespace}` so a gateway can
   // route each namespace to the compute that hosts it. These spy on `fetch`
   // (test plumbing — not customer code) to assert the request URL.
   it('appends /{namespace} to the API base URL', async () => {
@@ -162,11 +162,11 @@ describe('ApiNamespaceClient — per-namespace request path', () => {
     }) as typeof fetch;
     try {
       const api = ApiNamespaceClient<{ hello(): Promise<string> }>('reports', {
-        url: 'https://d123.cloudfront.net/aws-blocks/api',
+        url: 'https://d123.cloudfront.net/cdk-blocks/api',
       });
       const result = await api.hello();
       assert.strictEqual(result, 'ok');
-      assert.deepStrictEqual(calls, ['https://d123.cloudfront.net/aws-blocks/api/reports']);
+      assert.deepStrictEqual(calls, ['https://d123.cloudfront.net/cdk-blocks/api/reports']);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -184,9 +184,9 @@ describe('ApiNamespaceClient — per-namespace request path', () => {
       });
     }) as typeof fetch;
     try {
-      const api = ApiNamespaceClient<{ ping(): Promise<number> }>('auth', { url: '/aws-blocks/api/' });
+      const api = ApiNamespaceClient<{ ping(): Promise<number> }>('auth', { url: '/cdk-blocks/api/' });
       await api.ping();
-      assert.deepStrictEqual(calls, ['/aws-blocks/api/auth']);
+      assert.deepStrictEqual(calls, ['/cdk-blocks/api/auth']);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -211,9 +211,9 @@ describe('ApiNamespaceClient — per-namespace request path', () => {
       });
     }) as typeof fetch;
     try {
-      const api = ApiNamespaceClient<{ ping(): Promise<string> }>('rewriteMe', { url: '/aws-blocks/api' });
+      const api = ApiNamespaceClient<{ ping(): Promise<string> }>('rewriteMe', { url: '/cdk-blocks/api' });
       await api.ping();
-      assert.deepStrictEqual(calls, [{ url: '/aws-blocks/api/rewritten', method: 'rewritten.ping' }]);
+      assert.deepStrictEqual(calls, [{ url: '/cdk-blocks/api/rewritten', method: 'rewritten.ping' }]);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -236,7 +236,7 @@ describe('ApiNamespaceClient — an RPC error decodes the same whatever the HTTP
     globalThis.fetch = (async () =>
       new Response(errorBody, { status, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
     try {
-      const api = ApiNamespaceClient<{ whoami(): Promise<string> }>('api', { url: '/aws-blocks/api' });
+      const api = ApiNamespaceClient<{ whoami(): Promise<string> }>('api', { url: '/cdk-blocks/api' });
       await api.whoami();
       assert.fail('expected the call to reject');
     } catch (e) {
@@ -274,13 +274,13 @@ describe('ApiNamespaceClient namespace identity', () => {
 });
 
 describe('ApiNamespaceClient — per-call fetch (test clients)', () => {
-  // `@aws-blocks/blocks/utils`'s createTestClient runs each call inside an
+  // `aws-cdk-blocks/utils`'s createTestClient runs each call inside an
   // AsyncLocalStorage whose store is the fetch to use (one cookie jar per test
   // user). The client reads it through a `Symbol.for` key on globalThis
   // (client/fetch-store.ts).
   const KEY = Symbol.for('blocks:ClientFetch');
 
-  it('the key is exported once, from @aws-blocks/core/bb-utils', async () => {
+  it('the key is exported once, from @aws-cdk-blocks/core/bb-utils', async () => {
     const { CLIENT_FETCH_STORE } = await import('../bb-utils.js');
     assert.strictEqual(CLIENT_FETCH_STORE, KEY);
   });
@@ -309,7 +309,7 @@ describe('ApiNamespaceClient — per-call fetch (test clients)', () => {
       for (const retryStaleConnection of [true, false]) {
         calls.length = 0;
         const api = ApiNamespaceClient<{ ping(): Promise<string> }>('api', {
-          url: 'http://127.0.0.1:1/aws-blocks/api',
+          url: 'http://127.0.0.1:1/cdk-blocks/api',
           retryStaleConnection,
         });
         assert.strictEqual(await store.run(scoped, () => api.ping()), 'ok');
@@ -337,7 +337,7 @@ describe('ApiNamespaceClient — non-JSON-RPC response bodies', () => {
     })) as typeof fetch;
     try {
       const api = ApiNamespaceClient<{ hello(): Promise<unknown> }>('reports', {
-        url: 'https://d123.cloudfront.net/aws-blocks/api',
+        url: 'https://d123.cloudfront.net/cdk-blocks/api',
       });
       return await api.hello();
     } finally {
@@ -455,7 +455,7 @@ describe('Client bundle safety (React Native / Hermes)', () => {
     assert.deepStrictEqual(clientGraph().nonRelativeImports, []);
   });
 
-  /** Run `fn` in a project directory whose `.cdk-blocks-sandbox/config.json` names an API URL. */
+  /** Run `fn` in a project directory whose `.blocks-sandbox/config.json` names an API URL. */
   function withConfigFile(fn: (projectDir: string) => void): void {
     const projectDir = mkdtempSync(join(tmpdir(), 'blocks-client-cwd-'));
     try {
@@ -470,7 +470,7 @@ describe('Client bundle safety (React Native / Hermes)', () => {
     }
   }
 
-  it('still reads .cdk-blocks-sandbox/config.json from the working directory under Node', () => {
+  it('still reads .blocks-sandbox/config.json from the working directory under Node', () => {
     withConfigFile((projectDir) => {
       const result = runScript(`
 globalThis.fetch = async (url) => {
@@ -505,7 +505,7 @@ try {
 `, {}, projectDir);
       // The only request is the fetch step: the apiUrl in the config file is never used.
       const requests = result.split('\n').filter((line) => line.startsWith('FETCH:'));
-      assert.deepStrictEqual(requests, ['FETCH:/.cdk-blocks-sandbox/config.json'], `Expected only the fetch step, got: ${result}`);
+      assert.deepStrictEqual(requests, ['FETCH:/.blocks-sandbox/config.json'], `Expected only the fetch step, got: ${result}`);
       assert.ok(result.includes('ERROR:Blocks API URL not configured'), `Expected the not-configured error, got: ${result}`);
       assert.ok(result.includes('that needs Node.js 22.3 or later'), `Expected the error to name the Node.js requirement, got: ${result}`);
     });
@@ -513,7 +513,7 @@ try {
 });
 
 describe('Node.js client and a config.json an older deploy wrote', () => {
-  /** Run a client call in a fresh app whose `.cdk-blocks-sandbox/config.json` is `config`, against a stub API that counts calls. */
+  /** Run a client call in a fresh app whose `.blocks-sandbox/config.json` is `config`, against a stub API that counts calls. */
   async function callWith(config: (stub: string) => object, env: (stub: string) => Record<string, string> = () => ({})) {
     let calls = 0;
     const server = createServer((_req, res) => {
@@ -522,7 +522,7 @@ describe('Node.js client and a config.json an older deploy wrote', () => {
       res.end(JSON.stringify({ jsonrpc: '2.0', result: 'stub', id: 1 }));
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const stub = `http://127.0.0.1:${(server.address() as AddressInfo).port}/aws-blocks/api`;
+    const stub = `http://127.0.0.1:${(server.address() as AddressInfo).port}/cdk-blocks/api`;
     const dir = mkdtempSync(join(tmpdir(), 'blocks-client-legacy-'));
     try {
       mkdirSync(join(dir, '.cdk-blocks-sandbox'));
@@ -552,13 +552,13 @@ describe('Node.js client and a config.json an older deploy wrote', () => {
   });
 
   it('refuses a sandbox config.json with an https URL', async () => {
-    const { stdout } = await callWith(() => ({ apiUrl: 'https://abc.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api', environment: 'sandbox' }));
+    const { stdout } = await callWith(() => ({ apiUrl: 'https://abc.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api', environment: 'sandbox' }));
     assert.match(stdout, /ERROR \.cdk-blocks-sandbox\/config\.json points at the deployed sandbox stack/);
   });
 
   it('calls the stack BLOCKS_API_URL names on purpose', async () => {
     const { stdout, calls } = await callWith(
-      () => ({ apiUrl: 'https://legacy.example/aws-blocks/api', environment: 'production' }),
+      () => ({ apiUrl: 'https://legacy.example/cdk-blocks/api', environment: 'production' }),
       (stub) => ({ BLOCKS_API_URL: stub }),
     );
     assert.match(stdout, /RESULT stub/);

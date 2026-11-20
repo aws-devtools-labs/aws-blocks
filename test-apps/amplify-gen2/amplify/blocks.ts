@@ -5,13 +5,13 @@
  * Amplify's Cognito user pool to the Blocks `Auth` block so its guards accept
  * the access tokens the Amplify frontend sends.
  */
-import { createBlocksBackend } from '../aws-blocks/index.cdk.js';
+import { createBlocksBackend } from '../cdk-blocks/index.cdk.js';
 
 export async function initBlocks(backend: any) {
   const blocksStack = backend.createStack('blocks');
   const sandboxMode = process.env.AMPLIFY_SANDBOX === 'true';
 
-  // The Blocks backend module (aws-blocks/index.ts) is loaded while this CDK app
+  // The Blocks backend module (cdk-blocks/index.ts) is loaded while this CDK app
   // synthesizes. Hand it Amplify's pool and app-client ids first — CDK tokens,
   // resolved at deploy time. `Auth` forwards them to its Lambda through its own
   // config, so nothing is set on the Lambda's environment here.

@@ -39,14 +39,14 @@
  *   application code in `validateUser` / `onSignIn` — keeps its name, status
  *   and `retriable` flag (its message is still scrubbed of AWS identifiers).
  *
- * Server-only (imports `@aws-blocks/core`'s `ApiError`). Not exported from any
+ * Server-only (imports `@aws-cdk-blocks/core`'s `ApiError`). Not exported from any
  * entry point.
  *
  * @internal
  */
 
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { ApiError } from '@aws-blocks/core';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { incorrectCredentialsError, WRONG_CODE_MESSAGE, wrongCodeError } from './enumeration.js';
 import { type AuthErrorName, AuthErrors, isRetriableAuthError, statusForAuthError } from './errors.js';
 import { decodeTriggerRejection } from './trigger-rejection.js';

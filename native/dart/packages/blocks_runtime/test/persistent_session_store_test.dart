@@ -53,8 +53,8 @@ void main() async {
 
         expect(store.cookies, isEmpty);
         for (final url in [
-          'http://localhost:3001/aws-blocks/api',
-          'https://localhost:3001/aws-blocks/api',
+          'http://localhost:3001/cdk-blocks/api',
+          'https://localhost:3001/cdk-blocks/api',
           'https://other.example.com/',
           'wss://other.example.com/realtime',
         ]) {
@@ -70,7 +70,7 @@ void main() async {
         // A later save writes only the new record, not the legacy cookie.
         store.setCookies(
           'other=1',
-          requestUri: Uri.parse('https://localhost:3001/aws-blocks/api'),
+          requestUri: Uri.parse('https://localhost:3001/cdk-blocks/api'),
         );
         await store.flush();
         final records = (jsonDecode((await token.get('k'))!) as List<dynamic>)
@@ -216,7 +216,7 @@ void main() async {
   });
 
   group('PersistentSessionStore while storage is unreadable', () {
-    final api = Uri.parse('https://example.com/aws-blocks/api');
+    final api = Uri.parse('https://example.com/cdk-blocks/api');
 
     /// Storage holding a session cookie with [value], then locked.
     Future<_LockableTokenStore> locked(String value) async {
@@ -296,7 +296,7 @@ void main() async {
   group('cookie attributes', () {
     final now = DateTime.utc(2030, 1, 1, 12);
     InMemorySessionStore store() => InMemorySessionStore(clock: () => now);
-    final api = Uri.parse('https://example.com/aws-blocks/api');
+    final api = Uri.parse('https://example.com/cdk-blocks/api');
 
     test('a Secure cookie is sent over https but not http', () async {
       final s = store()..setCookies('a=1; Path=/; Secure', requestUri: api);
@@ -376,7 +376,7 @@ void main() async {
         final s = store()..setCookies('a=1', requestUri: api);
         expect(
           await s.cookieHeaderFor(
-            Uri.parse('https://example.com/aws-blocks/other'),
+            Uri.parse('https://example.com/cdk-blocks/other'),
           ),
           'a=1',
         );
@@ -496,7 +496,7 @@ void main() async {
 
     test('the most specific path is listed first', () async {
       final s = store()
-        ..setCookies('a=api; Path=/aws-blocks/api', requestUri: api)
+        ..setCookies('a=api; Path=/cdk-blocks/api', requestUri: api)
         ..setCookies(
           'a=root; Path=/',
           requestUri: Uri.parse('https://example.com/other'),
@@ -512,7 +512,7 @@ void main() async {
           ..setCookies('a=2; Path=/', requestUri: api);
         expect(
           await s.cookieHeaderFor(
-            Uri.parse('https://example.com/aws-blocks/x'),
+            Uri.parse('https://example.com/cdk-blocks/x'),
           ),
           'a=2',
         );

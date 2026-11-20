@@ -96,7 +96,7 @@ mock.module(moduleUrl('run-command'), {
 const command = ${JSON.stringify(command)};
 const run = command === 'deploy'
   ? () => import(moduleUrl('deploy')).then(({ deploy }) => deploy({ projectRoot: process.cwd(), cdkAppPath: 'unused' }))
-  : () => import(moduleUrl('sandbox')).then(({ startSandbox }) => startSandbox({ backendPath: 'aws-blocks/index.cdk.ts', deployOnly: true }));
+  : () => import(moduleUrl('sandbox')).then(({ startSandbox }) => startSandbox({ backendPath: 'cdk-blocks/index.cdk.ts', deployOnly: true }));
 await assert.rejects(run, (error) => error === stop);
 assert.deepEqual(seen[0], ['sts', expectedRegion]);
 assert.deepEqual(seen.slice(1, 4).sort(), [['account', expectedRegion], ['freetier', expectedRegion], ['iam', expectedRegion]]);
@@ -111,8 +111,8 @@ describe('deploy/sandbox configured target', () => {
 			it(`${command} resolves ${source} for STS and metadata, prints it, and keeps CDK's environment`, async () => {
 				const directory = await mkdtemp(join(tmpdir(), 'blocks-target-'));
 				try {
-					await mkdir(join(directory, '.blocks'));
-					await writeFile(join(directory, '.blocks', 'config.json'), '{"stackId":"fixture"}');
+					await mkdir(join(directory, '.cdk-blocks'));
+					await writeFile(join(directory, '.cdk-blocks', 'config.json'), '{"stackId":"fixture"}');
 					await mkdir(join(directory, '.cdk-blocks-sandbox'));
 					await writeFile(join(directory, '.cdk-blocks-sandbox', 'sandbox-id.txt'), 'fixture');
 					const config = join(directory, 'config');
@@ -138,7 +138,6 @@ describe('deploy/sandbox configured target', () => {
 						AWS_CONFIG_FILE: config,
 						AWS_SHARED_CREDENTIALS_FILE: credentials,
 						AWS_EC2_METADATA_DISABLED: 'true',
-						AWS_BLOCKS_DISABLE_TELEMETRY: '1',
 						CDK_DISABLE_CLI_TELEMETRY: 'true',
 						CDK_DEFAULT_REGION: 'us-west-2',
 					};

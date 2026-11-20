@@ -1,9 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ScopeParent } from '@aws-blocks/core';
-import { registerDashboardFinalizer, Scope } from '@aws-blocks/core/cdk';
-import { type ComputeDashboardSection, getComputes, registerSharedConfig } from '@aws-blocks/core/cdk/internal';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { registerDashboardFinalizer, Scope } from '@aws-cdk-blocks/core/cdk';
+import { type ComputeDashboardSection, getComputes, registerSharedConfig } from '@aws-cdk-blocks/core/cdk/internal';
 import { CfnOutput, Fn, Stack } from 'aws-cdk-lib';
 import { Dashboard as CwDashboard } from 'aws-cdk-lib/aws-cloudwatch';
 import { BB_DASHBOARD_URL_ENV, mountDashboardRoute } from './routes.js';
@@ -151,7 +151,7 @@ export class Dashboard extends Scope {
 		// Register the redirect route so the Lambda handler dispatches it.
 		const routePath = options?.routePath;
 		if (routePath !== false) {
-			mountDashboardRoute(this, routePath ?? '/aws-blocks/dashboard', this.url);
+			mountDashboardRoute(this, routePath ?? '/cdk-blocks/dashboard', this.url);
 		}
 
 		new CfnOutput(this, 'Url', {

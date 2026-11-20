@@ -59,7 +59,7 @@ export const s3WebsiteDoor = defineFrontDoor<S3WebsiteDoorInput, FrontDoorResult
       url: site.url,
       originHandle: { domainName: Fn.select(1, Fn.split('://', site.url)), protocol: 'http' },
       // The public website bucket the SPA is served from — the wrapper publishes
-      // config.json here (root `.cdk-blocks-sandbox/`) so the cross-origin client can
+      // config.json here (root `.blocks-sandbox/`) so the cross-origin client can
       // read the absolute API URL from the SAME origin it loads from.
       publicBucket: site.bucket,
     };

@@ -55,7 +55,7 @@ async function loginViaApi(
   username: string,
   password: string,
 ) {
-  const resp = await request.post(`${baseUrl}/aws-blocks/api`, {
+  const resp = await request.post(`${baseUrl}/cdk-blocks/api`, {
     headers: { 'Content-Type': 'application/json' },
     data: JSON.stringify({
       jsonrpc: '2.0',
@@ -87,7 +87,7 @@ async function loginViaApi(
 /**
  * This run's test-support secret: `BLOCKS_TEST_SUPPORT_SECRET`, which the CI
  * workflow or the e2e `globalSetup` set before the deploy (see "Sandbox e2e
- * test support" in `aws-blocks/index.ts`). Never log it.
+ * test support" in `cdk-blocks/index.ts`). Never log it.
  */
 function readTestSupportSecret(): string {
   const value = process.env.BLOCKS_TEST_SUPPORT_SECRET;
@@ -103,7 +103,7 @@ async function callProvisionUser(
   username: string,
   password: string,
 ) {
-  const resp = await request.post(`${baseUrl}/aws-blocks/api`, {
+  const resp = await request.post(`${baseUrl}/cdk-blocks/api`, {
     headers: { 'Content-Type': 'application/json' },
     data: JSON.stringify({
       jsonrpc: '2.0',
@@ -120,7 +120,7 @@ let testSupportSecret = '';
 
 /**
  * Create a confirmed user through the backend's `testSupport.provisionUser`
- * RPC (sandbox only — see `aws-blocks/index.ts`). Cognito emails the sign-up
+ * RPC (sandbox only — see `cdk-blocks/index.ts`). Cognito emails the sign-up
  * code and a deployed run has no mailbox to read it from.
  */
 async function provisionUser(request: APIRequestContext, baseUrl: string, username: string, password: string) {
@@ -181,14 +181,14 @@ test.describe('Blog with Auth — Nuxt SSR Hosting', () => {
   });
 
   test('2. config.json is served with apiUrl', async ({ request }) => {
-    const resp = await request.get(`${hostingUrl}/.cdk-blocks-sandbox/config.json`);
+    const resp = await request.get(`${hostingUrl}/.blocks-sandbox/config.json`);
     expect(resp.status()).toBe(200);
     const config = await resp.json();
     expect(config.apiUrl).toBeTruthy();
     if (ENV === 'local') {
-      expect(config.apiUrl).toContain('/aws-blocks/api');
+      expect(config.apiUrl).toContain('/cdk-blocks/api');
     } else {
-      expect(config.apiUrl).toBe('/aws-blocks/api');
+      expect(config.apiUrl).toBe('/cdk-blocks/api');
     }
   });
 
@@ -197,7 +197,7 @@ test.describe('Blog with Auth — Nuxt SSR Hosting', () => {
     // Cold starts can take 10–15s each.
     await Promise.all([
       request.get(`${hostingUrl}/api/probe/health`),
-      request.post(`${hostingUrl}/aws-blocks/api`, {
+      request.post(`${hostingUrl}/cdk-blocks/api`, {
         headers: { 'Content-Type': 'application/json' },
         data: JSON.stringify({ jsonrpc: '2.0', method: 'api.listPosts', params: [], id: 0 }),
       }),

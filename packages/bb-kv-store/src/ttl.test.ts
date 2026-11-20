@@ -4,13 +4,14 @@
 import assert from 'node:assert/strict';
 import { readFileSync, rmSync } from 'node:fs';
 import { beforeEach, describe, test } from 'node:test';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { KVStore as AwsKVStore } from './index.aws.js';
 import { KVStore, KVStoreErrors } from './index.mock.js';
 import { isExpired, nowEpochSeconds, resolveTtlEpochSeconds, TTL_ATTRIBUTE } from './ttl.js';
 
 beforeEach(() => {
 	try {
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 		rmSync('.bb-data', { recursive: true, force: true });
 	} catch {}
 });
@@ -107,7 +108,10 @@ describe('mock runtime emulates DynamoDB TTL', () => {
 			['live'],
 		);
 		await reloaded.put('other', 'z');
-		assert.equal(readFileSync(`.bb-data/${reloaded.fullId}/store.json`, 'utf8').includes('dead'), false);
+		assert.equal(
+			readFileSync(`.cdk-blocks/local/data/${reloaded.fullId}/store.json`, 'utf8').includes('dead'),
+			false,
+		);
 	});
 
 	test('re-putting without a TTL clears a previous expiry', async () => {
@@ -128,7 +132,7 @@ describe('mock runtime emulates DynamoDB TTL', () => {
 	test('the on-disk attribute is _bkv_ttl, in epoch seconds', async () => {
 		const store = new KVStore(testScope(), 'kv');
 		await store.put('a', 'x', { expiresAt: 1_800_000_000 });
-		const stored = JSON.parse(readFileSync(`.bb-data/${store.fullId}/store.json`, 'utf8'));
+		const stored = JSON.parse(readFileSync(`.cdk-blocks/local/data/${store.fullId}/store.json`, 'utf8'));
 		assert.equal(stored.items[0][TTL_ATTRIBUTE], 1_800_000_000);
 	});
 });

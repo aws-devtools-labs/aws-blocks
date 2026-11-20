@@ -8,11 +8,11 @@
  * so it can never collide with user keys:
  *
  * ```
- * .bb-data/{fullId}/content/{key}                    file body (byte-identical)
- * .bb-data/{fullId}/meta/{key}.json                  sidecar metadata
- * .bb-data/{fullId}/versions/{key}/{versionId}       version body
- * .bb-data/{fullId}/versions/{key}/{versionId}.json  version metadata
- * .bb-data/{fullId}/versions/{key}/__deleted__       delete marker (sentinel)
+ * .cdk-blocks/local/data/{fullId}/content/{key}                    file body (byte-identical)
+ * .cdk-blocks/local/data/{fullId}/meta/{key}.json                  sidecar metadata
+ * .cdk-blocks/local/data/{fullId}/versions/{key}/{versionId}       version body
+ * .cdk-blocks/local/data/{fullId}/versions/{key}/{versionId}.json  version metadata
+ * .cdk-blocks/local/data/{fullId}/versions/{key}/__deleted__       delete marker (sentinel)
  * ```
  *
  * Because user content lives only under `content/`, `scan()` can yield every

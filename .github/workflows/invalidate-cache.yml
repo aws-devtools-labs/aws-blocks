@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: 'Package name (e.g. core) or "*" for all packages'
+        description: 'Package name (e.g. core, or blocks / aws-cdk-blocks for the umbrella) or "*" for all packages'
         required: true
         type: string
 
@@ -37,8 +37,14 @@ jobs:
               echo "::error::Invalid package name"
               exit 1
             fi
-            PATHS="/registry/@aws-blocks/${PACKAGE}/*"
-            echo "Invalidating paths for @aws-blocks/${PACKAGE}..."
+            # The umbrella publishes unscoped, so its registry key has no scope segment.
+            if [[ "$PACKAGE" == "blocks" || "$PACKAGE" == "aws-cdk-blocks" ]]; then
+              PATHS="/registry/aws-cdk-blocks/*"
+              echo "Invalidating paths for aws-cdk-blocks..."
+            else
+              PATHS="/registry/@aws-cdk-blocks/${PACKAGE}/*"
+              echo "Invalidating paths for @aws-cdk-blocks/${PACKAGE}..."
+            fi
           fi
 
           aws cloudfront create-invalidation \

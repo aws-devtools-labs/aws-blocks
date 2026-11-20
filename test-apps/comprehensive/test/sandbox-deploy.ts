@@ -3,7 +3,7 @@
 
 // Helper scripts for running sandbox operations in a clean subprocess.
 // Used by e2e tests to avoid browser condition pollution.
-import { startSandbox, destroySandbox } from '@aws-blocks/blocks/scripts';
+import { startSandbox, destroySandbox } from 'aws-cdk-blocks/scripts';
 
 const backendPath = process.argv[2];
 

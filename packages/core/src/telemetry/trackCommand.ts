@@ -57,8 +57,8 @@ export function classifyError(error: unknown): { code: string; phase: string } {
  * after the command completes (success or failure). The telemetry send is fire-and-forget
  * and bounded by a 500ms timeout — it will never delay the command or affect its exit code.
  *
- * If telemetry is disabled (via env var or config), the function is executed directly
- * with zero overhead.
+ * When the user has opted out of CDK CLI telemetry, which is the only opt-out
+ * ({@link isTelemetryEnabled}), the function is executed directly and nothing is sent.
  *
  * @param commandName - The command being tracked
  * @param fn - The async function to execute
@@ -76,7 +76,7 @@ export async function trackCommand(
   fn: () => Promise<void>,
   options?: TrackCommandOptions,
 ): Promise<void> {
-  if (!isTelemetryEnabled()) {
+  if (!telemetryEnabledSafely(options?.projectRoot)) {
     return fn();
   }
 
@@ -92,22 +92,105 @@ export async function trackCommand(
     throw error;
   } finally {
     const duration = Date.now() - startTime;
-    buildAndSendEvent({
-      command: commandName,
-      state,
-      duration,
-      ...(errorInfo && { error: errorInfo }),
-      ...(options && {
-        product: {
-          ...(options.cdkVersion && { cdkVersion: options.cdkVersion }),
-          ...(options.framework && { framework: options.framework }),
-          ...(options.template && { template: options.template }),
-          ...(options.templateVersion && { templateVersion: options.templateVersion }),
-        },
-      }),
-      ...(options?.blocksCount !== undefined && {
-        counters: { blocksCount: options.blocksCount },
-      }),
-    });
+    // buildAndSendEvent catches everything itself; this guard keeps a future
+    // change there from replacing the command's result with a telemetry error.
+    try {
+      buildAndSendEvent({
+        command: commandName,
+        state,
+        duration,
+        ...(options?.projectRoot && { projectRoot: options.projectRoot }),
+        ...(errorInfo && { error: errorInfo }),
+        ...(options && {
+          product: {
+            ...(options.cdkVersion && { cdkVersion: options.cdkVersion }),
+            ...(options.framework && { framework: options.framework }),
+            ...(options.template && { template: options.template }),
+            ...(options.templateVersion && { templateVersion: options.templateVersion }),
+          },
+        }),
+        ...(options?.blocksCount !== undefined && {
+          counters: { blocksCount: options.blocksCount },
+        }),
+      });
+    } catch {
+      // Telemetry must never affect the user's command.
+    }
+  }
+}
+
+/**
+ * The consent check, which must never fail the command it guards: an error
+ * reading the consent sources (for example a deleted working directory) counts
+ * as "telemetry off".
+ */
+function telemetryEnabledSafely(projectRoot?: string): boolean {
+  try {
+    return isTelemetryEnabled(projectRoot);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The telemetry state for a CLI exit code: 0 is `SUCCESS`, an interruption
+ * (SIGINT 130, SIGTERM 143) is `ABORTED`, and any other code is `FAIL`.
+ */
+export function stateForExitCode(code: number): CommandState {
+  if (code === 0) return 'SUCCESS';
+  if (code === 130 || code === 143) return 'ABORTED';
+  return 'FAIL';
+}
+
+/**
+ * Wrap a CLI command handler that reports its outcome as an exit code.
+ *
+ * As {@link trackCommand}, but the outcome comes from the returned exit code
+ * (see {@link stateForExitCode}) as well as from a thrown error. The handler's
+ * exit code or error is passed through unchanged: sending the event never
+ * throws, never waits for the network, and never changes the result.
+ *
+ * @param commandName - The command being tracked
+ * @param fn - The handler, resolving to its exit code
+ * @param options - Optional metadata; `projectRoot` scopes the consent lookup
+ * @returns The handler's exit code
+ */
+export async function trackExitCode(
+  commandName: CommandName,
+  fn: () => Promise<number>,
+  options?: Pick<TrackCommandOptions, 'projectRoot'>,
+): Promise<number> {
+  if (!telemetryEnabledSafely(options?.projectRoot)) {
+    return fn();
+  }
+
+  const startTime = Date.now();
+  let state: CommandState = 'FAIL';
+  let errorInfo: { code: string; phase: string } | undefined;
+
+  try {
+    const code = await fn();
+    state = stateForExitCode(code);
+    // A failure reported as an exit code has no error to classify; give it the
+    // category classifyError gives an unrecognized one, as every FAIL carries one.
+    if (state === 'FAIL') errorInfo = classifyError(undefined);
+    return code;
+  } catch (error: unknown) {
+    errorInfo = classifyError(error);
+    throw error;
+  } finally {
+    // buildAndSendEvent catches everything itself; this guard keeps a future
+    // change there from replacing the handler's result with a telemetry error.
+    try {
+      buildAndSendEvent({
+        command: commandName,
+        state,
+        duration: Date.now() - startTime,
+        ...(options?.projectRoot && { projectRoot: options.projectRoot }),
+        ...(errorInfo && { error: errorInfo }),
+      });
+    } catch {
+      // Telemetry must never affect the user's command.
+    }
   }
 }

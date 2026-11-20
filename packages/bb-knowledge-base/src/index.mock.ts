@@ -1,39 +1,48 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
-import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
-import type { ScopeParent } from '@aws-blocks/core';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, realpathSync } from 'node:fs';
-import { join, relative, dirname, extname, resolve, sep } from 'node:path';
 import { createHash } from 'node:crypto';
-import { buildIndex, search, type TfIdfIndex } from './tfidf.js';
-import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, MetadataFilter, ChunkingStrategy, WaitUntilSyncedOptions, KnowledgeBaseAgentTool, KnowledgeBaseAgentToolOptions } from './types.js';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, extname, join, relative, resolve, sep } from 'node:path';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { registerSdkIdentifiers, Scope } from '@aws-cdk-blocks/core';
+import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-cdk-blocks/core/bb-utils';
 import { createAgentTool } from './agent-tool.js';
 import { blocksError, KnowledgeBaseErrors } from './errors.js';
 import { normalizeMaxResults } from './normalize.js';
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import { buildIndex, search, type TfIdfIndex } from './tfidf.js';
+import type {
+	ChunkingStrategy,
+	KnowledgeBaseAgentTool,
+	KnowledgeBaseAgentToolOptions,
+	KnowledgeBaseOptions,
+	MetadataFilter,
+	RetrieveOptions,
+	RetrieveResult,
+	WaitUntilSyncedOptions,
+} from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 // Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
 assertNotMockInDeployedEnv('bb-knowledge-base');
 
+export { KnowledgeBaseErrors } from './errors.js';
 export type {
-	KnowledgeBaseOptions,
-	SourceConfig,
 	ChunkingConfig,
 	ChunkingStrategy,
+	IngestionFailureCause,
+	KnowledgeBaseAgentTool,
+	KnowledgeBaseAgentToolOptions,
+	KnowledgeBaseAgentToolResult,
+	KnowledgeBaseOptions,
+	MetadataFilter,
 	RetrieveOptions,
 	RetrieveResult,
-	MetadataFilter,
+	SourceConfig,
 	WaitUntilSyncedOptions,
-	IngestionFailureCause,
-	KnowledgeBaseAgentToolOptions,
-	KnowledgeBaseAgentTool,
-	KnowledgeBaseAgentToolResult,
 } from './types.js';
-export { KnowledgeBaseErrors } from './errors.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -135,9 +144,9 @@ function matchesFilter(metadata: Record<string, string>, filter: MetadataFilter)
  *
  * Reads documents from a local folder, splits them using the configured
  * chunking strategy (default `'semantic'`), and uses TF-IDF for relevance
- * scoring. Chunks are cached to `.bb-data/{fullId}/chunks.json` alongside a
+ * scoring. Chunks are cached to `.cdk-blocks/local/data/{fullId}/chunks.json` alongside a
  * `source.hash` fingerprint for fast restarts; the cache is rebuilt when the
- * source contents or chunking config change. Wipe cached data with `rm -rf .bb-data`.
+ * source contents or chunking config change. Wipe cached data with `rm -rf .cdk-blocks/local/data .bb-data`.
  *
  * **When to use:** You need natural-language search over your own documents —
  * FAQs, product guides, support articles, internal wikis. Point it at a
@@ -301,7 +310,9 @@ export class KnowledgeBase extends Scope {
 	 * await agent.stream(message, { userId: user.userSub, context: { tenantId: await tenantOf(user.userSub) } });
 	 * ```
 	 */
-	asAgentTool<TContext = Record<string, any>>(options: KnowledgeBaseAgentToolOptions<TContext>): KnowledgeBaseAgentTool<TContext> {
+	asAgentTool<TContext = Record<string, any>>(
+		options: KnowledgeBaseAgentToolOptions<TContext>,
+	): KnowledgeBaseAgentTool<TContext> {
 		return createAgentTool(this.retrieve.bind(this), options, this.kbDescription);
 	}
 
@@ -461,7 +472,7 @@ export class KnowledgeBase extends Scope {
 		const sourceDir = resolve(cwdResolved, source);
 		if (sourceDir === cwdResolved) {
 			this.warn(
-				`Source "${source}" resolves to the project root — this indexes the entire project tree (including node_modules and .bb-data). Point it at a dedicated docs subfolder instead.`,
+				`Source "${source}" resolves to the project root — this indexes the entire project tree (including node_modules and .cdk-blocks/local/data). Point it at a dedicated docs subfolder instead.`,
 			);
 		}
 		if (sourceDir !== cwdResolved && !sourceDir.startsWith(cwdResolved + sep)) {

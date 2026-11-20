@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `@aws-blocks/blocks/utils` is the Node.js test-and-script toolkit
+ * `aws-cdk-blocks/utils` is the Node.js test-and-script toolkit
  * (`installCookieJar`, `isServerRunning`, `totpCodeFor`). It deliberately has
  * no `browser` condition: Node e2e suites run with the browser condition on
- * (`tsx -C browser`, so `aws-blocks` resolves to the generated client) and
+ * (`tsx -C browser`, so `cdk-blocks` resolves to the generated client) and
  * import these helpers in the same process, so a throwing browser stub would
  * break exactly the callers the subpath exists for. Like the other Node-only
  * subpaths (`./server`, `./scripts`, `./lambda-handler`), it is never imported
@@ -31,7 +31,7 @@ test('./utils is Node-only: no browser condition, so Node suites under -C browse
 			'--conditions=browser',
 			'--input-type=module',
 			'-e',
-			"const { totpCodeFor } = await import('@aws-blocks/blocks/utils'); console.log(totpCodeFor('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ', 59_000));",
+			"const { totpCodeFor } = await import('aws-cdk-blocks/utils'); console.log(totpCodeFor('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ', 59_000));",
 		],
 		{ cwd: packageDir, encoding: 'utf8' },
 	);

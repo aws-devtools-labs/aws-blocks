@@ -10,7 +10,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { clearRouteRegistry, getRegisteredRoutes } from '@aws-blocks/core';
+import { clearRouteRegistry, getRegisteredRoutes } from '@aws-cdk-blocks/core';
 import { authRoutes, stubProviders } from './cdk/auth-routes.js';
 import { Auth, github, stubIdp } from './index.mock.js';
 import { resolveOptions } from './resolve-options.js';
@@ -21,9 +21,10 @@ const okta = { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' 
 
 beforeEach(() => {
 	clearRouteRegistry();
+	rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 	rmSync('.bb-data', { recursive: true, force: true });
 });
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const CASES: Array<{ name: string; options: AuthOptions }> = [
 	{
@@ -37,7 +38,7 @@ const CASES: Array<{ name: string; options: AuthOptions }> = [
 				'my idp': okta,
 				gh: github({ clientId: 'gh-client', clientSecret: secret }),
 			},
-			redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' },
+			redirects: { callbackPath: '/cdk-blocks/auth/sso/callback', signOutPath: '/cdk-blocks/auth/sso/signout' },
 		},
 	},
 	{
@@ -60,7 +61,7 @@ const CASES: Array<{ name: string; options: AuthOptions }> = [
 		options: {
 			store: 'builtin',
 			providers: { corp: stubIdp() },
-			redirects: { callbackPath: '/aws-blocks/auth//deep/cb', signOutPath: '/aws-blocks/auth/out/' },
+			redirects: { callbackPath: '/cdk-blocks/auth//deep/cb', signOutPath: '/cdk-blocks/auth/out/' },
 		},
 	},
 ];

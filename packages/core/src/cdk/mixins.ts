@@ -40,7 +40,7 @@ const DELETION_PROTECTION_PROPERTIES = ['deletionProtection', 'deletionProtectio
  * @example
  * ```ts
  * import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
- * import { SandboxDisableDeletionProtection } from '@aws-blocks/blocks/cdk';
+ * import { SandboxDisableDeletionProtection } from 'aws-cdk-blocks/cdk';
  *
  * if (sandboxMode) {
  *   RemovalPolicies.of(stack).destroy();

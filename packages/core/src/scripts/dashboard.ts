@@ -16,7 +16,7 @@ import { resolveProject } from './project-discovery.js';
 
 export const DEFAULT_DASHBOARD_PORT = 4400;
 
-const ADMIN_UI_PACKAGE = '@aws-blocks/admin-ui';
+const ADMIN_UI_PACKAGE = '@aws-cdk-blocks/admin-ui';
 const ADMIN_UI_SERVER_ENTRY = `${ADMIN_UI_PACKAGE}/server`;
 const ADMIN_UI_DOCTOR_ENTRY = `${ADMIN_UI_PACKAGE}/doctor`;
 
@@ -25,7 +25,7 @@ export type DashboardCommand = 'serve' | 'doctor';
 
 export interface DashboardOptions {
 	/**
-	 * Root of the Blocks app (where package.json and .blocks/ live). When
+	 * Root of the Blocks app (where package.json and .cdk-blocks/ live). When
 	 * omitted the project is discovered from the working directory (or from
 	 * `--project`). An explicit value here wins over both and is used verbatim.
 	 */
@@ -223,7 +223,7 @@ interface AdminUiDoctorModule {
 }
 
 /**
- * Resolves @aws-blocks/admin-ui from the app. The dashboard is opt-in: the
+ * Resolves @aws-cdk-blocks/admin-ui from the app. The dashboard is opt-in: the
  * package is NOT a dependency of core. If it isn't installed we offer a
  * one-time `npm install --save-dev` (interactive terminals only).
  */

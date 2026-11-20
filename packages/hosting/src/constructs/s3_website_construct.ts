@@ -89,14 +89,18 @@ export class S3WebsiteConstruct extends Construct {
     );
 
     // Publish the built static dir to the bucket ROOT (no build-id prefix).
-    // EXCLUDE `.cdk-blocks-sandbox/*`: the build ships a placeholder
-    // `.cdk-blocks-sandbox/config.json` (`{_placeholder:true}`), and the REAL config
+    // EXCLUDE `.blocks-sandbox/*`: the build ships a placeholder
+    // `.blocks-sandbox/config.json` (`{_placeholder:true}`), and the REAL config
     // (with the absolute cross-origin `apiUrl` this door needs) is written to the
     // same key by the separate `BlocksConfigDeployment`. Uploading the placeholder
     // here races/clobbers that real config, leaving the SPA with no `apiUrl` (it
-    // then falls back to a relative `/aws-blocks/api`, which the S3 website
+    // then falls back to a relative `/cdk-blocks/api`, which the S3 website
     // 405s). An excluded key is outside a deployment's filter on both sides, so
     // pruning never touches it: the config deployment solely owns it.
+    //
+    // EXCLUDE `.cdk-blocks-sandbox/*` too: that is the PRIVATE state directory, and a
+    // custom build that copies it into its output would publish
+    // `outputs.production.json` and the sandbox id to this PUBLIC bucket.
     //
     // Each tier PRUNES within its own filter, so a file the build no longer
     // ships (a `*.map`, a stray `.env`) stops being public at the next deploy.
@@ -111,7 +115,7 @@ export class S3WebsiteConstruct extends Construct {
     };
     new BucketDeployment(this, 'WebsiteDeployment', {
       ...base,
-      exclude: ['.cdk-blocks-sandbox/*', ...html, ...immutable],
+      exclude: ['.blocks-sandbox/*', '.cdk-blocks-sandbox/*', ...html, ...immutable],
       cacheControl: [CacheControl.fromString(props.cacheControl ?? 'public, max-age=0, must-revalidate')],
     });
     new BucketDeployment(this, 'WebsiteHtmlDeployment', {

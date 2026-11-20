@@ -144,7 +144,7 @@ function listProductionStackNames(options: DestroyOptions, cdkEnv: NodeJS.Proces
  * Refuse to destroy when the CDK app does not define `stackName`. `cdk destroy`
  * acts on the stacks the app defines, not on the name the caller printed and
  * confirmed, so an app whose `index.cdk.ts` names its stack differently (an app
- * created before `.blocks/config.json`, or a stackId that does not match) would
+ * created before `.cdk-blocks/config.json`, or a stackId that does not match) would
  * delete another stack than the one named. `cdk ls` prints a stack as its
  * construct id, followed by `(name)` when the stack name differs.
  */
@@ -164,9 +164,9 @@ function assertAppDefinesStack(options: DestroyOptions, stackName: string, cdkEn
   const stacks = cdkListedStacks(out);
   if (stacks.some((s) => s === stackName || s.endsWith(` (${stackName})`))) return;
   throw new Error(
-    `The CDK app (aws-blocks/index.cdk.ts) defines ${stacks.length > 0 ? stacks.join(', ') : 'no stack'}, ` +
-      `not ${stackName}, the production stack that .blocks/config.json names; nothing was deleted. ` +
-      `Set "stackId" in .blocks/config.json so that <stackId>-prod is the app's production stack, ` +
+    `The CDK app (cdk-blocks/index.cdk.ts) defines ${stacks.length > 0 ? stacks.join(', ') : 'no stack'}, ` +
+      `not ${stackName}, the production stack that .cdk-blocks/config.json names; nothing was deleted. ` +
+      `Set "stackId" in .cdk-blocks/config.json so that <stackId>-prod is the app's production stack, ` +
       `or name the stack in index.cdk.ts with getStackName().`,
   );
 }

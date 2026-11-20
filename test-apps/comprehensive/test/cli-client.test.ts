@@ -9,11 +9,11 @@ import { testApiUrl } from './api-url.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const projectRoot = join(__dirname, '..');
-const clientUrl = pathToFileURL(join(projectRoot, 'aws-blocks', 'client.js')).href;
+const clientUrl = pathToFileURL(join(projectRoot, 'cdk-blocks', 'client.js')).href;
 
 /**
  * How long the keep-alive regression test idles the main test process's HTTP pool
@@ -127,7 +127,7 @@ export function cliClientTests(getApi: () => typeof apiType) {
             });
             server.keepAliveTimeout = 60_000;
             await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-            const url = 'http://127.0.0.1:' + server.address().port + '/aws-blocks/api';
+            const url = 'http://127.0.0.1:' + server.address().port + '/cdk-blocks/api';
             const { generateClient } = await import(clientUrl);
             const { api } = generateClient(${retry === undefined ? '{ url }' : '{ url, retryStaleConnection: false }'});
             const first = await api.echoData('first');

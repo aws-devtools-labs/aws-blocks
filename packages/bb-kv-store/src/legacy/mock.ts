@@ -1,10 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Logger } from '@aws-blocks/bb-logger';
-import type { ScopeParent } from '@aws-blocks/core';
-import { registerSdkIdentifiers, Scope } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { Logger } from '@aws-cdk-blocks/bb-logger';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { registerSdkIdentifiers, Scope } from '@aws-cdk-blocks/core';
+import { getMockDataDir } from '@aws-cdk-blocks/core/bb-utils';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { blocksError, conditionalCheckFailed, KVStoreErrors, KVStoreMessages } from '../errors.js';
 import { compareByBaseKey, decodeCursor, type Item, normalizeLimit, orderedResults, presentOptions } from '../item.js';
@@ -50,7 +50,7 @@ const MAX_ITEM_BYTES = 400 * 1024;
  *
  * **What it does to the table:** Nothing. The deploy keeps the table as it is,
  * with its items. The app's role keeps read and write access to it. Locally,
- * it reads the data file of the old store, `.bb-data/{fullId}/store.json`.
+ * it reads the data file of the old store, `.cdk-blocks/local/data/{fullId}/store.json`.
  *
  * @deprecated Only for the upgrade of a store from release 0.4.0 or earlier. The class is frozen: it has
  *   the methods of release 0.4.0 and gets no new features. Use `KVStore` for new data, and remove the

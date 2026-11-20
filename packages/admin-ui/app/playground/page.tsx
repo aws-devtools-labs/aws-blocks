@@ -65,7 +65,7 @@ function EndpointNotice({
 			<div className="flex flex-wrap items-start gap-2 rounded-md border border-line bg-hover px-3 py-2 text-xs">
 				<Badge variant="outline">local dev server</Badge>
 				<p className="max-w-3xl text-fg-soft">
-					Calls go to <code className="font-mono">http://localhost:&lt;port&gt;/aws-blocks/api</code> on this machine —
+					Calls go to <code className="font-mono">http://localhost:&lt;port&gt;/cdk-blocks/api</code> on this machine —
 					the port read from your app's own dev-server script, falling back to 3000. Nothing deployed is touched. If the
 					dev server is not running the call comes back <span className="font-medium text-fg">UNREACHABLE</span> rather
 					than reaching anything else.
@@ -161,7 +161,7 @@ function HistoryRow({
 }
 
 export default function PlaygroundPage() {
-	const { cloudStage, target, status } = useEnvironment();
+	const { cloudStage, target, status, ready } = useEnvironment();
 
 	const [selected, setSelected] = useState<MethodRef | undefined>();
 	const [history, setHistory] = useState<PlaygroundCall[]>([]);
@@ -181,6 +181,7 @@ export default function PlaygroundPage() {
 	const { data: envData } = useQuery({
 		queryKey: ['environments'],
 		queryFn: () => apiGet<EnvironmentsResponse>('/api/v1/environments'),
+		enabled: ready && cloudStage !== undefined,
 	});
 	// The deployed-stack facts for the selected cloud stage; undefined in the
 	// local environment, where the endpoint notice reads none of them.

@@ -161,7 +161,7 @@ export function MethodsSourceNotice({
 				<div className="max-w-3xl space-y-1 text-fg-soft">
 					{source === 'spec' && (
 						<p>
-							<code className="font-mono">aws-blocks/blocks.spec.json</code> covers these methods, so each parameter
+							<code className="font-mono">cdk-blocks/blocks.spec.json</code> covers these methods, so each parameter
 							below carries its type and a seed value derived from its schema. Parameter names still come from your
 							app's source.
 						</p>
@@ -178,7 +178,7 @@ export function MethodsSourceNotice({
 							<p className="text-fg-dim">
 								This is the normal state, not a problem. Run{' '}
 								<code className="font-mono text-fg-soft">npx blocks-generate-spec</code> to write{' '}
-								<code className="font-mono">aws-blocks/blocks.spec.json</code> from your backend's Zod schemas, and
+								<code className="font-mono">cdk-blocks/blocks.spec.json</code> from your backend's Zod schemas, and
 								these forms come back typed and pre-seeded.
 							</p>
 						</>
@@ -187,7 +187,7 @@ export function MethodsSourceNotice({
 						<p>
 							This app declares no <code className="font-mono">ApiNamespace</code> block, so there is nothing to call —
 							the list is empty because there are no methods, not because discovery failed. Declare an{' '}
-							<code className="font-mono">ApiNamespace</code> under <code className="font-mono">aws-blocks/</code> and
+							<code className="font-mono">ApiNamespace</code> under <code className="font-mono">cdk-blocks/</code> and
 							its methods appear here.
 						</p>
 					)}

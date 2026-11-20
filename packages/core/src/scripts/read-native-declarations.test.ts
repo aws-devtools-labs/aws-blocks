@@ -18,7 +18,7 @@ after(() => {
 
 function makeApp(): string {
 	const root = join(tmpdir(), `blocks-native-decl-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-	mkdirSync(join(root, 'aws-blocks'), { recursive: true });
+	mkdirSync(join(root, 'cdk-blocks'), { recursive: true });
 	roots.push(root);
 	return root;
 }
@@ -63,7 +63,7 @@ function native(declarations: unknown): Record<string, unknown> {
 }
 
 function foundationOf(root: string): string {
-	return join(root, 'aws-blocks', 'index.ts');
+	return join(root, 'cdk-blocks', 'index.ts');
 }
 
 /**
@@ -84,7 +84,7 @@ function fixtureWarnings(warnings: readonly string[], root: string): string[] {
 /** Every specifier the fixtures install, so a name collision with `ambient` is caught here. */
 const FIXTURE_SPECIFIERS = [
 	'.cache',
-	'@aws-blocks/blocks',
+	'aws-cdk-blocks',
 	'@example/alpha',
 	'@example/bb-iot',
 	'@example/broken',
@@ -171,8 +171,8 @@ describe('readNativeDeclarations', () => {
 
 	it('skips a package whose aws-blocks namespace has no native key', () => {
 		const root = makeApp();
-		installPackage(root, '@aws-blocks/blocks', {
-			'aws-blocks': { vendorize: { '@aws-blocks/bb-realtime': ['Realtime'] } },
+		installPackage(root, 'aws-cdk-blocks', {
+			'aws-blocks': { vendorize: { '@aws-cdk-blocks/bb-realtime': ['Realtime'] } },
 		});
 
 		assert.deepStrictEqual(sourcesFrom(foundationOf(root)), []);
@@ -275,7 +275,7 @@ describe('readNativeDeclarations', () => {
 	it('finds a block at the project root when the foundation workspace has its own node_modules', () => {
 		const root = makeApp();
 		installPackage(root, '@example/bb-iot', native({ packages: PACKAGES }));
-		installPackage(join(root, 'aws-blocks'), 'leftpad', { main: 'index.js' });
+		installPackage(join(root, 'cdk-blocks'), 'leftpad', { main: 'index.js' });
 
 		assert.deepStrictEqual(namesFrom(foundationOf(root)), ['@example/bb-iot']);
 	});
@@ -283,7 +283,7 @@ describe('readNativeDeclarations', () => {
 	it('reads declaring blocks from every node_modules level', () => {
 		const root = makeApp();
 		installPackage(root, '@example/root-block', native({ packages: PACKAGES }));
-		installPackage(join(root, 'aws-blocks'), '@example/nested-block', native({ bindings: BINDINGS }));
+		installPackage(join(root, 'cdk-blocks'), '@example/nested-block', native({ bindings: BINDINGS }));
 
 		assert.deepStrictEqual(namesFrom(foundationOf(root)), ['@example/nested-block', '@example/root-block']);
 	});
@@ -293,7 +293,7 @@ describe('readNativeDeclarations', () => {
 		installPackage(root, '@example/bb-iot', native({ packages: PACKAGES }));
 		const cwd = process.cwd();
 		// The block is one level above the cwd, which a bare relative walk never reaches.
-		process.chdir(join(root, 'aws-blocks'));
+		process.chdir(join(root, 'cdk-blocks'));
 		try {
 			const sources = sourcesFrom('index.ts');
 			assert.strictEqual(sources.length, 1);
@@ -318,7 +318,7 @@ describe('readNativeDeclarations', () => {
 	it('skips an unreadable node_modules directory instead of failing generation', () => {
 		const root = makeApp();
 		installPackage(root, '@example/bb-iot', native({ packages: PACKAGES }));
-		const locked = join(root, 'aws-blocks', 'node_modules');
+		const locked = join(root, 'cdk-blocks', 'node_modules');
 		mkdirSync(locked, { recursive: true });
 		const warnings: string[] = [];
 		const realWarn = console.warn;
@@ -407,7 +407,7 @@ describe('readNativeDeclarations', () => {
 
 	it('lets a nearest copy that is not an object shadow a declaring copy behind it', () => {
 		const root = makeApp();
-		installRawManifest(join(root, 'aws-blocks'), '@example/bb-iot', '[]');
+		installRawManifest(join(root, 'cdk-blocks'), '@example/bb-iot', '[]');
 		installPackage(root, '@example/bb-iot', native({ packages: PACKAGES }));
 
 		const sources = sourcesFrom(foundationOf(root));
@@ -419,7 +419,7 @@ describe('readNativeDeclarations', () => {
 		const root = makeApp();
 		installPackage(root, '@example/bb-iot', native({ packages: PACKAGES }));
 		installPackage(
-			join(root, 'aws-blocks'),
+			join(root, 'cdk-blocks'),
 			'@example/bb-iot',
 			native({
 				packages: [
@@ -441,7 +441,7 @@ describe('readNativeDeclarations', () => {
 	it('reaches a hoisted package from a deeply nested foundation', () => {
 		const root = makeApp();
 		installPackage(root, '@example/bb-iot', native({ packages: PACKAGES }));
-		const nested = join(root, 'packages', 'app', 'aws-blocks');
+		const nested = join(root, 'packages', 'app', 'cdk-blocks');
 		mkdirSync(nested, { recursive: true });
 
 		assert.deepStrictEqual(namesFrom(join(nested, 'index.ts')), ['@example/bb-iot']);
@@ -609,9 +609,9 @@ describe('readNativeDeclarations', () => {
 		// A dependency string, the scaffolded keyword, and a scoped name all contain
 		// `aws-blocks` without declaring anything, so none of them may abort.
 		for (const [label, contents] of [
-			['dependency string', '{ "name": "u", "dependencies": { "@aws-blocks/core": "^1" }, '],
+			['dependency string', '{ "name": "u", "dependencies": { "@aws-cdk-blocks/core": "^1" }, '],
 			['scaffolded keyword', '{ "name": "k", "keywords": ["aws-blocks"], '],
-			['scoped package name', '{ "name": "@aws-blocks/bb-x", "version": "1.0.0", '],
+			['scoped package name', '{ "name": "@aws-cdk-blocks/bb-x", "version": "1.0.0", '],
 		] as const) {
 			const root = makeApp();
 			installRawManifest(root, '@example/mentions', contents);

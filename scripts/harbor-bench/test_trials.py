@@ -222,7 +222,7 @@ def result(arm, statuses, tokens=100, seconds=60, storage='kv_store'):
         phases.append(phase)
     return {'arm': arm, 'harbor_exit_code': 0, 'same_session': True, 'phases': phases, 'storage': storage,
             'status': 'passed' if all(s == 'passed' for s in statuses) else 'failed',
-            'packages': [{'name': '@aws-blocks/core', 'integrity': 'sha512-x'}]}
+            'packages': [{'name': '@aws-cdk-blocks/core', 'integrity': 'sha512-x'}]}
 
 
 def write(root, arm, trial, value):
@@ -411,11 +411,11 @@ class SnapshotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             app = root / 'todo-app'
-            for path in ('node_modules/pkg', 'aws-blocks/node_modules/nested', '.bb-data/app-todos', 'src'):
+            for path in ('node_modules/pkg', 'cdk-blocks/node_modules/nested', '.cdk-blocks/local/data/app-todos', 'src'):
                 (app / path).mkdir(parents=True)
             (app / 'node_modules/pkg/index.js').write_text('x')
-            (app / 'aws-blocks/node_modules/nested/index.js').write_text('x')
-            (app / '.bb-data/app-todos/store.json').write_text('{"1": {"title": "survival-a"}}')
+            (app / 'cdk-blocks/node_modules/nested/index.js').write_text('x')
+            (app / '.cdk-blocks/local/data/app-todos/store.json').write_text('{"1": {"title": "survival-a"}}')
             (app / 'package-lock.json').write_text('{}')
             (app / 'src/index.ts').write_text('export {}')
             os.symlink('../package-lock.json', app / 'src/lock')
@@ -429,8 +429,8 @@ class SnapshotTests(unittest.TestCase):
             with tarfile.open(target) as archive:
                 names = set(archive.getnames())
                 self.assertEqual(archive.extractfile('verifier-state.json').read(), state.read_bytes())
-            self.assertEqual(names, {'todo-app', 'todo-app/.bb-data', 'todo-app/.bb-data/app-todos',
-                                     'todo-app/.bb-data/app-todos/store.json', 'todo-app/aws-blocks',
+            self.assertEqual(names, {'todo-app', 'todo-app/.cdk-blocks', 'todo-app/.cdk-blocks/local', 'todo-app/.cdk-blocks/local/data', 'todo-app/.cdk-blocks/local/data/app-todos',
+                                     'todo-app/.cdk-blocks/local/data/app-todos/store.json', 'todo-app/cdk-blocks',
                                      'todo-app/package-lock.json', 'todo-app/src', 'todo-app/src/index.ts',
                                      'todo-app/src/lock', 'verifier-state.json'})
             self.assertFalse((root / 'snapshot.tar.gz.partial').exists())
@@ -472,17 +472,17 @@ def tarball(path, files):
 
 class PublicResultTests(unittest.TestCase):
     def test_storage_is_a_fixed_name_from_constructed_backend_blocks(self):
-        backend = 'todo-app/aws-blocks/index.ts'
+        backend = 'todo-app/cdk-blocks/index.ts'
         cases = {
             'kv_store': {backend: 'const todos = new KVStore<Todo>(scope, "todos");'},
-            'distributed_table': {'todo-app/aws-blocks/lib/store.ts': 'new DistributedTable<Todo>(this, "t", {})'},
+            'distributed_table': {'todo-app/cdk-blocks/lib/store.ts': 'new DistributedTable<Todo>(this, "t", {})'},
             'database': {backend: 'const db = new  Database(scope, "db");'},
             'file_bucket': {backend: 'const files = new FileBucket(scope, "files");'},
-            'multiple': {backend: 'new KVStore(scope, "a")', 'todo-app/aws-blocks/files.ts': 'new FileBucket(s, "f")'},
+            'multiple': {backend: 'new KVStore(scope, "a")', 'todo-app/cdk-blocks/files.ts': 'new FileBucket(s, "f")'},
             # Imports and types are not use; generated JS, dependencies and frontend code are not the backend.
-            'none': {backend: 'import { KVStore } from "@aws-blocks/blocks";\ntype Store = KVStore<string>;',
-                     'todo-app/aws-blocks/index.js': 'new Database(scope, "db")',
-                     'todo-app/aws-blocks/node_modules/x/index.ts': 'new KVStore(scope, "x")',
+            'none': {backend: 'import { KVStore } from "aws-cdk-blocks";\ntype Store = KVStore<string>;',
+                     'todo-app/cdk-blocks/index.js': 'new Database(scope, "db")',
+                     'todo-app/cdk-blocks/node_modules/x/index.ts': 'new KVStore(scope, "x")',
                      'todo-app/src/main.ts': 'new FileBucket(scope, "f")'},
         }
         with tempfile.TemporaryDirectory() as temp:
@@ -509,7 +509,7 @@ class PublicResultTests(unittest.TestCase):
                 (verifier / 'ui-exercise.json').write_text(json.dumps(
                     {'status': 'failed', 'failure': {'kind': 'timeout', 'reason': reason}}))
                 tarball(verifier / 'snapshot.tar.gz',
-                        {'todo-app/aws-blocks/index.ts': 'export const todos = new DistributedTable(scope, "t");'})
+                        {'todo-app/cdk-blocks/index.ts': 'export const todos = new DistributedTable(scope, "t");'})
                 (trial / 'result.json').write_text(json.dumps({'step_results': [
                     {'step_name': 'create', 'agent_result': {'metadata': {'harbor_bench': summarize('')}}}]}))
                 identity = {'arm': 'baseline', 'commit': 'a' * 40, 'skill_revision': 'b' * 40, 'packages': []}

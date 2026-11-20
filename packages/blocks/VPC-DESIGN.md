@@ -4,7 +4,7 @@
 
 ---
 
-**Package:** `@aws-blocks/core` (CDK-level option)
+**Package:** `@aws-cdk-blocks/core` (CDK-level option)
 **AWS Services:** Amazon VPC, EC2 (subnets, NAT gateways, security groups, VPC endpoints)
 
 ---
@@ -110,7 +110,7 @@ interface VpcRequirements {
 The last two fields name resources the BB builds itself, so they usually cannot
 go in the `BuildingBlockScope` constructor call: that registration runs before
 the BB has built anything. The BB declares them in a second call once they
-exist, with `registerVpcRequirements` from `@aws-blocks/core/cdk/internal`,
+exist, with `registerVpcRequirements` from `@aws-cdk-blocks/core/cdk/internal`,
 which carries no backward-compatibility guarantee unlike the `VpcRequirements`
 type itself. Registrations accumulate, so the second call adds to the first.
 
@@ -183,7 +183,7 @@ The test app provisions its own endpoints via `provisionEndpoints: true`, testin
 
 ```
 test-apps/vpc-smoke/
-├── aws-blocks/
+├── cdk-blocks/
 │   ├── index.ts          # Instantiates KVStore, FileBucket, AsyncJob, AppSetting, Realtime, Auth, Database, Logger, Metrics, Tracer
 │   ├── index.cdk.ts      # Looks up persistent test VPC, passes vpc: { network: vpc, provisionEndpoints: true }
 │   └── index.handler.ts  # Re-exports BB instances

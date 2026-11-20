@@ -17,7 +17,7 @@ export function testApiUrl(): string {
   return config.apiUrl;
 }
 
-/** {@link testApiUrl} without its `/aws-blocks/api` path: the origin of the app's routes. */
+/** {@link testApiUrl} without its `/cdk-blocks/api` path: the origin of the app's routes. */
 export function testBaseUrl(): string {
-  return testApiUrl().replace(/\/aws-blocks\/api$/, '');
+  return testApiUrl().replace(/\/cdk-blocks\/api$/, '');
 }

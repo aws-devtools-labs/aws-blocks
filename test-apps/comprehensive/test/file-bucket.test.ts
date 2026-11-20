@@ -3,9 +3,9 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { isBlocksError, ApiError } from '@aws-blocks/core';
-import { FileBucketErrors } from '@aws-blocks/bb-file-bucket';
-import type { api as apiType } from 'aws-blocks';
+import { isBlocksError, ApiError } from '@aws-cdk-blocks/core';
+import { FileBucketErrors } from '@aws-cdk-blocks/bb-file-bucket';
+import type { api as apiType } from 'cdk-blocks';
 
 export function fileBucketTests(getApi: () => typeof apiType) {
   describe('FileBucket BB', () => {

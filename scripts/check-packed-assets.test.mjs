@@ -23,7 +23,7 @@ const CDK_ENTRY = `const __dirname = dirname(fileURLToPath(import.meta.url));
 new Function(stack, 'Fn', { code: Code.fromAsset(join(__dirname, 'my-lambda')) });
 `;
 
-const DEPLOY_TIME_ENTRY = `import { deployTimeLambdaCode } from '@aws-blocks/core/cdk/internal';
+const DEPLOY_TIME_ENTRY = `import { deployTimeLambdaCode } from '@aws-cdk-blocks/core/cdk/internal';
 const LAMBDA = { moduleUrl: import.meta.url, bundleDir: '../my-lambda', source: './my-lambda' };
 new Function(stack, 'Fn', { code: deployTimeLambdaCode(LAMBDA) });
 `;
@@ -31,7 +31,7 @@ new Function(stack, 'Fn', { code: deployTimeLambdaCode(LAMBDA) });
 /** A package.json shipping `dist`, plus the given package-relative files. */
 function pkg(name, files, manifest = {}) {
 	return {
-		[`${name}/package.json`]: JSON.stringify({ name: `@aws-blocks/${name}`, version: '0.0.0', files: ['dist'], ...manifest }),
+		[`${name}/package.json`]: JSON.stringify({ name: `@aws-cdk-blocks/${name}`, version: '0.0.0', files: ['dist'], ...manifest }),
 		...Object.fromEntries(Object.entries(files).map(([rel, content]) => [`${name}/${rel}`, content])),
 	};
 }
@@ -68,13 +68,13 @@ describe('check-packed-assets', () => {
 			pkg('bb-thing', { 'dist/index.cdk.js': CDK_ENTRY, 'dist/my-lambda/index.js': 'exports.handler = 1;' }),
 		);
 		assert.equal(code, 0, output);
-		assert.match(output, /✓ @aws-blocks\/bb-thing: dist\/my-lambda\//);
+		assert.match(output, /✓ @aws-cdk-blocks\/bb-thing: dist\/my-lambda\//);
 	});
 
 	it('fails when the bundle step never wrote the asset directory', () => {
 		const { code, output } = runGuard(pkg('bb-thing', { 'dist/index.cdk.js': CDK_ENTRY }));
 		assert.equal(code, 1, output);
-		assert.match(output, /@aws-blocks\/bb-thing: dist\/index\.cdk\.js loads dist\/my-lambda\//);
+		assert.match(output, /@aws-cdk-blocks\/bb-thing: dist\/index\.cdk\.js loads dist\/my-lambda\//);
 	});
 
 	it('fails when the asset exists on disk but is excluded from the tarball', () => {
@@ -97,7 +97,7 @@ describe('check-packed-assets', () => {
 			}),
 		);
 		assert.equal(code, 0, output);
-		assert.match(output, /✓ @aws-blocks\/bb-thing: dist\/my-lambda\/ \(dist\/cdk\/index\.cdk\.js\)/);
+		assert.match(output, /✓ @aws-cdk-blocks\/bb-thing: dist\/my-lambda\/ \(dist\/cdk\/index\.cdk\.js\)/);
 	});
 
 	it('checks the bundleDir of a deployTimeLambdaCode spec, relative to its module', () => {
@@ -108,7 +108,7 @@ describe('check-packed-assets', () => {
 
 		const packed = runGuard(pkg('bb-thing', { ...files, 'dist/my-lambda/index.js': 'exports.handler = 1;' }));
 		assert.equal(packed.code, 0, packed.output);
-		assert.match(packed.output, /✓ @aws-blocks\/bb-thing: dist\/my-lambda\/ \(dist\/cdk\/guard\.js\)/);
+		assert.match(packed.output, /✓ @aws-cdk-blocks\/bb-thing: dist\/my-lambda\/ \(dist\/cdk\/guard\.js\)/);
 	});
 
 	it('ignores a bundleDir key in a file that never calls deployTimeLambdaCode', () => {
@@ -139,7 +139,7 @@ describe('check-packed-assets', () => {
 		// `'@aws-sdk/*'` opens what a naive block-comment regex takes for a comment, and the
 		// `'*/'` literal after the spec closes it, so the bundleDir line between them vanished.
 		const source = [
-			"import { deployTimeLambdaCode } from '@aws-blocks/core/cdk';",
+			"import { deployTimeLambdaCode } from '@aws-cdk-blocks/core/cdk';",
 			"const EXTERNALS = ['@aws-sdk/*'];",
 			"const LAMBDA = { moduleUrl: import.meta.url, bundleDir: '../my-lambda', source: './my-lambda' };",
 			"const CLOSE = '*/';",
@@ -153,7 +153,7 @@ describe('check-packed-assets', () => {
 
 	it('a quote inside a regex literal does not hide a real bundleDir', () => {
 		const source = [
-			"import { deployTimeLambdaCode } from '@aws-blocks/core/cdk';",
+			"import { deployTimeLambdaCode } from '@aws-cdk-blocks/core/cdk';",
 			'const QUOTE = /"/g;',
 			"const LAMBDA = { moduleUrl: import.meta.url, bundleDir: '../my-lambda', source: './my-lambda' };",
 			'const OTHER = /"/;',

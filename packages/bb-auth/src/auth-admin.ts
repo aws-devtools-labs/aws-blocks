@@ -21,8 +21,8 @@
  * @internal
  */
 
-import { ApiError } from '@aws-blocks/core';
-import { markServerOnlyFunction } from '@aws-blocks/core/internal';
+import { ApiError } from '@aws-cdk-blocks/core';
+import { markServerOnlyFunction } from '@aws-cdk-blocks/core/internal';
 import { assertAdminUserFilter } from './admin-filter.js';
 import type { NativeAdminUser, NativeAdminUserPage, NativeEngine } from './engines/types.js';
 import { AuthErrors } from './errors.js';
@@ -250,7 +250,7 @@ export function buildAdminSurface<O extends AuthOptions>(deps: AdminDeps<O>): Ad
 
 /**
  * Keep the `auth.admin` handle and its methods off the RPC surface. The RPC
- * dispatcher (`@aws-blocks/core` `rpc-dispatch`) refuses a Building Block
+ * dispatcher (`@aws-cdk-blocks/core` `rpc-dispatch`) refuses a Building Block
  * instance, as an exported namespace and as the method map a handler returns, and
  * recognises a block structurally by string `id` + `fullId`. The admin surface is
  * a plain object, so it gets its block's identity — non-enumerable, so it never

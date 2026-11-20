@@ -3,8 +3,8 @@ import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
-import type { api as apiType, authApi as authApiType } from 'aws-blocks';
+import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from 'aws-cdk-blocks/utils';
+import type { api as apiType, authApi as authApiType } from 'cdk-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
 const isWin = process.platform === 'win32';
@@ -12,22 +12,22 @@ const isWin = process.platform === 'win32';
 installCookieJar();
 
 let server: ChildProcess | null = null;
-let app: typeof import('aws-blocks');
+let app: typeof import('cdk-blocks');
 let api: typeof apiType;
 let authApi: typeof authApiType;
 // The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3001;
 // The app under test: the dev server on that port, or a deployed app when you set TEST_URL to the URL its
-// API is under (the deployed API URL without /aws-blocks/api). The client resolves BLOCKS_API_URL first, so
+// API is under (the deployed API URL without /cdk-blocks/api). The client resolves BLOCKS_API_URL first, so
 // a deploy, which records its URL in .cdk-blocks-sandbox/config.<stage>.json, never redirects these tests.
 const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
-const readinessUrl = `http://localhost:${serverPort}/.cdk-blocks-sandbox/config.json`;
+const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 /**
  * Sign up and sign in, the way the sign-in UI does: sign-up confirms the email
  * address with a 6-digit code, then signs the user in. Locally no email is
  * sent: `getLastAuthCode` reads the code the local auth block issued (it finds
- * the block's .bb-data/ files itself). On AWS, Cognito emails it instead.
+ * the block's .cdk-blocks/local/data/ files itself). On AWS, Cognito emails it instead.
  *
  * `user` defaults to this file's clients (the cookie jar `installCookieJar`
  * installs); pass `createTestClient(app)` for another user with a session of
@@ -70,12 +70,12 @@ test.before(async () => {
   if (!testUrl) await waitForServer();
 
   // Pin the client to the app under test. Only now: a dev server started above must not inherit it.
-  process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;
+  process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/cdk-blocks/api`;
 
   // Import the client only once the server answers: the dev server regenerates
-  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // cdk-blocks/client.js before it listens, so an earlier import could load a
   // stale client that lacks namespaces exported since the last generation.
-  app = await import('aws-blocks');
+  app = await import('cdk-blocks');
   api = app.api;
   authApi = app.authApi;
 });
@@ -240,7 +240,7 @@ test('items: optimistic-lock conflict rejects a stale write', async () => {
   // isBlocksError is client-safe (the browser bundle re-exports it); the error
   // name is asserted as a literal string because KVStoreErrors is a
   // server-only value and is not present in the client bundle this test runs in.
-  const { isBlocksError } = await import('@aws-blocks/blocks/client');
+  const { isBlocksError } = await import('aws-cdk-blocks/client');
   const CONDITIONAL_CHECK_FAILED = 'ConditionalCheckFailedException';
 
   const username = `e2e-lock-${Date.now().toString(36)}@example.com`;

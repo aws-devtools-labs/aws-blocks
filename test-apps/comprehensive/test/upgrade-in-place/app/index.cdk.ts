@@ -5,7 +5,7 @@
  * CDK entry of the upgrade-in-place fixture app. Copied verbatim into BOTH
  * revisions by `../../upgrade-in-place.ts`, so the stack name, the stack
  * defaults and the tags are identical before and after the upgrade — only
- * `aws-blocks/index.ts` (AuthCognito vs Auth) differs.
+ * `cdk-blocks/index.ts` (AuthCognito vs Auth) differs.
  *
  * The stack name is `bb-test-<BLOCKS_STACK_SUFFIX>` and nothing else: no
  * per-checkout sandbox id, because the two revisions live in two different
@@ -14,7 +14,7 @@
 
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BlocksPresets, BlocksStack } from '@aws-blocks/blocks/cdk';
+import { BlocksPresets, BlocksStack } from 'aws-cdk-blocks/cdk';
 import * as cdk from 'aws-cdk-lib';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

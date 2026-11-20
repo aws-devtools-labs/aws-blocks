@@ -1,8 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import type { ComputeProvider } from '@aws-blocks/core/cdk/internal';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import type { ComputeProvider } from '@aws-cdk-blocks/core/cdk/internal';
 
 /**
  * Event passed to the CronJob handler on each scheduled invocation.

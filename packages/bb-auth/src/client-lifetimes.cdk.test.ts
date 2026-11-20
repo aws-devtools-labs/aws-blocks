@@ -17,7 +17,7 @@ const GOOGLE =
 function clients(construct: string): Record<string, CfnResourceJson> {
 	const { template } = synthUnderCdkConditions({
 		imports:
-			"import { Auth } from '@aws-blocks/bb-auth';\nimport { AppSetting } from '@aws-blocks/bb-app-setting';",
+			"import { Auth } from '@aws-cdk-blocks/bb-auth';\nimport { AppSetting } from '@aws-cdk-blocks/bb-app-setting';",
 		build: `const auth = ${construct};`,
 	});
 	const out: Record<string, CfnResourceJson> = {};

@@ -174,8 +174,8 @@ abstract class CdkBlocksCodegenTask : DefaultTask() {
         if (segments.isNotEmpty()) return
         throw GradleException(
             "cdkBlocks.servers: \"$name\" is \"$url\", which has no RPC path. A Blocks backend serves RPC " +
-                "under /aws-blocks/api, not at the origin, so every call through this server fails. " +
-                "Use the full RPC URL, for example \"${uri.scheme}://${uri.rawAuthority}/aws-blocks/api\" ($fix).",
+                "under /cdk-blocks/api, not at the origin, so every call through this server fails. " +
+                "Use the full RPC URL, for example \"${uri.scheme}://${uri.rawAuthority}/cdk-blocks/api\" ($fix).",
         )
     }
 }

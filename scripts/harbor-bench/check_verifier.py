@@ -70,10 +70,10 @@ def snapshot(image, root):
     process = subprocess.run([
         'docker', 'run', '--rm', '-v', f'{root / "task/tests"}:/tests:ro', image, 'bash', '-c',
         'set -e; app=/app/todo-app; mkdir -p /logs/verifier "$app/node_modules/pkg" '
-        '"$app/aws-blocks/node_modules/nested" "$app/.bb-data/app-todos"; '
+        '"$app/cdk-blocks/node_modules/nested" "$app/.cdk-blocks/local/data/app-todos"; '
         'echo "{}" > "$app/package-lock.json"; echo stale > "$app/node_modules/pkg/index.js"; '
-        'echo stale > "$app/aws-blocks/node_modules/nested/index.js"; '
-        'echo "{\\"1\\":{\\"title\\":\\"survival-a\\"}}" > "$app/.bb-data/app-todos/store.json"; '
+        'echo stale > "$app/cdk-blocks/node_modules/nested/index.js"; '
+        'echo "{\\"1\\":{\\"title\\":\\"survival-a\\"}}" > "$app/.cdk-blocks/local/data/app-todos/store.json"; '
         'echo "{\\"items\\":[{\\"title\\":\\"survival-a\\"}]}" > /var/lib/harbor-verifier/state.json; '
         'BENCH_PHASE=2 python3 /tests/verify.py 2>/dev/null || true; '
         'python3 -c \'import json, tarfile; print(json.dumps({'
@@ -86,7 +86,7 @@ def snapshot(image, root):
     assert verification['status'] == 'failed', verification
     assert verification['failure']['stage'] == 'package_provenance', verification
     assert verification['snapshot'] is True, verification
-    assert {'todo-app/package-lock.json', 'todo-app/.bb-data/app-todos/store.json',
+    assert {'todo-app/package-lock.json', 'todo-app/.cdk-blocks/local/data/app-todos/store.json',
             'verifier-state.json'} <= members, members
     assert not any('node_modules' in name for name in members), members
     print(f'phase snapshot on verifier failure: {len(members)} entries, no node_modules')

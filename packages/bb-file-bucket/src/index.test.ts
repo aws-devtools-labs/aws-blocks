@@ -4,14 +4,14 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { rmSync, existsSync, readdirSync } from 'node:fs';
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { FileBucket, FileBucketErrors } from './index.mock.js';
 
 const scope = new Scope('idx');
 
 // Clean only our scope's mock data between tests
 beforeEach(() => {
-	const dir = '.bb-data';
+	const dir = '.cdk-blocks/local/data';
 	try {
 		if (existsSync(dir)) {
 			for (const entry of readdirSync(dir)) {

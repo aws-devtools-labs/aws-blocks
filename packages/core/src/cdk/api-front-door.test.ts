@@ -21,8 +21,8 @@ import {
 	scheduleApiFrontDoor,
 } from './api-front-door.js';
 
-/** A shared gateway URL has the shape `https://{host}/{stage}/aws-blocks/api`. */
-const GATEWAY_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api';
+/** A shared gateway URL has the shape `https://{host}/{stage}/cdk-blocks/api`. */
+const GATEWAY_URL = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api';
 
 function distributionWith(stack: cdk.Stack, origin: IOrigin): Distribution {
 	return new Distribution(stack, 'D', { defaultBehavior: { origin, ...API_BEHAVIOR_OPTIONS } });
@@ -42,7 +42,7 @@ function soleDistributionConfig(stack: cdk.Stack): {
 describe('httpOriginFromEndpoint', () => {
 	test('takes the host as the domain and the /{stage} segment as the OriginPath', () => {
 		// The REST API URL embeds its stage. Without it as `originPath`, a viewer
-		// request for /aws-blocks/api would reach the gateway without a stage and
+		// request for /cdk-blocks/api would reach the gateway without a stage and
 		// 403 — invisible until deploy.
 		const stack = new cdk.Stack(new cdk.App(), 'S');
 		distributionWith(stack, httpOriginFromEndpoint(GATEWAY_URL));
@@ -60,7 +60,7 @@ describe('httpOriginFromEndpoint', () => {
 		const stack = new cdk.Stack(new cdk.App(), 'S');
 		const api = new cdk.aws_apigateway.RestApi(stack, 'Api');
 		api.root.addMethod('ANY');
-		const gatewayUrl = `${api.url}aws-blocks/api`;
+		const gatewayUrl = `${api.url}cdk-blocks/api`;
 		distributionWith(stack, httpOriginFromEndpoint(gatewayUrl));
 
 		const origin = soleDistributionConfig(stack).Origins[0];

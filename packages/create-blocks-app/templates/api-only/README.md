@@ -1,6 +1,6 @@
 # Blocks API-Only Application
 
-A headless JSON API service on AWS Blocks — no frontend. The starting point for a
+A headless JSON API service on AWS CDK Blocks — no frontend. The starting point for a
 backend behind a mobile app, a CLI, or a third-party client. Ships a public
 health check plus an auth-gated CRUD resource with per-user isolation.
 
@@ -8,7 +8,7 @@ health check plus an auth-gated CRUD resource with per-user isolation.
 > over JSON-RPC. It still owns backend state (here a `KVStore`); a real
 > API almost always does.
 
-> Created with `npx @aws-blocks/create-blocks-app my-app --template api-only`
+> Created with `npx @aws-cdk-blocks/create-blocks-app my-app --template api-only`
 
 ## For Coding Agents
 
@@ -83,7 +83,7 @@ npm run sandbox:destroy  # Tear down the AWS sandbox stack (asks first in a term
 npm run destroy          # Tear down the production stack (asks first; -- --yes in CI)
 npm run secret set KEY # Set a secret (also list, remove KEY)
 npm run config set KEY value # Set a config value (also list, remove KEY)
-npm run typegen          # Regenerate secret/config key types; run once and commit .blocks/hosting-values.d.ts before gating CI on -- --check
+npm run typegen          # Regenerate secret/config key types; run once and commit .cdk-blocks/hosting-values.d.ts before gating CI on -- --check
 ```
 
 Run `npm run help` to list Blocks commands and `npm run docs -- --help` for documentation options. When piping structured output, use `npm run -s` to omit the npm banner (for example, `npm run -s docs KVStore | jq .`).
@@ -110,7 +110,7 @@ Use `GET` for health checks; `HEAD /healthz` is not routed and returns 404.
 
 ```bash
 # The health check is public — no cookie needed:
-curl -X POST http://localhost:3001/aws-blocks/api \
+curl -X POST http://localhost:3001/cdk-blocks/api \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"api.health","params":[],"id":1}'
 # method = "<namespace>.<methodName>"; params = positional array.
@@ -121,8 +121,8 @@ curl -X POST http://localhost:3001/aws-blocks/api \
 ## Stack naming
 
 Your CloudFormation stack names derive from the `stackId` in
-`.blocks/config.json`, generated at scaffold time. Edit `stackId` to rename, or
-`aws-blocks/index.cdk.ts` for dynamic naming logic.
+`.cdk-blocks/config.json`, generated at scaffold time. Edit `stackId` to rename, or
+`cdk-blocks/index.cdk.ts` for dynamic naming logic.
 
 ## Adding a frontend later
 

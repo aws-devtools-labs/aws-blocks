@@ -62,7 +62,7 @@ type Policy = 'equal' | 'superset' | 'skip';
 /**
  * Building Blocks (and {@link EXTRA_PACKAGES}): every condition must match `default` exactly.
  *
- * - `aws-runtime` and `cdk`: the same app module (`aws-blocks/index.ts`) is evaluated under
+ * - `aws-runtime` and `cdk`: the same app module (`cdk-blocks/index.ts`) is evaluated under
  *   default (local dev), `cdk` (synth) and `aws-runtime` (Lambda), so a missing name crashes
  *   that stage at import, and an extra name is untyped (types resolve to the mock) and
  *   untested locally.
@@ -74,12 +74,12 @@ type Policy = 'equal' | 'superset' | 'skip';
 const BB_POLICY: Record<Condition, Policy> = { 'aws-runtime': 'equal', cdk: 'equal', browser: 'equal' };
 
 /**
- * `@aws-blocks/blocks`:
+ * `aws-cdk-blocks`:
  * - `aws-runtime`: no dedicated entry — falls back to default, but each re-exported BB then
  *   resolves to its aws entry, so the names must still match.
- * - `cdk`: intentionally a superset — it re-exports `@aws-blocks/core/cdk` (BlocksStack,
+ * - `cdk`: intentionally a superset — it re-exports `@aws-cdk-blocks/core/cdk` (BlocksStack,
  *   BlocksBackend, registerConfig, synthGuard, …) on top of the BB surface.
- * - `browser`: intentionally `export {}` — browser code imports `@aws-blocks/blocks/client`.
+ * - `browser`: intentionally `export {}` — browser code imports `aws-cdk-blocks/client`.
  */
 const UMBRELLA_POLICY: Record<Condition, Policy> = { 'aws-runtime': 'equal', cdk: 'superset', browser: 'skip' };
 
@@ -228,16 +228,16 @@ const packages = discoverPackages();
 test('discovery sanity check', () => {
 	assert.ok(packages.length >= 8, `Expected ≥8 BB packages, found ${packages.length}: ${packages.join(', ')}`);
 	for (const expected of [
-		'@aws-blocks/bb-kv-store',
-		'@aws-blocks/bb-database',
-		'@aws-blocks/auth-common',
+		'@aws-cdk-blocks/bb-kv-store',
+		'@aws-cdk-blocks/bb-database',
+		'@aws-cdk-blocks/auth-common',
 	]) {
 		assert.ok(packages.includes(expected), `Expected to discover ${expected}`);
 	}
 });
 
 test('KNOWN_GAPS only names checked packages', () => {
-	const checked = new Set([...packages, '@aws-blocks/blocks']);
+	const checked = new Set([...packages, 'aws-cdk-blocks']);
 	const stale = [...new Set(KNOWN_GAPS.map((g) => g.pkg))].filter((p) => !checked.has(p));
 	assert.deepStrictEqual(stale, [], `KNOWN_GAPS names packages that are no longer checked: ${stale.join(', ')}`);
 });
@@ -247,13 +247,13 @@ test('KNOWN_GAPS only names checked packages', () => {
 for (const condition of CONDITIONS) {
 	const policy = UMBRELLA_POLICY[condition];
 	if (policy === 'skip') {
-		test(`@aws-blocks/blocks: ${condition} exports`, {
+		test(`aws-cdk-blocks: ${condition} exports`, {
 			skip: 'intentionally a different surface (see UMBRELLA_POLICY)',
 		});
 		continue;
 	}
-	test(`@aws-blocks/blocks: ${condition} exports ${policy} default`, () => {
-		assertParity('@aws-blocks/blocks', condition, policy);
+	test(`aws-cdk-blocks: ${condition} exports ${policy} default`, () => {
+		assertParity('aws-cdk-blocks', condition, policy);
 	});
 }
 

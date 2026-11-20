@@ -15,7 +15,7 @@ import type { ApiMethod, ApiMethodParam, DiscoveredBlock, RpcNamespace } from '.
  * 1. **Discovery** (`block-discovery.ts`) reads the app's own source and yields
  *    every `ApiNamespace` method with its REAL parameter names. This is the base
  *    and is never overridden — it is what the app actually declares today.
- * 2. **The OpenRPC spec** (`aws-blocks/blocks.spec.json`, emitted by the repo's
+ * 2. **The OpenRPC spec** (`cdk-blocks/blocks.spec.json`, emitted by the repo's
  *    own `blocks-generate-spec` from Zod schemas) adds parameter TYPES, which no
  *    amount of source scanning can supply. Most apps will never have run the
  *    generator, so its absence is the normal case, not a failure.
@@ -39,7 +39,7 @@ import type { ApiMethod, ApiMethodParam, DiscoveredBlock, RpcNamespace } from '.
  */
 
 /** Where the generated spec lives, relative to the project root. */
-export const SPEC_FILE_RELATIVE_PATH = join('aws-blocks', 'blocks.spec.json');
+export const SPEC_FILE_RELATIVE_PATH = join('cdk-blocks', 'blocks.spec.json');
 
 /** The block type whose methods are callable over JSON-RPC. */
 export const API_NAMESPACE_BLOCK_TYPE = 'ApiNamespace';
@@ -119,7 +119,7 @@ export type SpecFileReader = (path: string) => string | undefined;
 const REF_PREFIX = '#/components/schemas/';
 
 const NO_API_MESSAGE =
-	'This app declares no ApiNamespace block, so it exposes no RPC methods to call. Add one to aws-blocks/ to use the playground.';
+	'This app declares no ApiNamespace block, so it exposes no RPC methods to call. Add one to cdk-blocks/ to use the playground.';
 
 // ── spec parsing ────────────────────────────────────────────────────────────
 

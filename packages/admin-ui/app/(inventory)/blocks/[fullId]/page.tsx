@@ -45,7 +45,7 @@ const ERROR_TITLE: Record<string, string> = {
 };
 
 const STORE_KIND_TITLE: Record<DataStore['kind'], string> = {
-	'bb-data-file': 'A JSON file under .bb-data/ on this machine.',
+	'bb-data-file': 'A JSON file under .cdk-blocks/local/data/ on this machine.',
 	dynamodb: 'A DynamoDB table in the deployed stack.',
 	'cognito-user-pool': 'A Cognito user pool in the deployed stack.',
 };
@@ -199,6 +199,7 @@ export default function BlockDetailPage({ params }: { params: Promise<{ fullId: 
 	const { data: envData } = useQuery({
 		queryKey: ['environments'],
 		queryFn: () => apiGet<EnvironmentsResponse>('/api/v1/environments'),
+		enabled: ready && cloudStage !== undefined,
 	});
 	// The deployed-stack facts (stack name, region) for the selected cloud stage;
 	// undefined in the local environment, where no banner reads them.
@@ -364,7 +365,7 @@ export default function BlockDetailPage({ params }: { params: Promise<{ fullId: 
 						<div className="flex flex-wrap items-center gap-2 rounded-md border border-line bg-hover px-3 py-2 text-xs">
 							<Badge variant="outline">local data</Badge>
 							<span className="text-fg-soft">
-								Reading the <code className="font-mono">.bb-data</code> store on this machine. Nothing deployed is
+								Reading the <code className="font-mono">.cdk-blocks/local/data</code> store on this machine. Nothing deployed is
 								touched.
 							</span>
 						</div>
@@ -429,7 +430,7 @@ export default function BlockDetailPage({ params }: { params: Promise<{ fullId: 
 						{data.dataErrorCode === 'BLOCK_NOT_FOUND' && (
 							<p>
 								<code className="font-mono">{fullId}</code> is not declared in this project. Nothing under{' '}
-								<code className="font-mono">aws-blocks/</code> creates it, so there is no store to read — check the id
+								<code className="font-mono">cdk-blocks/</code> creates it, so there is no store to read — check the id
 								against the <Link href="/blocks" className="hover:text-fg hover:underline">
 									blocks list
 								</Link>
@@ -464,7 +465,7 @@ export default function BlockDetailPage({ params }: { params: Promise<{ fullId: 
 						<CardDescription>
 							{target.mode === 'cloud'
 								? `Creates, edits and deletes here go to the deployed ${target.stage} store — there is no staging copy in between.`
-								: 'Creates, edits and deletes here change the .bb-data store on this machine. Nothing deployed is touched.'}
+								: 'Creates, edits and deletes here change the .cdk-blocks/local/data store on this machine. Nothing deployed is touched.'}
 						</CardDescription>
 					</CardHeader>
 					<CardContent className="space-y-3">

@@ -16,7 +16,7 @@
  *
  * @example
  * ```typescript
- * import { Authenticator } from '@aws-blocks/auth-common/ui';
+ * import { Authenticator } from '@aws-cdk-blocks/auth-common/ui';
  * import { cognitoOverrides } from '@aws-blocks/bb-auth-cognito/ui';
  *
  * document.body.appendChild(Authenticator(authApi, cognitoOverrides({
@@ -37,7 +37,7 @@
  * })));
  * ```
  */
-import type { AuthActionOverride, AuthenticatorOptions, AuthFieldOverride } from '@aws-blocks/auth-common/ui';
+import type { AuthActionOverride, AuthenticatorOptions, AuthFieldOverride } from '@aws-cdk-blocks/auth-common/ui';
 /**
  * Top-level action names the Cognito state machine emits to the
  * Authenticator. These are the values of `AuthAction.name` for any

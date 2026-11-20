@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { ApiError, isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-cdk-blocks/core';
 import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
 import { DatabaseErrors } from '../errors.js';

@@ -13,7 +13,7 @@
  */
 
 import { test } from 'node:test';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType } from 'cdk-blocks';
 import { installCookieJar } from './cookie-jar.js';
 import { agentTests } from './agent.test.js';
 import { asyncJobTests } from './async-job.test.js';
@@ -37,13 +37,13 @@ test.before(async () => {
   // Own cookie jar: this process starts signed out, whatever the parent's
   // suites do to theirs.
   installCookieJar();
-  api = (await import('aws-blocks')).api;
+  api = (await import('cdk-blocks')).api;
 });
 
 test.after(async () => {
   // Close the realtime client's pooled WebSocket so this process can exit;
   // same reasoning as the matching block in e2e.test.ts.
-  for (const spec of ['@aws-blocks/bb-realtime/mock-middleware', '@aws-blocks/bb-realtime/aws-middleware']) {
+  for (const spec of ['@aws-cdk-blocks/bb-realtime/mock-middleware', '@aws-cdk-blocks/bb-realtime/aws-middleware']) {
     try {
       const mw = await import(spec);
       (mw as { __resetConnectionsForTest?: () => void }).__resetConnectionsForTest?.();

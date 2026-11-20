@@ -15,15 +15,15 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, test } from 'node:test';
-import type { BlocksContext } from '@aws-blocks/core';
-import { ApiNamespace } from '@aws-blocks/core';
-import { createLambdaHandler } from '@aws-blocks/core/lambda-handler';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
+import { ApiNamespace } from '@aws-cdk-blocks/core';
+import { createLambdaHandler } from '@aws-cdk-blocks/core/lambda-handler';
 import { Auth } from './index.mock.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
-/** The backend module an app would write (`aws-blocks/index.ts`). */
+/** The backend module an app would write (`cdk-blocks/index.ts`). */
 function backend() {
 	const codes: string[] = [];
 	const scope = { id: `smoke${process.pid}` };
@@ -52,7 +52,7 @@ function client(handler: ReturnType<typeof createLambdaHandler>) {
 			const cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
 			const response: unknown = await handler({
 				httpMethod: 'POST',
-				path: '/aws-blocks/api',
+				path: '/cdk-blocks/api',
 				headers: {
 					'Content-Type': 'application/json',
 					host: 'localhost:3000',

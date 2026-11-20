@@ -190,12 +190,12 @@ describe('Next.js template E2E assertions', () => {
       let configRequests = 0;
       const apiRequests: unknown[] = [];
       const server = createServer(async (req, res) => {
-        if (req.url === '/.cdk-blocks-sandbox/config.json') {
+        if (req.url === '/.blocks-sandbox/config.json') {
           configRequests++;
           res.writeHead(scenario.configStatus, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ apiUrl: scenario.relativeApiUrl ? '/aws-blocks/api' : `http://${req.headers.host}/aws-blocks/api` }));
-        } else if ((req.url === '/aws-blocks/api' || req.url?.startsWith('/aws-blocks/api/')) && req.method === 'POST') {
-          // The typed client POSTs to the per-namespace path (/aws-blocks/api/{namespace}).
+          res.end(JSON.stringify({ apiUrl: scenario.relativeApiUrl ? '/cdk-blocks/api' : `http://${req.headers.host}/cdk-blocks/api` }));
+        } else if ((req.url === '/cdk-blocks/api' || req.url?.startsWith('/cdk-blocks/api/')) && req.method === 'POST') {
+          // The typed client POSTs to the per-namespace path (/cdk-blocks/api/{namespace}).
           let body = '';
           for await (const chunk of req) body += chunk;
           const request = JSON.parse(body);

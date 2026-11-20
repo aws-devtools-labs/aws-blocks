@@ -13,7 +13,7 @@ import { markBlocksOwned } from './blocks-roles.js';
  * reasons: it lets this module identify a root **without importing** the
  * `BlocksStack`/`BlocksBackend` classes (which import from here — an
  * `instanceof` check would be a cycle), and it survives duplicate copies of
- * `@aws-blocks/core` in a dependency tree (two class copies fail `instanceof`;
+ * `@aws-cdk-blocks/core` in a dependency tree (two class copies fail `instanceof`;
  * one interned symbol does not). Mirrors the existing brand convention
  * (`Symbol.for('blocks:LambdaCompute')`, `Symbol.for('blocks:ApiNamespace')`).
  */

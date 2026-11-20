@@ -15,7 +15,7 @@
  * - An expiry goes in `_bkv_ttl`, unless the `ttl` option names a field of the
  *   value.
  */
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import {
 	applyReadValidation,

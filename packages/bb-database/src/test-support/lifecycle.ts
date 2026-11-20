@@ -6,12 +6,12 @@
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, beforeEach } from 'node:test';
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { _closeAllPgliteClusters } from '../engines/pglite-cluster.js';
 import { _resetDatabaseRegistry } from '../runtime/construction.js';
 import { removeFixtures } from './fixtures.js';
 
-const MOCK_DATA_ROOT = join(process.cwd(), '.bb-data');
+const MOCK_DATA_ROOT = join(process.cwd(), '.cdk-blocks/local/data');
 
 let scopes = 0;
 
@@ -32,8 +32,8 @@ export function freshScope(prefix: string, create: (id: string) => unknown = (id
 
 interface LocalTestHooks {
 	/**
-	 * The `scopeId()` prefix of every block the file constructs. Its data under `.bb-data/` is removed once, at
-	 * the end; test files run in parallel, so a file removes only what it wrote.
+	 * The `scopeId()` prefix of every block the file constructs. Its data under `.cdk-blocks/local/data/` is removed once,
+	 * at the end; test files run in parallel, so a file removes only what it wrote.
 	 */
 	mockDataPrefix?: string;
 }

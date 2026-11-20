@@ -4,7 +4,7 @@
 
 /**
  * `hosting-secret` — a ready-to-run CLI for **secrets** (AWS Secrets Manager) in
- * apps that consume `@aws-blocks/hosting` directly (standalone / pipeline). The
+ * apps that consume `@aws-cdk-blocks/hosting` directly (standalone / pipeline). The
  * config counterpart is `hosting-config` (SSM Parameter Store).
  *
  *   npx hosting-secret set <KEY> [<value>] [--value-stdin] [--stage <name>] [--prefix <path>]

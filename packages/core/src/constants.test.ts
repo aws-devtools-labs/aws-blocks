@@ -2,9 +2,37 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { BLOCKS_RPC_PREFIX, CLIENT_USER_AGENT_HEADER, isRpcPath, rpcNamespaceFromPath } from './constants.js';
+import {
+	BLOCKS_RPC_PREFIX,
+	CLIENT_USER_AGENT_HEADER,
+	canonicalBlocksPath,
+	isRpcPath,
+	rpcNamespaceFromPath,
+} from './constants.js';
+
+describe('canonicalBlocksPath', () => {
+	it('maps the legacy /aws-blocks prefix to /cdk-blocks', () => {
+		assert.strictEqual(canonicalBlocksPath('/aws-blocks'), '/cdk-blocks');
+		assert.strictEqual(canonicalBlocksPath('/aws-blocks/api'), '/cdk-blocks/api');
+		assert.strictEqual(canonicalBlocksPath('/aws-blocks/auth/callback'), '/cdk-blocks/auth/callback');
+	});
+
+	it('leaves canonical and unrelated paths alone', () => {
+		assert.strictEqual(canonicalBlocksPath('/cdk-blocks/api'), '/cdk-blocks/api');
+		assert.strictEqual(canonicalBlocksPath('/aws-blocksx/api'), '/aws-blocksx/api');
+		assert.strictEqual(canonicalBlocksPath('/app/aws-blocks/api'), '/app/aws-blocks/api');
+		assert.strictEqual(canonicalBlocksPath('/AWS-BLOCKS/api'), '/AWS-BLOCKS/api');
+		assert.strictEqual(canonicalBlocksPath('/'), '/');
+	});
+});
 
 describe('isRpcPath', () => {
+	it('matches the legacy /aws-blocks/api subtree too', () => {
+		assert.strictEqual(isRpcPath('/aws-blocks/api'), true);
+		assert.strictEqual(isRpcPath('/aws-blocks/api/reports'), true);
+		assert.strictEqual(isRpcPath('/aws-blocks/apixyz'), false);
+	});
+
 	it('matches the bare RPC prefix and the whole per-namespace subtree', () => {
 		assert.strictEqual(isRpcPath(BLOCKS_RPC_PREFIX), true);
 		assert.strictEqual(isRpcPath(`${BLOCKS_RPC_PREFIX}/`), true);
@@ -13,8 +41,8 @@ describe('isRpcPath', () => {
 	});
 
 	it('does not match a sibling path that merely shares the prefix string', () => {
-		// `/aws-blocks/apixyz` is neither the prefix nor under `${prefix}/`.
-		assert.strictEqual(isRpcPath('/aws-blocks/apixyz'), false);
+		// `/cdk-blocks/apixyz` is neither the prefix nor under `${prefix}/`.
+		assert.strictEqual(isRpcPath('/cdk-blocks/apixyz'), false);
 		assert.strictEqual(isRpcPath('/health'), false);
 		assert.strictEqual(isRpcPath('/'), false);
 	});
@@ -32,6 +60,10 @@ describe('rpcNamespaceFromPath', () => {
 	it('returns undefined for the bare prefix and the trailing-slash-only variant', () => {
 		assert.strictEqual(rpcNamespaceFromPath(BLOCKS_RPC_PREFIX), undefined);
 		assert.strictEqual(rpcNamespaceFromPath(`${BLOCKS_RPC_PREFIX}/`), undefined);
+	});
+
+	it('reads the namespace from a legacy /aws-blocks/api path', () => {
+		assert.strictEqual(rpcNamespaceFromPath('/aws-blocks/api/reports'), 'reports');
 	});
 
 	it('returns undefined for a path outside the RPC subtree', () => {

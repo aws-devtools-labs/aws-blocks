@@ -22,7 +22,7 @@
  *      `token_use`, signature, expiry) without a JWKS fetch.
  *   3. **Session store + secret** — the nested `KVStore` / `AppSetting` resolve
  *      to their mock entries under default conditions (they persist to
- *      `.bb-data/`). The session `KVStore.put` is wrapped so tests can assert
+ *      `.cdk-blocks/local/data/`). The session `KVStore.put` is wrapped so tests can assert
  *      exactly what was written, including the TTL option.
  *
  * The config keys are set in `process.env` under the names
@@ -39,9 +39,9 @@
  */
 
 import crypto from 'node:crypto';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
-import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
-import { EventSourceMapping } from '@aws-blocks/core/bb-utils';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
+import type { BlocksContext, ScopeParent } from '@aws-cdk-blocks/core';
+import { EventSourceMapping } from '@aws-cdk-blocks/core/bb-utils';
 import { cognitoConfigKeys, ownsPreSignUpTrigger, preSignUpTriggerConfigKey } from '../cdk/contract.js';
 import type { NativeEngine } from '../engines/types.js';
 import { Auth } from '../index.aws.js';
@@ -223,7 +223,7 @@ export class Browser {
 				body: null,
 				json: async () => ({}),
 				text: async () => '',
-				url: new URL('https://app.example.com/aws-blocks/api'),
+				url: new URL('https://app.example.com/cdk-blocks/api'),
 				params: {},
 			},
 			response: {

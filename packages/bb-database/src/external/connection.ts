@@ -66,7 +66,7 @@ export function parseConnectionString(value: unknown, source: string): Connectio
 // What an error calls the place a connection string is read from. The value itself is never in a message.
 /** The local value of connection `name`. */
 export const localConnectionLabel = (name: string): string =>
-	`The local value of connection '${name}' (.bb-data/settings.json)`;
+	`The local value of connection '${name}' (.cdk-blocks/local/data/settings.json)`;
 /** The SSM parameter of a stage. */
 export const ssmConnectionLabel = (parameterName: string): string => `The SSM parameter ${parameterName}`;
 /** An `AppSetting`, a `Secret` or another source that the application passed as `connectionString`. */

@@ -1,6 +1,6 @@
 # AppSetting — Design
 
-**Package:** `@aws-blocks/bb-app-setting`
+**Package:** `@aws-cdk-blocks/bb-app-setting`
 **Type:** Primitive (new infrastructure)
 **AWS Service:** SSM Parameter Store (String + SecureString)
 
@@ -73,8 +73,8 @@ The 4 KB (4096 bytes) size limit applies to the **JSON-encoded** value of non-se
 
 ## Mock Implementation
 
-- Data stored in `.bb-data/settings/{scope.fullId}/value.json`.
-- Data persists across dev server restarts. Customers can wipe with `rm -rf .bb-data`.
+- Data stored in the shared `.cdk-blocks/local/data/settings.json`, keyed by `scope.fullId`.
+- Data persists across dev server restarts. Customers can wipe with `rm -rf .cdk-blocks/local/data .bb-data`.
 - `get()` returns the stored value from disk, or the initial `value` from constructor if no file exists.
 - `put()` writes the value to disk immediately.
 - Schema validation on `put()` when configured, throws `ValidationFailedException`.

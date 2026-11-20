@@ -136,7 +136,7 @@ describe('the default 404 page behind every front door', () => {
     });
     const hosting = new HostingConstruct(stack, 'Hosting', { manifest: mpa(), frontDoor: { kind: 'stackedRouter' } });
     assert.deepEqual(hosting.doorInput.app.errorPages, { notFound: NOT_FOUND_PAGE_KEY });
-    // The edge, built on the router's DoorInput as `@aws-blocks/core`'s `Hosting` builds it.
+    // The edge, built on the router's DoorInput as `@aws-cdk-blocks/core`'s `Hosting` builds it.
     const router = hosting.frontDoor;
     buildFrontDoor(
       stack,

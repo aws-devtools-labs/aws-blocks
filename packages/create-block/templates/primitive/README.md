@@ -1,7 +1,7 @@
 # __BB_CLASS__
 
 TODO: one-sentence summary of what this Building Block does. (The first sentence
-becomes the block's blurb in the `@aws-blocks/blocks` catalog table.)
+becomes the block's blurb in the `aws-cdk-blocks` catalog table.)
 
 **Keywords:** TODO, comma, separated
 
@@ -25,7 +25,7 @@ worked key/value example, `bb-file-bucket` for object storage.
 ## Examples
 
 ```ts
-import { Scope, ApiNamespace } from '@aws-blocks/blocks';
+import { Scope, ApiNamespace } from 'aws-cdk-blocks';
 import { __BB_CLASS__ } from '__BB_PKG_NAME__';
 
 const scope = new Scope('my-app');
@@ -39,5 +39,5 @@ export const api = new ApiNamespace(scope, 'api', () => ({
 ## Local Development
 
 `npm run dev` runs the mock entry (`index.mock.ts`) — no AWS account required.
-Implement local state there (in-memory or on-disk under `.bb-data/`). Wipe local
-state with `rm -rf .bb-data`.
+Implement local state there (in-memory or on-disk under `.cdk-blocks/local/data/`). Wipe local
+state with `rm -rf .cdk-blocks/local/data .bb-data`.

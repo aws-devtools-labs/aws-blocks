@@ -61,6 +61,6 @@ replay_pid*
 node_modules/
 
 # Blocks local caches
-**/.bb-data
+**/.cdk-blocks/local/data
 **/.cdk-blocks-sandbox
-**/aws-blocks/client.js
+**/cdk-blocks/client.js

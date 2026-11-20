@@ -263,8 +263,8 @@ void main() {
     });
 
     test('resolves auth routes at the API origin when baseUrl carries the RPC '
-        'prefix (/aws-blocks/api)', () async {
-      // Regression: the JSON-RPC baseUrl includes `/aws-blocks/api`, but the
+        'prefix (/cdk-blocks/api)', () async {
+      // Regression: the JSON-RPC baseUrl includes `/cdk-blocks/api`, but the
       // server-relay auth routes mount at the API origin. The client must strip
       // the RPC prefix and target `<origin>/auth/*`, not `<rpc>/auth/*`.
       final authParamsUrls = <String>[];
@@ -298,7 +298,7 @@ void main() {
       // Matches the deployed sandbox: stage path + RPC prefix.
       final client = buildClient(
         httpClient: httpClient,
-        baseUrl: 'https://host.example.com/prod/aws-blocks/api',
+        baseUrl: 'https://host.example.com/prod/cdk-blocks/api',
       );
       final launcher = FakeLauncher(
         onLaunch: (authorizeUrl, scheme) {
@@ -311,7 +311,7 @@ void main() {
 
       await client.signIn('google', launcher: launcher, relayTo: _relayTo);
 
-      // Auth routes resolve at the origin (.../prod), NOT under /aws-blocks/api.
+      // Auth routes resolve at the origin (.../prod), NOT under /cdk-blocks/api.
       expect(
         authParamsUrls.single,
         'https://host.example.com/prod/auth/authorize-params/google',
@@ -331,10 +331,10 @@ void main() {
     });
 
     test('defaults the authorize-params and callback routes to the auth '
-        "block's /aws-blocks/auth/* routes", () async {
+        "block's /cdk-blocks/auth/* routes", () async {
       // Regression: the defaults were `/auth/authorize-params` and
       // `/auth/callback`, which no auth block serves — the block mounts every
-      // federation route under `/aws-blocks/auth/`. A client built without the
+      // federation route under `/cdk-blocks/auth/`. A client built without the
       // two paths must hit the routes the backend actually serves.
       final authParamsUrls = <String>[];
       final exchangeUrls = <String>[];
@@ -365,12 +365,12 @@ void main() {
       });
 
       final client = OidcClient(
-        exchangePath: '/aws-blocks/auth/exchange',
-        refreshPath: '/aws-blocks/auth/exchange/refresh',
-        signOutPath: '/aws-blocks/auth/signout',
+        exchangePath: '/cdk-blocks/auth/exchange',
+        refreshPath: '/cdk-blocks/auth/exchange/refresh',
+        signOutPath: '/cdk-blocks/auth/signout',
         providers: ['google'],
         providerConfigs: {},
-        baseUrl: 'https://host.example.com/prod/aws-blocks/api',
+        baseUrl: 'https://host.example.com/prod/cdk-blocks/api',
         tokenStore: InMemoryTokenStore(),
         httpClient: httpClient,
       );
@@ -387,19 +387,19 @@ void main() {
 
       expect(
         authParamsUrls.single,
-        'https://host.example.com/prod/aws-blocks/auth/authorize-params/google',
+        'https://host.example.com/prod/cdk-blocks/auth/authorize-params/google',
       );
       expect(
         exchangeUrls.single,
-        'https://host.example.com/prod/aws-blocks/auth/exchange',
+        'https://host.example.com/prod/cdk-blocks/auth/exchange',
       );
       expect(
         exchangeBody!['callbackUrl'],
-        'https://host.example.com/prod/aws-blocks/auth/callback',
+        'https://host.example.com/prod/cdk-blocks/auth/callback',
       );
       expect(
         launcher.capturedAuthorizeUrl!.queryParameters['redirect_uri'],
-        'https://host.example.com/prod/aws-blocks/auth/callback',
+        'https://host.example.com/prod/cdk-blocks/auth/callback',
       );
     });
 

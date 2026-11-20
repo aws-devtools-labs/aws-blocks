@@ -10,7 +10,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { ApiError, isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-cdk-blocks/core';
 import { resolveProviders } from './auth-base.js';
 import { requiresUserPool } from './cdk/contract.js';
 import { encryptAutoSignInPayload, signSessionId } from './cookies.js';
@@ -32,8 +32,8 @@ import {
 import { mockStateCapture } from './test-support/legacy-fixtures.js';
 import type { AppSettingRef, AuthOptions } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const oktaSecret: AppSettingRef = { fullId: 'okta-secret', get: async () => 'shh' };
 
@@ -240,7 +240,7 @@ describe('tolerated as signed-out — never a throw, never a 500, never authenti
 
 	test('a row in another shape (an old AuthOIDC row) in the session store, reached by a verified cookie → signed-out, cleared, row untouched', async () => {
 		const h = makeAuth();
-		const { KVStore } = await import('@aws-blocks/bb-kv-store');
+		const { KVStore } = await import('@aws-cdk-blocks/bb-kv-store');
 		const table = new KVStore<unknown>(h.auth, SESSION_STORE_ID);
 		const oidcRow = {
 			userId: 'https://idp.example.com:sub-1',
@@ -268,7 +268,7 @@ describe('tolerated as signed-out — never a throw, never a 500, never authenti
 	] as const) {
 		test(`${label} → signed-out`, async () => {
 			const h = makeAuth();
-			const { KVStore } = await import('@aws-blocks/bb-kv-store');
+			const { KVStore } = await import('@aws-cdk-blocks/bb-kv-store');
 			await new KVStore<unknown>(h.auth, SESSION_STORE_ID).put('bad', row);
 			const fresh = makeAuth(undefined, { rootId: h.auth.parent.id });
 			await expectSignedOut(fresh, `${fresh.cookieName}=${signSessionId('bad', TEST_SECRET)}`, true);
@@ -776,7 +776,7 @@ describe('email + password flows through AuthBase', () => {
 			assert.ok(!b.jar.has(h.cookieName));
 			assert.strictEqual(validated, false, 'validateUser does not run for a refused sign-in');
 			assert.ok(h.native.calls.includes('signOut:false'), "the engine's upstream tokens are revoked");
-			const { KVStore } = await import('@aws-blocks/bb-kv-store');
+			const { KVStore } = await import('@aws-cdk-blocks/bb-kv-store');
 			const rows = await Array.fromAsync(new KVStore<unknown>(h.auth, 'sessions').scan());
 			assert.deepStrictEqual(rows, [], 'no session row is stored');
 

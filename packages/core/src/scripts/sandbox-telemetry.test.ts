@@ -37,7 +37,7 @@ import { buildSandboxDeployArgs, buildSandboxSynthArgs } from './sandbox.js';
 
 const distScripts = dirname(fileURLToPath(import.meta.url));
 const RUN_TIMEOUT_MS = 60_000;
-const BACKEND_PATH = 'aws-blocks/index.cdk.ts';
+const BACKEND_PATH = 'cdk-blocks/index.cdk.ts';
 
 interface SandboxRun {
 	status: number | null;
@@ -50,7 +50,7 @@ interface SandboxRun {
 		counters?: { blocksCount: number };
 	}>;
 	npmCalls: Array<{ argv: string[]; nodeOptions: string | undefined; appEntry: string | undefined; clientExisted: boolean }>;
-	/** `.cdk-blocks-sandbox/config.json`, `config.sandbox.json` and `aws-blocks/client.js` after the run, if written. */
+	/** `.cdk-blocks-sandbox/config.json`, `config.sandbox.json` and `cdk-blocks/client.js` after the run, if written. */
 	configJson?: string;
 	sandboxConfigJson?: string;
 	clientJs?: string;
@@ -64,7 +64,7 @@ describe('startSandbox — telemetry reports the app’s blocks', () => {
 
 	const runSandbox = (name: string, failDeploy: boolean, script = 'run-sandbox.mjs', extraEnv: NodeJS.ProcessEnv = {}): SandboxRun => {
 		rmSync(join(appDir, '.cdk-blocks-sandbox'), { recursive: true, force: true });
-		rmSync(join(appDir, 'aws-blocks', 'client.js'), { force: true });
+		rmSync(join(appDir, 'cdk-blocks', 'client.js'), { force: true });
 		const telemetryFile = join(tmp, `${name}-telemetry.json`);
 		const npmLog = join(tmp, `${name}-npm.jsonl`);
 		const env: NodeJS.ProcessEnv = {};
@@ -101,7 +101,7 @@ describe('startSandbox — telemetry reports the app’s blocks', () => {
 		return {
 			configJson: readIfExists(join(appDir, '.cdk-blocks-sandbox', 'config.json')),
 			sandboxConfigJson: readIfExists(join(appDir, '.cdk-blocks-sandbox', 'config.sandbox.json')),
-			clientJs: readIfExists(join(appDir, 'aws-blocks', 'client.js')),
+			clientJs: readIfExists(join(appDir, 'cdk-blocks', 'client.js')),
 			status: result.status,
 			signal: result.signal,
 			stdout: String(result.stdout ?? ''),
@@ -119,7 +119,7 @@ describe('startSandbox — telemetry reports the app’s blocks', () => {
 	before(() => {
 		tmp = realpathSync(mkdtempSync(join(tmpdir(), 'blocks-sandbox-telemetry-')));
 		appDir = join(tmp, 'app');
-		mkdirSync(join(appDir, 'aws-blocks'), { recursive: true });
+		mkdirSync(join(appDir, 'cdk-blocks'), { recursive: true });
 		mkdirSync(join(tmp, 'home'), { recursive: true });
 		writeFileSync(join(appDir, 'package.json'), JSON.stringify({ name: 'fixture-app', type: 'module' }));
 
@@ -144,7 +144,7 @@ new Scope('thing', { bbName: 'KVStore', bbVersion: '9.9.9' });`;
 			`${register}\nconsole.log('FAKE_BB_MOCK_LOADED');\nsetInterval(() => {}, 1000);\n`,
 		);
 		writeFileSync(join(bb, 'aws.mjs'), `${register}\n`);
-		// The CDK entry refuses to load without `--conditions=cdk`, like `@aws-blocks/*/cdk`.
+		// The CDK entry refuses to load without `--conditions=cdk`, like `@aws-cdk-blocks/*/cdk`.
 		writeFileSync(join(bb, 'cdk-guard.mjs'), `throw new Error('run with --conditions=cdk');\n`);
 		writeFileSync(join(bb, 'cdk.mjs'), `${register}\n`);
 		// The client-generation worker runs `node --import tsx` from the app directory.
@@ -154,7 +154,7 @@ new Scope('thing', { bbName: 'KVStore', bbVersion: '9.9.9' });`;
 		);
 
 		writeFileSync(
-			join(appDir, 'aws-blocks', 'index.ts'),
+			join(appDir, 'cdk-blocks', 'index.ts'),
 			`import 'fake-bb';\nexport const api = { hello: async () => 'hi' };\n`,
 		);
 		writeFileSync(join(appDir, BACKEND_PATH), `import 'fake-bb/cdk';\nimport './index.js';\n`);
@@ -166,7 +166,7 @@ new Scope('thing', { bbName: 'KVStore', bbVersion: '9.9.9' });`;
 			`import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 const argv = process.argv.slice(2);
-appendFileSync(process.env.FAKE_NPM_LOG, JSON.stringify({ argv, nodeOptions: process.env.NODE_OPTIONS, appEntry: process.env.BLOCKS_CDK_APP_ENTRY, clientExisted: existsSync('aws-blocks/client.js') }) + '\\n');
+appendFileSync(process.env.FAKE_NPM_LOG, JSON.stringify({ argv, nodeOptions: process.env.NODE_OPTIONS, appEntry: process.env.BLOCKS_CDK_APP_ENTRY, clientExisted: existsSync('cdk-blocks/client.js') }) + '\\n');
 if (process.env.FAKE_NPM_FAIL) process.exit(1);
 // \`cdk synth\` writes no outputs file; only \`cdk deploy\` is given one.
 const outputsAt = argv.indexOf('--outputs-file');
@@ -256,7 +256,7 @@ await startSandbox({ backendPath: ${JSON.stringify(BACKEND_PATH)}, devCommand: $
 	it('the SUCCESS event reports the app’s blocks', () => {
 		assert.strictEqual(success.telemetry.length, 1, success.stdout);
 		const [event] = success.telemetry;
-		assert.deepStrictEqual(event.event.command, 'sandbox');
+		assert.deepStrictEqual(event.event.command, 'sandbox:deploy');
 		assert.deepStrictEqual(event.event.state, 'SUCCESS');
 		assert.deepStrictEqual(event.product.buildingBlocks, [{ name: 'KVStore', version: '9.9.9' }]);
 		assert.strictEqual(event.counters?.blocksCount, 1);

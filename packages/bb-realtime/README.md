@@ -1,4 +1,4 @@
-# @aws-blocks/bb-realtime
+# @aws-cdk-blocks/bb-realtime
 
 Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB.
 
@@ -13,7 +13,7 @@ Real-time pub/sub messaging backed by API Gateway WebSocket + DynamoDB.
 ## Quick Start
 
 ```typescript
-import { Realtime } from '@aws-blocks/bb-realtime';
+import { Realtime } from '@aws-cdk-blocks/bb-realtime';
 import { z } from 'zod';
 
 const rt = new Realtime(scope, 'collab', {
@@ -39,7 +39,7 @@ The `Realtime` instance exposes three methods, all keyed by namespace name (type
 | `rt.revokeAccess(principal)` | `Promise<void>` | End a user's access: handles minted for `principal` before this call stop working, and open subscriptions end on the connection's next keep-alive ping. See [Binding a handle to a user](#binding-a-handle-to-a-user). |
 | `rt.subscribe(namespace, channel, handler)` | `() => void` | Server-side subscribe. Returns unsubscribe function. |
 
-**Runtime only.** These methods (`publish`, `subscribe`, `getChannel`) run at request time — call them inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, **not** at the top level of your `aws-blocks/index.ts`. Top-level code runs during CDK synth, where the block resolves to its infrastructure construct, whose data methods are guards: a top-level call throws an `Error` reading `Realtime.<method>() cannot be called during CDK synth. Data methods run at request time — …`. To publish seed data, do it from inside a handler or a separate runtime script. Constructing the block at module scope is fine; only method calls must move into handlers.
+**Runtime only.** These methods (`publish`, `subscribe`, `getChannel`) run at request time — call them inside an `ApiNamespace` method, `RawRoute` handler, job handler, or a runtime script, **not** at the top level of your `cdk-blocks/index.ts`. Top-level code runs during CDK synth, where the block resolves to its infrastructure construct, whose data methods are guards: a top-level call throws an `Error` reading `Realtime.<method>() cannot be called during CDK synth. Data methods run at request time — …`. To publish seed data, do it from inside a handler or a separate runtime script. Constructing the block at module scope is fine; only method calls must move into handlers.
 
 ### Channel Handle
 
@@ -234,8 +234,8 @@ issued the original channel.
 Every `publish()` validates against the schema at runtime:
 
 ```typescript
-import { isBlocksError } from '@aws-blocks/core';
-import { RealtimeErrors } from '@aws-blocks/bb-realtime';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { RealtimeErrors } from '@aws-cdk-blocks/bb-realtime';
 
 try {
   await rt.publish('chat', 'room-1', { sender: 123 }); // wrong type
@@ -249,7 +249,7 @@ try {
 ## Error Constants
 
 ```typescript
-import { RealtimeErrors } from '@aws-blocks/bb-realtime';
+import { RealtimeErrors } from '@aws-cdk-blocks/bb-realtime';
 
 RealtimeErrors.ValidationFailed  // data failed schema validation on publish, or an invalid channel name / getChannel() scope
 RealtimeErrors.PublishFailed     // Publish fan-out failed (AWS only)

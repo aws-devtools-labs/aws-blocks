@@ -2,7 +2,7 @@
 
 Design document for Dashboard. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-dashboard`
+**Package:** `@aws-cdk-blocks/bb-dashboard`
 **Type:** Primitive (creates new infrastructure)
 **AWS Service:** Amazon CloudWatch Dashboards
 
@@ -41,7 +41,7 @@ Design document for Dashboard. For usage, see [README.md](./README.md).
 
 ### D-DB-4: Redirect route vs direct URL embedding
 
-**Decision:** Dashboard registers a `GET /aws-blocks/dashboard` RawRoute that 302-redirects to the CloudWatch console URL, rather than embedding or serving the dashboard directly.
+**Decision:** Dashboard registers a `GET /cdk-blocks/dashboard` RawRoute that 302-redirects to the CloudWatch console URL, rather than embedding or serving the dashboard directly.
 
 **Rationale:**
 - **API compatibility** — Lets HTTP clients discover the dashboard URL programmatically
@@ -238,14 +238,14 @@ Row 3 (y=18): [Log Volume (24w, 6h)]
 
 ### Route Implementation
 
-The Dashboard always registers a `GET` RawRoute that 302-redirects to the CloudWatch Dashboard URL:
+Unless `routePath` is `false`, the Dashboard registers a `GET` RawRoute:
 
 1. **CDK layer:** Sets a `BB_DASHBOARD_URL` environment variable on the Lambda handler containing the dashboard console URL token. Registers the RawRoute for route validation.
 2. **Runtime layer:** Registers a `RawRoute` with a handler that reads the env var and redirects:
    ```typescript
    // Internally equivalent to:
    new RawRoute(scope, 'dashboard-redirect', {
-     path: options.routePath ?? '/aws-blocks/dashboard',
+     path: options.routePath ?? '/cdk-blocks/dashboard',
      method: 'GET',
      handler: async (ctx) => {
        const url = process.env.BB_DASHBOARD_URL;
@@ -255,7 +255,7 @@ The Dashboard always registers a `GET` RawRoute that 302-redirects to the CloudW
      },
    });
    ```
-3. **Mock layer:** Returns 503 with `{ message, hint, localObservability: { logs, metrics, traces } }` directing the user to run `npx cdk deploy` and pointing at local observability output
+3. **Mock layer:** Serves an HTML overview of configured metrics and local observability sources. It does not consult the cloud URL.
 4. **Security:** Route is public — the URL alone grants no data access (AWS Console login required)
 
 ### IAM Permissions
@@ -266,18 +266,9 @@ No runtime IAM permissions are needed because the Dashboard BB has no runtime co
 
 ## Mock Implementation
 
-- **Local dev:** The mock registers the redirect route (which returns a 503 with helpful guidance), and logs a console message on instantiation.
-- **Dev server route:** Returns 503 with JSON explaining CloudWatch Dashboards are cloud-only and directing users to run `cdk deploy`
-- **Console output:** On instantiation, the mock logs:
-  ```
-  [Dashboard] Dashboard BB: no-op in local mode (CloudWatch Dashboard is a cloud-only resource).
-  Will create CloudWatch Dashboard '{title}' on deploy. Run 'npx cdk deploy' to view.
-
-  📍 Local observability data:
-     • Logs: Check your terminal output - Logger BB writes structured JSON to stdout
-     • Metrics: Metrics BB writes EMF-formatted JSON to stdout (visible in terminal)
-     • Traces: Tracer stores mock traces to .bb-data/ and logs them to stdout
-  ```
+The mock prints the registered route path. That route returns a local page with the dashboard title,
+configured metrics and instructions for inspecting logs and traces or launching the local Admin UI.
+It does not read trace files, obtain AWS credentials, or embed an admin session token in the response.
 
 ### Dashboard Body JSON Format
 
@@ -304,9 +295,7 @@ Dashboard body is serialized as CloudWatch Dashboard JSON format during CDK synt
 
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
-| No dashboard visualization locally | Cannot preview dashboard layout in local dev | No mitigation — CloudWatch Dashboards are a console feature. Use `npx cdk deploy` to a sandbox |
-| No metric data locally | Widgets would be empty even if rendered | No mitigation — metrics are ephemeral in local dev (EMF to stdout) |
-| Route returns 503 in local mode | Cannot redirect to dashboard URL locally | Route provides helpful guidance and links to local observability data (terminal output) |
+| No CloudWatch charts locally | The local route serves a configuration overview, not live CloudWatch data | Inspect EMF and logs in the dev server terminal and Tracer records in `.bb-data/` |
 
 ## Integration with Observability BBs
 
@@ -387,7 +376,7 @@ Dashboard intentionally does **not** walk the scope tree to auto-discover BBs be
 - **Zero additional security surface** — Dashboard is a CloudWatch Console page protected by AWS IAM
 - **Access requires:** AWS Console login with `cloudwatch:GetDashboard` permission
 - **No data exposure:** Dashboard displays data the viewer already has access to via IAM
-- **Redirect route:** The `/aws-blocks/dashboard` route exposes only the console link (no data); AWS Console login is still required
+- **Redirect route:** The `/cdk-blocks/dashboard` route exposes only the console link (no data); AWS Console login is still required
 
 ### Threat Model
 

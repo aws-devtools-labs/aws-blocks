@@ -82,10 +82,10 @@ abstract class CdkBlocksExtension(project: Project) {
      * ```kotlin
      * cdkBlocks {
      *     servers {
-     *         local("http://10.0.2.2:3001/aws-blocks/api")
-     *         sandbox("https://sandbox.example.com/aws-blocks/api")
-     *         prod("https://api.example.com/aws-blocks/api")
-     *         custom("staging", "https://staging.example.com/aws-blocks/api")
+     *         local("http://10.0.2.2:3001/cdk-blocks/api")
+     *         sandbox("https://sandbox.example.com/cdk-blocks/api")
+     *         prod("https://api.example.com/cdk-blocks/api")
+     *         custom("staging", "https://staging.example.com/cdk-blocks/api")
      *     }
      * }
      * ```
@@ -94,7 +94,7 @@ abstract class CdkBlocksExtension(project: Project) {
      * or are added as new entries if no match exists.
      *
      * Each URL is the RPC URL the generated client posts to, so it carries the
-     * `/aws-blocks/api` path. Code generation rejects a URL that does not parse,
+     * `/cdk-blocks/api` path. Code generation rejects a URL that does not parse,
      * has no `http://` or `https://` scheme or no host, carries a query or
      * fragment, or has no RPC path (nothing but slashes and dot segments),
      * because such a server reaches no RPC.
@@ -120,31 +120,8 @@ class OidcDsl {
      */
     var relayTo: String? = null
 
-    @Deprecated(
-        message = "Renamed to relayTo, matching the backend's allowedRelayOrigins and the wire field.",
-        replaceWith = ReplaceWith("relayTo"),
-        level = DeprecationLevel.WARNING,
-    )
-    var redirectUrl: String? = null
-
-    /**
-     * Returns the configured relay target, accepting either property name.
-     *
-     * Both names write separate fields so that setting them to conflicting values is
-     * detectable rather than resolved by assignment order.
-     */
-    internal fun resolve(): String? {
-        @Suppress("DEPRECATION")
-        val legacy = redirectUrl
-        val current = relayTo
-        if (legacy != null && current != null && legacy != current) {
-            throw GradleException(
-                "cdkBlocks.oidc: relayTo (\"$current\") and the deprecated redirectUrl " +
-                    "(\"$legacy\") are set to different values. Remove redirectUrl.",
-            )
-        }
-        return (current ?: legacy)?.also { validate(it) }
-    }
+    /** Returns the configured relay target, or null when none is set. */
+    internal fun resolve(): String? = relayTo?.also { validate(it) }
 
     private fun validate(value: String) {
         if (value.any { it.isWhitespace() }) {

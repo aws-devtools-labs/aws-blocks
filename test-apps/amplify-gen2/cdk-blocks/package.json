@@ -1,0 +1,25 @@
+{
+  "name": "amplify-gen2-aws-blocks",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "echo 'No tests (IFC subpackage)'"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "browser": "./client.js",
+      "react-server": "./client.js",
+      "import": "./client.js",
+      "default": "./index.ts"
+    }
+  },
+  "dependencies": {
+    "@aws-cdk-blocks/bb-auth": "1.0.0-rc.0",
+    "aws-cdk-blocks": "1.0.0-rc.0",
+    "@aws-cdk-blocks/bb-kv-store": "1.0.0-rc.0",
+    "@aws-cdk-blocks/bb-database": "1.0.0-rc.0",
+    "vite": "^6.4.5"
+  }
+}

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The data file of the mock: `.bb-data/{fullId}/store.json`.
+ * The data file of the mock: `.cdk-blocks/local/data/{fullId}/store.json`.
  *
  * The file has a version, so that the loader can tell a file of an earlier
  * format from a damaged file:
@@ -36,7 +36,7 @@
  */
 import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ChildLogger } from '@aws-cdk-blocks/bb-logger';
 import { isPlainObject } from './errors.js';
 import {
 	compareByBaseKey,

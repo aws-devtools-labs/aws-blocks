@@ -24,7 +24,7 @@ const PRODUCTION_PRESET = 'BlocksPresets.production';
 const DISPOSABLE_PRESET = `{ ...${PRODUCTION_PRESET}, removalPolicy: cdk.RemovalPolicy.DESTROY, deletionProtection: false }`;
 
 /**
- * Rewrite the production preset in a scaffolded `aws-blocks/index.cdk.ts` to
+ * Rewrite the production preset in a scaffolded `cdk-blocks/index.cdk.ts` to
  * `{ ...BlocksPresets.production, removalPolicy: DESTROY, deletionProtection: false }`:
  * every other production default is kept. Deletion protection goes too, so a
  * stateful block added to the template later can't leave the stack

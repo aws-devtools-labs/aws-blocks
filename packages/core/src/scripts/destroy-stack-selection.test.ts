@@ -68,7 +68,7 @@ function recordDestroyArgv(modulePath: string, call: string): string[] {
     cwd: root,
     // HOME without ~/.aws and no Region; the callers fake the credential check,
     // so the child never reaches AWS. PATH holds only the fake binaries.
-    env: { PATH: join(root, 'bin'), HOME: root, USERPROFILE: root, AWS_BLOCKS_DISABLE_TELEMETRY: '1' },
+    env: { PATH: join(root, 'bin'), HOME: root, USERPROFILE: root, CDK_DISABLE_CLI_TELEMETRY: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 60_000,
   });
@@ -77,10 +77,10 @@ function recordDestroyArgv(modulePath: string, call: string): string[] {
 
 /**
  * `destroySandbox`'s body with the real cdk destroy (the fake npm binary) and retry, but no AWS:
- * no Region or credentials check, and no SSM delete (this app has no `.blocks/config.json`).
+ * no Region or credentials check, and no SSM delete (this app has no `.cdk-blocks/config.json`).
  */
 const SANDBOX_DESTROY =
-  "mod.runSandboxDestroy('aws-blocks/index.ts', { checkCredentials: async () => {}, " +
+  "mod.runSandboxDestroy('cdk-blocks/index.ts', { checkCredentials: async () => {}, " +
   'retryClients: mod.destroyRetryClients, destroy: mod.runDestroyWithRetries, deleteSecrets: async () => [] })';
 
 describe('destroy selects the stacks its deploy creates', { skip }, () => {
@@ -102,7 +102,7 @@ describe('destroy selects the stacks its deploy creates', { skip }, () => {
     assert.strictEqual(argv[argv.indexOf('reuseFrontendBuild=true') - 1], '--context', `expected --context reuseFrontendBuild=true in: ${argv.join(' ')}`);
     // The --app command names no path: the backend entry reaches CDK in its environment.
     assert.strictEqual(argv[argv.indexOf('--app') + 1], cdkAppCommand());
-    assert.match(readFileSync(cdkLog, 'utf-8'), /^app=aws-blocks\/index\.ts$/m);
+    assert.match(readFileSync(cdkLog, 'utf-8'), /^app=cdk-blocks\/index\.ts$/m);
   });
 
   it('destroySandbox clears a stale assembly first and removes the one CDK wrote after a successful destroy', () => {
@@ -158,14 +158,14 @@ describe('the production destroy of a stack that does not exist', { skip }, () =
   ): Promise<{ failed: boolean; output: string; cdkRan: boolean }> {
     rmSync(argvLog, { force: true });
     const moduleUrl = new URL('./destroy.js', import.meta.url).href;
-    const options = JSON.stringify({ cdkAppPath: 'aws-blocks/index.cdk.ts', projectRoot: root, stackName });
+    const options = JSON.stringify({ cdkAppPath: 'cdk-blocks/index.cdk.ts', projectRoot: root, stackName });
     const script = `const mod = await import(${JSON.stringify(moduleUrl)}); await mod.destroy(${options});`;
     const run = promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], {
       cwd: root,
       env: {
         PATH: join(root, 'bin'),
         HOME: root,
-        AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+        CDK_DISABLE_CLI_TELEMETRY: '1',
         AWS_REGION: 'us-east-1',
         AWS_ACCESS_KEY_ID: 'AKIDTEST',
         AWS_SECRET_ACCESS_KEY: 'secret',
@@ -200,7 +200,7 @@ describe('the production destroy of a stack that does not exist', { skip }, () =
     assert.strictEqual(other.cdkRan, false);
     assert.match(
       other.output,
-      /The CDK app \(aws-blocks\/index\.cdk\.ts\) defines my-blocks-stack-prod, not live-prod, the production stack that \.blocks\/config\.json names; nothing was deleted\./,
+      /The CDK app \(cdk-blocks\/index\.cdk\.ts\) defines my-blocks-stack-prod, not live-prod, the production stack that \.cdk-blocks\/config\.json names; nothing was deleted\./,
     );
     // A construct id that differs from the stack name is listed as `id (name)`.
     const named = await runDestroy('live-prod', 'Edge\nApp (live-prod)');
@@ -238,7 +238,7 @@ describe('the production destroy of a stack that does not exist', { skip }, () =
       const script = `const mod = await import(${JSON.stringify(moduleUrl)}); console.log(String(await mod.deployedStackExists(${JSON.stringify({ projectRoot: root, ...options })})));`;
       const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], {
         cwd: root,
-        env: { HOME: root, AWS_BLOCKS_DISABLE_TELEMETRY: '1', ...env },
+        env: { HOME: root, CDK_DISABLE_CLI_TELEMETRY: '1', ...env },
         timeout: 60_000,
       });
       return stdout.trim();
@@ -260,7 +260,7 @@ describe('cdkListedStacks', () => {
       'AI agent detected',
       '🏗️  Building frontend (spa): npm run build',
       '> mig1@0.1.0 prebuild',
-      'blocks-generate-client: wrote /app/aws-blocks/client.js',
+      'blocks-generate-client: wrote /app/cdk-blocks/client.js',
       'vite v6.4.5 building for production...',
       '✓ built in 406ms',
       'zz-app-prod',

@@ -85,7 +85,7 @@ export type ProxyAssetCheck = {
 };
 
 /**
- * Warn at synth (`@aws-blocks/hosting:AssetExceedsProxyLimit`) listing every
+ * Warn at synth (`@aws-cdk-blocks/hosting:AssetExceedsProxyLimit`) listing every
  * build asset whose base64-encoded response would exceed the door's limit
  * (gzipped first for a compressible type, as the proxy serves it).
  *
@@ -103,7 +103,7 @@ export const warnOversizedProxyAssets = (scope: IConstruct, check: ProxyAssetChe
     .sort((a, b) => b[1] - a[1]);
   if (over.length === 0) return;
   Annotations.of(scope).addWarningV2(
-    '@aws-blocks/hosting:AssetExceedsProxyLimit',
+    '@aws-cdk-blocks/hosting:AssetExceedsProxyLimit',
     `${over.length} build asset(s) are too large for the ${check.door} front door's asset proxy: a file is returned ` +
       `base64-encoded (gzipped first when compressible) in the Lambda response, which is limited to ${check.limitLabel}, so these will fail to load: ` +
       `${over.map(([url, bytes]) => `${url} (${formatBytes(bytes)})`).join(', ')}. ` +

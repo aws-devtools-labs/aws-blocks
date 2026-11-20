@@ -36,12 +36,12 @@ cd typescript-demo
 npm run spec
 ```
 
-This produces `typescript-demo/aws-blocks/blocks.spec.json`.
+This produces `typescript-demo/cdk-blocks/blocks.spec.json`.
 
 ## 3. Copy the Spec to the Swift Demo
 
 ```bash
-cp typescript-demo/aws-blocks/blocks.spec.json swift-demo/blocks.spec.json
+cp typescript-demo/cdk-blocks/blocks.spec.json swift-demo/blocks.spec.json
 ```
 
 ## 4. Generate Swift Code
@@ -51,7 +51,7 @@ cp typescript-demo/aws-blocks/blocks.spec.json swift-demo/blocks.spec.json
 From `native/swift/`:
 
 ```bash
-swift run swift-code-generator Demo/typescript-demo/aws-blocks/blocks.spec.json Demo/swift-demo/Generated
+swift run swift-code-generator Demo/typescript-demo/cdk-blocks/blocks.spec.json Demo/swift-demo/Generated
 ```
 
 ### Option B: Command Plugin (Xcode)
@@ -107,7 +107,7 @@ swift test
 ```
 Demo/
 ├── typescript-demo/          # Backend (Node.js + Blocks)
-│   ├── aws-blocks/
+│   ├── cdk-blocks/
 │   │   ├── index.ts          # API definitions (Building Blocks)
 │   │   └── blocks.spec.json  # Generated OpenRPC spec
 │   ├── src/

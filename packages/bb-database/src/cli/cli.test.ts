@@ -120,7 +120,7 @@ describe('bb-database command line', () => {
 
 describe('bb-database command line, for a block that provisions its cluster', () => {
 	const INDEX_MOCK = fileURLToPath(new URL('../index.mock.js', import.meta.url));
-	const dir = join(cwd, 'aws-blocks', 'migrations', 'main');
+	const dir = join(cwd, 'cdk-blocks', 'migrations', 'main');
 
 	before(() => {
 		mkdirSync(dir, { recursive: true });
@@ -130,7 +130,7 @@ describe('bb-database command line, for a block that provisions its cluster', ()
 		);
 	});
 
-	test('types --block writes the Tables interface from the files and leaves .bb-data alone', async () => {
+	test('types --block writes the Tables interface from the files and leaves .cdk-blocks/local/data alone', async () => {
 		const result = await run(['types', '--block', 'main', '--out', 'gen/main.types.ts', '--output', 'json']);
 		assert.strictEqual(result.code, 0, result.stdout + result.stderr);
 		assert.deepStrictEqual(JSON.parse(result.stdout), { ok: true, out: 'gen/main.types.ts', tables: ['notes'] });
@@ -140,7 +140,7 @@ describe('bb-database command line, for a block that provisions its cluster', ()
 			written,
 			/notes: \{\n\t\tid: Generated<string>;\n\t\tbody: string;\n\t\tpinned: boolean \| null;\n\t\};/,
 		);
-		assert.ok(!existsSync(join(cwd, '.bb-data', 'types-main')), 'no local database is made in the project');
+		assert.ok(!existsSync(join(cwd, '.cdk-blocks/local/data', 'types-main')), 'no local database is made in the project');
 	});
 
 	test('under a wrapper, the paths of the options are resolved from the directory the user is in', async () => {
@@ -150,7 +150,7 @@ describe('bb-database command line, for a block that provisions its cluster', ()
 		const result = await run(
 			[
 				'types',
-				'../aws-blocks/migrations/main',
+				'../cdk-blocks/migrations/main',
 				'--block',
 				'main',
 				'--out',
@@ -172,7 +172,7 @@ describe('bb-database command line, for a block that provisions its cluster', ()
 	});
 
 	test('a file the cluster type cannot run names the option for the other type', async () => {
-		const aurora = join(cwd, 'aws-blocks', 'migrations', 'tasks');
+		const aurora = join(cwd, 'cdk-blocks', 'migrations', 'tasks');
 		mkdirSync(aurora, { recursive: true });
 		writeFileSync(
 			join(aurora, '001_tasks.sql'),
@@ -209,7 +209,7 @@ describe('bb-database command line, for a block that provisions its cluster', ()
 		// The block, as `npm run dev` runs it: its first statement applies the file.
 		const script =
 			`const { Database, sql } = await import(${JSON.stringify(INDEX_MOCK)});` +
-			`const { Scope } = await import(${JSON.stringify(import.meta.resolve('@aws-blocks/core'))});` +
+			`const { Scope } = await import(${JSON.stringify(import.meta.resolve('@aws-cdk-blocks/core'))});` +
 			"await new Database(new Scope('app'), 'main').query(sql`SELECT 1`);";
 		await new Promise<void>((resolve, reject) =>
 			execFile(process.execPath, ['--input-type=module', '-e', script], { cwd }, (error, _out, stderr) =>
@@ -217,7 +217,7 @@ describe('bb-database command line, for a block that provisions its cluster', ()
 			),
 		);
 		writeFileSync(join(dir, '002_pinned_default.sql'), 'ALTER TABLE notes ALTER COLUMN pinned SET DEFAULT false;');
-		const live = join(cwd, '.bb-data', 'app-main', 'pglite');
+		const live = join(cwd, '.cdk-blocks/local/data', 'app-main', 'pglite');
 		const before = statSync(join(live, 'global', 'pg_control')).mtimeMs;
 		const result = await run(['status', '--block', 'main', '--output', 'json']);
 		assert.strictEqual(result.code, 0, result.stdout + result.stderr);

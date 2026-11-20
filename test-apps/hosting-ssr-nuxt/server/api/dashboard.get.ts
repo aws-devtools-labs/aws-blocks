@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { api } from 'hosting-ssr-nuxt-aws-blocks';
-import { withAuth } from '@aws-blocks/blocks/server';
+import { withAuth } from 'aws-cdk-blocks/server';
 
 export default defineEventHandler(async () => {
   try {

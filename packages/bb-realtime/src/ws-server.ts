@@ -16,7 +16,7 @@ import { setBroadcastBus, getRevokedAt, LOCAL_TOKEN_SECRET } from './local-dev.j
 import { isClientChannelPath, validateChannelToken } from './utils.js';
 import { checkSubscriptionAuth, subscriptionEndedMessage } from './subscription-auth.js';
 import type { SubscriptionAuth } from './subscription-auth.js';
-import { isLoopbackHost, isWildcardHost, isIpLiteral } from '@aws-blocks/core/bb-utils';
+import { isLoopbackHost, isWildcardHost, isIpLiteral } from '@aws-cdk-blocks/core/bb-utils';
 
 export const localRealtimeBus = new EventEmitter();
 localRealtimeBus.setMaxListeners(1000);
@@ -83,7 +83,7 @@ function connectionPrincipal(url: string | undefined): { principal: string | und
  *   Origin and Host); to use a name, set `BLOCKS_DEV_HOST` to it.
  *
  * Loopback/wildcard/IP classification is shared with the dev server's bind
- * decision (`@aws-blocks/core/bb-utils`), so the two can't drift apart.
+ * decision (`@aws-cdk-blocks/core/bb-utils`), so the two can't drift apart.
  */
 export function isAllowedUpgradeOrigin(
 	origin: string | undefined,

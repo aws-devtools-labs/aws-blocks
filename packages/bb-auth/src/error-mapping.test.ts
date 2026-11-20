@@ -8,8 +8,8 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import { AuthErrors } from '@aws-blocks/auth-common';
-import { ApiError } from '@aws-blocks/core';
+import { AuthErrors } from '@aws-cdk-blocks/auth-common';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { WRONG_CODE_MESSAGE } from './enumeration.js';
 import {
 	ACCESS_DENIED_MESSAGE,

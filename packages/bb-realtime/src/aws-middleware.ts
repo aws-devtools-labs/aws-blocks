@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * @aws-blocks/bb-realtime/aws-middleware
+ * @aws-cdk-blocks/bb-realtime/aws-middleware
  *
  * Self-registering client middleware for AWS (production).
  * Hydrates { __blocks: 'realtime/channel' } descriptors into live channel
@@ -13,8 +13,8 @@
  * keep-alive pings to prevent the 10-minute idle timeout.
  */
 
-import { registerMiddleware } from '@aws-blocks/core/client';
-import { blocksError, brandBlocksError } from '@aws-blocks/core';
+import { registerMiddleware } from '@aws-cdk-blocks/core/client';
+import { blocksError, brandBlocksError } from '@aws-cdk-blocks/core';
 import type { RealtimeChannelDescriptor, RealtimeSubscription, SubscribeOptions, DisconnectReason } from './types.js';
 import { poolKey, principalOfToken } from './pool-key.js';
 

@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `npx @aws-blocks/bb-auth users …` — the supported way to make the first admin.
+ * `npx @aws-cdk-blocks/bb-auth users …` — the supported way to make the first admin.
  *
  * The local path runs against a real local pool (`Auth` from the mock entry,
- * persisted to `.bb-data/`), and a second `Auth` instance with the same id —
+ * persisted to `.cdk-blocks/local/data/`), and a second `Auth` instance with the same id —
  * what a restarted dev server constructs — checks that `requireRole` sees the
  * change. The deployed path runs SDK clients whose `send` is replaced, so the
  * exact CloudFormation and Cognito calls are pinned without AWS.
@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, test } from 'node:test';
 import { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import { CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
 import { STSClient } from '@aws-sdk/client-sts';
-import { ApiError } from '@aws-blocks/core';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { AuthErrors } from './errors.js';
 import { Auth } from './index.mock.js';
 import { Browser } from './test-helpers.js';
@@ -27,8 +27,8 @@ import type { DeployedClients } from './users-cli/deployed.js';
 import { parseUsersArgs, runUsersCli, type UsersCliDeps } from './users-cli/cli.js';
 import { PACKAGE_DIR } from './test-support/typecheck.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
 
@@ -91,7 +91,7 @@ describe('users CLI: local pool', () => {
 	test('add-to-group by verified email makes the first admin; remove-from-group undoes it', async () => {
 		const auth = makeAuth();
 		await register(auth, 'owner', 'you@example.com');
-		const before = JSON.parse(readFileSync(join('.bb-data', auth.fullId, 'state.json'), 'utf8'));
+		const before = JSON.parse(readFileSync(join('.cdk-blocks/local/data', auth.fullId, 'state.json'), 'utf8'));
 		assert.strictEqual(await isAdmin('owner'), false);
 
 		const added = await cli(['add-to-group', 'you@example.com', 'admin']);
@@ -101,7 +101,7 @@ describe('users CLI: local pool', () => {
 		assert.strictEqual(await isAdmin('owner'), true);
 
 		// Every other key of the file is kept: users, codes, the session secret.
-		const after = JSON.parse(readFileSync(join('.bb-data', auth.fullId, 'state.json'), 'utf8'));
+		const after = JSON.parse(readFileSync(join('.cdk-blocks/local/data', auth.fullId, 'state.json'), 'utf8'));
 		assert.strictEqual(after.sessionSecret, before.sessionSecret);
 		assert.deepStrictEqual(after.users, before.users);
 
@@ -119,7 +119,7 @@ describe('users CLI: local pool', () => {
 	test('refuses a group the block does not declare, and changes nothing', async () => {
 		const auth = makeAuth();
 		await register(auth, 'owner', 'you@example.com');
-		const file = join('.bb-data', auth.fullId, 'state.json');
+		const file = join('.cdk-blocks/local/data', auth.fullId, 'state.json');
 		const before = readFileSync(file, 'utf8');
 		const r = await cli(['add-to-group', 'owner', 'admins']);
 		assert.strictEqual(r.code, 1);
@@ -203,7 +203,7 @@ describe('users CLI: local pool', () => {
 		});
 		await pool.admin.createUser('owner', { attributes: { email: 'boss@example.org', email_verified: 'true' } });
 		await pool.signUp('boss@example.org', PASSWORD, { attributes: { email: 'eve@example.com' } });
-		const file = join('.bb-data', pool.fullId, 'state.json');
+		const file = join('.cdk-blocks/local/data', pool.fullId, 'state.json');
 		const admins = () => JSON.parse(readFileSync(file, 'utf8')).groups.admin;
 
 		const r = await cli(['add-to-group', 'boss@example.org', 'admin']);
@@ -243,7 +243,7 @@ describe('users CLI: local pool', () => {
 		]) {
 			const r = await cli(argv);
 			assert.strictEqual(r.code, 2, `${argv.join(' ')}: ${r.err}`);
-			assert.match(r.err, /Usage: npx @aws-blocks\/bb-auth users/);
+			assert.match(r.err, /Usage: npx @aws-cdk-blocks\/bb-auth users/);
 		}
 		assert.strictEqual((await cli(['--help'])).code, 0);
 	});
@@ -374,8 +374,8 @@ describe('users CLI: deployed pool', () => {
 	let project: string;
 	beforeEach(() => {
 		project = mkdtempSync(join(tmpdir(), 'bb-auth-users-deployed-'));
-		mkdirSync(join(project, '.blocks'));
-		writeFileSync(join(project, '.blocks', 'config.json'), JSON.stringify({ stackId: 'my-app' }));
+		mkdirSync(join(project, '.cdk-blocks'));
+		writeFileSync(join(project, '.cdk-blocks', 'config.json'), JSON.stringify({ stackId: 'my-app' }));
 	});
 	afterEach(() => rmSync(project, { recursive: true, force: true }));
 
@@ -634,20 +634,20 @@ describe('users CLI: the bb-auth bin', () => {
 		const bin = join(PACKAGE_DIR, 'dist', 'bin.js');
 		const users = spawnSync(process.execPath, [bin, 'users', '--help'], { encoding: 'utf8' });
 		assert.strictEqual(users.status, 0, users.stderr);
-		assert.match(users.stdout, /Usage: npx @aws-blocks\/bb-auth users <command>/);
+		assert.match(users.stdout, /Usage: npx @aws-cdk-blocks\/bb-auth users <command>/);
 		const migrate = spawnSync(process.execPath, [bin, 'migrate', '--help'], { encoding: 'utf8' });
 		assert.strictEqual(migrate.status, 0, migrate.stderr);
-		assert.match(migrate.stdout, /Usage: npx @aws-blocks\/bb-auth migrate/);
+		assert.match(migrate.stdout, /Usage: npx @aws-cdk-blocks\/bb-auth migrate/);
 		const unknown = spawnSync(process.execPath, [bin, 'promote'], { encoding: 'utf8' });
 		assert.strictEqual(unknown.status, 2);
 	});
 });
 
 describe('users CLI: documented commands', () => {
-	test('every `npx @aws-blocks/bb-auth users …` line in the README and the usage text parses', async () => {
+	test('every `npx @aws-cdk-blocks/bb-auth users …` line in the README and the usage text parses', async () => {
 		const { USERS_USAGE } = await import('./users-cli/cli.js');
 		const readme = readFileSync(join(PACKAGE_DIR, 'README.md'), 'utf8');
-		const lines = [...`${readme}\n${USERS_USAGE}`.matchAll(/npx @aws-blocks\/bb-auth users ([^`\n]*)/g)].map((m) =>
+		const lines = [...`${readme}\n${USERS_USAGE}`.matchAll(/npx @aws-cdk-blocks\/bb-auth users ([^`\n]*)/g)].map((m) =>
 			m[1].trim(),
 		);
 		assert.ok(lines.length >= 4, `found ${lines.length}`);

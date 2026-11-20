@@ -1,5 +1,5 @@
 import { AuthBasic, AuthBasicErrors } from '@aws-blocks/bb-auth-basic';
-import { Scope } from '@aws-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 
 const scope = new Scope('basic');
 export const auth = new AuthBasic(scope, 'auth', {});

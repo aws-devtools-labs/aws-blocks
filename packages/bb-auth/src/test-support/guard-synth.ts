@@ -34,7 +34,7 @@ export interface GuardSynthResult {
 export interface GuardSynthOptions {
 	/** An expression or statements run with `stack`, `Auth` and `cdk` in scope (the block id `auth`). */
 	build: string;
-	/** The app directory: the stack's `backendHandlerPath` is `<appDir>/aws-blocks/index.handler.ts`. Omit for no path. */
+	/** The app directory: the stack's `backendHandlerPath` is `<appDir>/cdk-blocks/index.handler.ts`. Omit for no path. */
 	appDir?: string;
 	/** Extra environment for the child (e.g. `BLOCKS_AUTH_REBASELINE`). */
 	env?: Record<string, string>;
@@ -50,23 +50,23 @@ export function freshAppDir(): string {
 	return mkdtempSync(join(tmpdir(), 'bb-auth-guard-'));
 }
 
-/** `<appDir>/aws-blocks/baselines/TestStack/TestStack-auth.auth-pool.json` — the default block's baseline. */
+/** `<appDir>/cdk-blocks/baselines/TestStack/TestStack-auth.auth-pool.json` — the default block's baseline. */
 export function defaultBaselineFile(appDir: string, fullId = 'TestStack-auth'): string {
-	return join(appDir, 'aws-blocks', 'baselines', 'TestStack', `${fullId}.auth-pool.json`);
+	return join(appDir, 'cdk-blocks', 'baselines', 'TestStack', `${fullId}.auth-pool.json`);
 }
 
 export function synthGuarded(options: GuardSynthOptions): GuardSynthResult {
 	const probe = join(DIST_DIR, `.guard-synth-probe.${process.pid}.${counter++}.mjs`);
-	const handlerPath = options.appDir ? join(options.appDir, 'aws-blocks', 'index.handler.ts') : '';
+	const handlerPath = options.appDir ? join(options.appDir, 'cdk-blocks', 'index.handler.ts') : '';
 	writeFileSync(
 		probe,
 		`
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
-import { DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import { Auth } from '@aws-blocks/bb-auth';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { DEFAULT_NODE_RUNTIME } from '@aws-cdk-blocks/core/cdk';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
 
 const app = new cdk.App({ context: { 'aws:cdk:enable-path-metadata': true } });
 const stack = new cdk.Stack(app, 'TestStack');
@@ -83,7 +83,7 @@ const handler = new lambda.Function(stack, 'Handler', {
 stack.executionRole = executionRole;
 // A stand-in default compute exposing \`apiUrl\` (adds no resources): hosted-UI
 // federation registers its callback URLs on it.
-stack._defaultCompute = { apiUrl: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api', fn: handler };
+stack._defaultCompute = { apiUrl: 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api', fn: handler };
 ${handlerPath ? `stack.backendHandlerPath = ${JSON.stringify(handlerPath)};` : ''}
 globalThis.CURRENT_BLOCKS_STACK = stack;
 {

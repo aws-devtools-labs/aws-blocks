@@ -7,9 +7,9 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
-import { ApiError, isBlocksError } from '@aws-blocks/core';
-import { type ClusterKind, DatabaseErrors } from '@aws-blocks/bb-database';
-import type { api as apiType } from 'aws-blocks';
+import { ApiError, isBlocksError } from '@aws-cdk-blocks/core';
+import { type ClusterKind, DatabaseErrors } from '@aws-cdk-blocks/bb-database';
+import type { api as apiType } from 'cdk-blocks';
 
 // Compile-time assertions. `Equal` is the standard invariant type-equality check;
 // `Expect` only accepts `true`, so an inexact type makes the harness `tsc --noEmit`
@@ -41,7 +41,7 @@ type _DbxKyselyRow = Expect<Equal<DbxKyselyRow, { id: string; name: string; valu
 
 /** Run the installed database task from the app directory and parse its structured result. */
 function cdkBlocksDb(...args: string[]): unknown {
-  const stdout = execFileSync(process.execPath, ['--input-type=module', '-e', "import '@aws-blocks/blocks/run'", '--', 'db', ...args, '--', '--output', 'json'], {
+  const stdout = execFileSync(process.execPath, ['--input-type=module', '-e', "import 'aws-cdk-blocks/run'", '--', 'db', ...args, '--', '--output', 'json'], {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });
@@ -60,8 +60,8 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
           cdkBlocksDb('types', '--block', block, ...options, '--out', out);
           assert.strictEqual(
             readFileSync(out, 'utf-8'),
-            readFileSync(join('aws-blocks', `${block}.types.ts`), 'utf-8'),
-            `aws-blocks/${block}.types.ts is stale: run npm run db -- types --block ${block} ${options.join(' ')}`,
+            readFileSync(join('cdk-blocks', `${block}.types.ts`), 'utf-8'),
+            `cdk-blocks/${block}.types.ts is stale: run npm run db -- types --block ${block} ${options.join(' ')}`,
           );
         }
       } finally {

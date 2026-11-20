@@ -1,3 +1,3 @@
 {
-  "app": "npx tsx -C cdk aws-blocks/pipeline.cdk.ts"
+  "app": "npx tsx -C cdk cdk-blocks/pipeline.cdk.ts"
 }

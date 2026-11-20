@@ -14,7 +14,7 @@ import kotlinx.datetime.Clock
 
 private val blocksUrl: String =
     getEnv("BLOCKS_URL")?.takeIf { it.isNotBlank() }
-        ?: "http://localhost:3001/aws-blocks/api"
+        ?: "http://localhost:3001/cdk-blocks/api"
 
 /**
  * One instance for the whole suite, so every RPC call runs on a single HTTP client rather than one
@@ -57,7 +57,7 @@ const val E2E_PASSWORD = "Passw0rd!"
 
 /**
  * The pre-provisioned, confirmed user a deployed backend signs in instead of signing up
- * (seeded by `test-apps/native-bindings/aws-blocks/scripts/seed-cognito-user.ts`).
+ * (seeded by `test-apps/native-bindings/cdk-blocks/scripts/seed-cognito-user.ts`).
  * Defaults match that script; override with `COGNITO_TEST_USERNAME` / `COGNITO_TEST_PASSWORD`.
  */
 fun returningUser(): Pair<String, String> =

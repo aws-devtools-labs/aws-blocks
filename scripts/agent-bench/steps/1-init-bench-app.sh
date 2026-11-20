@@ -43,7 +43,7 @@ echo $! > /tmp/registry.pid
 trap 'kill "$(cat /tmp/registry.pid)" 2>/dev/null || true' EXIT
 registry_up=0
 for i in $(seq 1 30); do
-  if curl -sf http://localhost:4873/registry/@aws-blocks/blocks > /dev/null; then
+  if curl -sf http://localhost:4873/registry/aws-cdk-blocks > /dev/null; then
     registry_up=1
     break
   fi
@@ -57,10 +57,13 @@ fi
 mkdir -p bench-workdir
 cd bench-workdir
 cat > .npmrc <<EOF
-@aws-blocks:registry=http://localhost:4873/registry/
+registry=http://localhost:4873/registry/
 EOF
+# The default registry, not a `@aws-cdk-blocks:registry=` line: npm resolves a registry per scope,
+# so a scope line cannot route the unscoped `aws-cdk-blocks` umbrella. The local registry forwards
+# third-party packages upstream and never forwards our own.
 # create-blocks-app runs `npm install` inside bench-app/, which has its own package.json, so npm
-# never reads this project .npmrc and would pull @aws-blocks/* from public npm. Point npm's USER
+# never reads this project .npmrc and would pull @aws-cdk-blocks/* from public npm. Point npm's USER
 # config at it instead (as scripts/ci/templates-e2e.mjs does) so the scaffold's install resolves
 # the packed packages; bench-app's package-lock.json then pins the localhost tarballs.
 export NPM_CONFIG_USERCONFIG="$(pwd)/.npmrc"
@@ -73,15 +76,15 @@ EOF
 
 # Seed a CANARY telemetry installation-id BEFORE the first Blocks CLI runs so
 # the Blocks Telemetry service can recognize and EXCLUDE this bench's traffic
-# from real usage metrics. Both create-blocks-app and @aws-blocks/core read
-# ~/.blocks/telemetry/installation-id and reuse it when present, so seeding it
+# from real usage metrics. Both create-blocks-app and @aws-cdk-blocks/core read
+# ~/.cdk-blocks/telemetry/installation-id and reuse it when present, so seeding it
 # once here tags every event from the scaffold, build, and runtime as a canary.
 # The canary id is sourced ONLY from $BLOCKS_TELEMETRY_CANARY_ID (kept out of the
 # repo); if it's unset we skip seeding and warn rather than tagging with a
 # hardcoded literal — bench traffic then simply isn't flagged as a canary.
 if [ -n "${BLOCKS_TELEMETRY_CANARY_ID:-}" ]; then
-  mkdir -p "$HOME/.blocks/telemetry"
-  echo "$BLOCKS_TELEMETRY_CANARY_ID" > "$HOME/.blocks/telemetry/installation-id"
+  mkdir -p "$HOME/.cdk-blocks/telemetry"
+  echo "$BLOCKS_TELEMETRY_CANARY_ID" > "$HOME/.cdk-blocks/telemetry/installation-id"
 else
   echo "::warning::BLOCKS_TELEMETRY_CANARY_ID unset; bench traffic not tagged as canary"
 fi
@@ -89,9 +92,9 @@ fi
 # Install create-blocks-app from the local registry, then invoke its bin
 # via node directly (npx --yes would fetch the bootstrap package from the
 # public registry; .bin linking is unreliable across npm versions).
-npm install @aws-blocks/create-blocks-app@latest
-CREATE_JS="$(pwd)/node_modules/@aws-blocks/create-blocks-app/dist/index.js"
-[ -f "$CREATE_JS" ] || { echo "create-blocks-app bin not found at $CREATE_JS"; ls node_modules/@aws-blocks/ 2>&1; exit 1; }
+npm install @aws-cdk-blocks/create-blocks-app@latest
+CREATE_JS="$(pwd)/node_modules/@aws-cdk-blocks/create-blocks-app/dist/index.js"
+[ -f "$CREATE_JS" ] || { echo "create-blocks-app bin not found at $CREATE_JS"; ls node_modules/@aws-cdk-blocks/ 2>&1; exit 1; }
 
 if [ "$TEMPLATE" = "default" ]; then
   node "$CREATE_JS" bench-app

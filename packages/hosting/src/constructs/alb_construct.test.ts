@@ -138,15 +138,15 @@ describe('AlbConstruct — BYO VPC vs default', () => {
 });
 
 describe('AlbConstruct — same-origin backend routing (plan.backend)', () => {
-  it('forwards /aws-blocks/* (RPC + sign-in) to one ingress via a forwarder Lambda (single-compute)', () => {
+  it('forwards /cdk-blocks/* (RPC + sign-in) to one ingress via a forwarder Lambda (single-compute)', () => {
     const plan: HostingPlan = {
       ...staticPlan,
       backend: {
-        origins: [{ namespace: '*', ingress: { kind: 'url', url: 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api' } }],
+        origins: [{ namespace: '*', ingress: { kind: 'url', url: 'https://abc.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api' } }],
       },
     };
     const t = synth(plan);
-    // 1 redirect + 1 API rule (/aws-blocks/*, which covers /aws-blocks/auth/*) = 2 rules.
+    // 1 redirect + 1 API rule (/cdk-blocks/*, which covers /cdk-blocks/auth/*) = 2 rules.
     t.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 2);
     // The forwarder target group runs in multi-value mode: the forwarder reads
     // `multiValueHeaders` (cookies) and relays every Set-Cookie.
@@ -164,14 +164,19 @@ describe('AlbConstruct — same-origin backend routing (plan.backend)', () => {
       ...staticPlan,
       backend: {
         origins: [
-          { namespace: 'notes', ingress: { kind: 'url', url: 'https://notes.example.com/aws-blocks/api' } },
-          { namespace: 'users', ingress: { kind: 'url', url: 'https://users.example.com/aws-blocks/api' } },
+          { namespace: 'notes', ingress: { kind: 'url', url: 'https://notes.example.com/cdk-blocks/api' } },
+          { namespace: 'users', ingress: { kind: 'url', url: 'https://users.example.com/cdk-blocks/api' } },
         ],
       },
     };
     const t = synth(plan);
     // 1 redirect + 2 namespace API rules = 3 rules.
     t.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 3);
+    const paths = rulePaths(t).flatMap((r) => r.paths);
+    for (const ns of ['notes', 'users']) {
+      assert.ok(paths.includes(`/cdk-blocks/api/${ns}/*`), ns);
+      assert.ok(paths.includes(`/aws-blocks/api/${ns}/*`), `legacy ${ns}`);
+    }
   });
 });
 
@@ -268,10 +273,10 @@ describe('AlbConstruct — listener rules are packed and bounded', () => {
 
   it('a locked router: every rule carries the origin-verify header, with four paths beside it', () => {
     const redirects = [{ source: '/old', destination: '/new', statusCode: 301 as const }];
-    const apiPaths = ['/aws-blocks/*', '/a/*', '/b/*', '/c/*', '/d/*', '/e/*'];
+    const apiPaths = ['/cdk-blocks/*', '/a/*', '/b/*', '/c/*', '/d/*', '/e/*'];
     const plan: HostingPlan = {
       ...serverPlan([{ pattern: '/assets/*', kind: 'static' }], redirects),
-      backend: { origins: [{ namespace: '*', ingress: { kind: 'url', url: 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api' } }] },
+      backend: { origins: [{ namespace: '*', ingress: { kind: 'url', url: 'https://abc.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api' } }] },
     };
     const { t } = synthWithServer(plan, { restrictToCloudFront: true, apiPaths });
     const rules = rulePaths(t);
@@ -281,7 +286,7 @@ describe('AlbConstruct — listener rules are packed and bounded', () => {
     }
     // API: 6 paths, 4 per rule → 2 rules; the redirect; the static route; the catch-all.
     assert.deepEqual(rules.map((r) => r.paths), [
-      ['/aws-blocks/*', '/a/*', '/b/*', '/c/*'],
+      ['/cdk-blocks/*', '/a/*', '/b/*', '/c/*'],
       ['/d/*', '/e/*'],
       ['/old'],
       ['/assets/*'],
@@ -292,11 +297,11 @@ describe('AlbConstruct — listener rules are packed and bounded', () => {
   it("never routes the backend's catch-all raw route ('/*') to the API, and warns (as the API Gateway door does)", () => {
     const plan: HostingPlan = {
       ...serverPlan([{ pattern: '/assets/*', kind: 'static' }]),
-      backend: { origins: [{ namespace: '*', ingress: { kind: 'url', url: 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api' } }] },
+      backend: { origins: [{ namespace: '*', ingress: { kind: 'url', url: 'https://abc.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api' } }] },
     };
-    const { t, stack } = synthWithServer(plan, { apiPaths: ['/aws-blocks/*', '/*', '/hooks/*'] });
+    const { t, stack } = synthWithServer(plan, { apiPaths: ['/cdk-blocks/*', '/*', '/hooks/*'] });
     const rules = rulePaths(t).map((r) => r.paths);
-    assert.deepEqual(rules[0], ['/aws-blocks/*', '/hooks/*'], 'the API rule');
+    assert.deepEqual(rules[0], ['/cdk-blocks/*', '/hooks/*'], 'the API rule');
     assert.ok(!rules.flat().includes('/*'), 'no rule sends every path to the API');
     const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('CatchAllApiPathNotRouted'));
     assert.equal(warnings.length, 1);
@@ -312,9 +317,9 @@ describe('AlbConstruct — listener rules are packed and bounded', () => {
         wild.map((pattern) => ({ pattern, kind: 'static' as const })),
         wild.map((source, i) => ({ source, destination: `/n${i}/*`, statusCode: 301 as const })),
       ),
-      backend: { origins: [{ namespace: '*', ingress: { kind: 'url', url: 'https://abc.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api' } }] },
+      backend: { origins: [{ namespace: '*', ingress: { kind: 'url', url: 'https://abc.execute-api.us-west-2.amazonaws.com/prod/cdk-blocks/api' } }] },
     };
-    const { t } = synthWithServer(plan, { restrictToCloudFront: true, apiPaths: ['/aws-blocks/*', ...wild] });
+    const { t } = synthWithServer(plan, { restrictToCloudFront: true, apiPaths: ['/cdk-blocks/*', ...wild] });
     const rules = rulePaths(t).filter((r) => r.paths.length > 0);
     assert.ok(rules.length > 0);
     for (const rule of rules) {

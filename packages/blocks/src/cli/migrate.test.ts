@@ -42,12 +42,12 @@ const FIXTURES = JSON.parse(
 	readFileSync(fileURLToPath(new URL('../../test-fixtures/migrate-apps.json', import.meta.url)), 'utf-8'),
 ) as Record<string, FixtureApp>;
 
-const task = (command: string): string => `node --input-type=module -e "import '@aws-blocks/blocks/run'" -- ${command}`;
+const task = (command: string): string => `node --input-type=module -e "import 'aws-cdk-blocks/run'" -- ${command}`;
 
 const TEMPLATES_DIR = fileURLToPath(new URL('../../../create-blocks-app/templates/', import.meta.url));
 
 /**
- * Fixtures from before create-blocks-app wrote `.blocks/config.json` (f42c604b,
+ * Fixtures from before create-blocks-app wrote `.cdk-blocks/config.json` (f42c604b,
  * #51); every later app has one with a stackId, which the tests add.
  */
 const SCAFFOLDED_BEFORE_STACK_ID: readonly string[] = ['backend@1aeebe50', 'amplify@0.1.0'];
@@ -73,7 +73,7 @@ function writeApp(name: string, edit?: (app: FixtureApp) => void): string {
 	const app = structuredClone(FIXTURES[name]);
 	assert.ok(app, `fixture ${name} exists`);
 	if (!SCAFFOLDED_BEFORE_STACK_ID.includes(name))
-		app.files['.blocks/config.json'] = `${JSON.stringify({ stackId: 'my-app-a1b2c3' }, null, 2)}\n`;
+		app.files['.cdk-blocks/config.json'] = `${JSON.stringify({ stackId: 'my-app-a1b2c3' }, null, 2)}\n`;
 	edit?.(app);
 	const root = mkdtempSync(join(tmpdir(), 'blocks-migrate-'));
 	writeFileSync(join(root, 'package.json'), `${JSON.stringify(app.packageJson, null, 2)}\n`);
@@ -599,7 +599,6 @@ describe('cdk-blocks migrate', () => {
 			'docs:api': task('docs --api'),
 			'db': task('db'),
 			'whoami': task('whoami'),
-			'telemetry': task('telemetry'),
 			'migrate': task('migrate'),
 			'help': task('--help'),
 			'generate-client': task('generate client'),
@@ -715,7 +714,7 @@ describe('cdk-blocks migrate', () => {
 	});
 
 	it('migrates an app from the first template version and an old nextjs version', async () => {
-		// It predates .blocks/config.json, which cdk-blocks deploy and cdk-blocks destroy need for the
+		// It predates .cdk-blocks/config.json, which cdk-blocks deploy and cdk-blocks destroy need for the
 		// stack name: deploy and destroy stay on their wrappers and are reported; the rest migrates.
 		const backend = writeApp('backend@1aeebe50');
 		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: backend });
@@ -728,8 +727,8 @@ describe('cdk-blocks migrate', () => {
 			'package.json#scripts.destroy',
 		]);
 		for (const { file, reason } of kept) {
-			assert.match(reason, /\.blocks\/config\.json.*"stackId"/, file);
-			assert.match(reason, /but this app has no \.blocks\/config\.json: create \.blocks\/config\.json/, file);
+			assert.match(reason, /\.cdk-blocks\/config\.json.*"stackId"/, file);
+			assert.match(reason, /but this app has no \.cdk-blocks\/config\.json: create \.cdk-blocks\/config\.json/, file);
 			// The stack that cdk-blocks deploy and destroy name must be the one the CDK app defines.
 			assert.match(
 				reason,
@@ -753,9 +752,9 @@ describe('cdk-blocks migrate', () => {
 		assert.deepStrictEqual(scriptsDir(nextjs), []);
 	});
 
-	it('keeps deploy and destroy while .blocks/config.json has no stackId, and finishes once it has', async () => {
+	it('keeps deploy and destroy while .cdk-blocks/config.json has no stackId, and finishes once it has', async () => {
 		const root = writeApp('api-only@0ab6b047', (app) => {
-			app.files['.blocks/config.json'] = '{}\n';
+			app.files['.cdk-blocks/config.json'] = '{}\n';
 		});
 		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 1, run.stderr);
@@ -768,12 +767,12 @@ describe('cdk-blocks migrate', () => {
 		]);
 		assert.match(
 			result.kept.find((k: { file: string }) => k.file === 'package.json#scripts.deploy').reason,
-			/^"node .* -- deploy" needs "stackId" in \.blocks\/config\.json, but \.blocks\/config\.json has no string "stackId": create/,
+			/^"node .* -- deploy" needs "stackId" in \.cdk-blocks\/config\.json, but \.cdk-blocks\/config\.json has no string "stackId": create/,
 		);
 		assert.strictEqual(result.scriptsRewritten.sandbox.to, task('sandbox'), 'the other scripts migrate');
 		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts', 'destroy.ts']);
 
-		writeFileSync(join(root, '.blocks', 'config.json'), '{ "stackId": "my-app-a1b2c3" }\n');
+		writeFileSync(join(root, '.cdk-blocks', 'config.json'), '{ "stackId": "my-app-a1b2c3" }\n');
 		const again = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(again.code, 0, again.stdout);
 		assert.strictEqual(readPkg(root).scripts.deploy, task('deploy'));
@@ -781,11 +780,11 @@ describe('cdk-blocks migrate', () => {
 		assert.deepStrictEqual(scriptsDir(root), []);
 	});
 
-	it('tells a .blocks/config.json that is not valid JSON from a missing one, and keeps deploy and destroy', async () => {
+	it('tells a .cdk-blocks/config.json that is not valid JSON from a missing one, and keeps deploy and destroy', async () => {
 		const root = writeApp('api-only@0ab6b047', (app) => {
-			app.files['.blocks/config.json'] = '{ "stackId": "my-app-a1b2c3", }\n';
+			app.files['.cdk-blocks/config.json'] = '{ "stackId": "my-app-a1b2c3", }\n';
 		});
-		const path = join(root, '.blocks', 'config.json');
+		const path = join(root, '.cdk-blocks', 'config.json');
 		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 1, run.stderr);
 		const kept = keptReasons(run.stdout);
@@ -794,9 +793,9 @@ describe('cdk-blocks migrate', () => {
 			['aws-blocks/scripts/deploy.ts', 'aws-blocks/scripts/destroy.ts', 'package.json#scripts.deploy', 'package.json#scripts.destroy'],
 		);
 		for (const [file, reason] of kept) {
-			assert.match(reason, /, but \.blocks\/config\.json is not valid JSON \(.+\): fix /, file);
+			assert.match(reason, /, but \.cdk-blocks\/config\.json is not valid JSON \(.+\): fix /, file);
 			assert.ok(reason.endsWith(`fix ${path}, then rerun migration`), reason);
-			assert.doesNotMatch(reason, /create \.blocks\/config\.json/, file);
+			assert.doesNotMatch(reason, /create \.cdk-blocks\/config\.json/, file);
 		}
 		assert.strictEqual(readPkg(root).scripts.sandbox, task('sandbox'), 'the other scripts migrate');
 		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts', 'destroy.ts']);
@@ -867,7 +866,6 @@ describe('cdk-blocks migrate', () => {
 			'generate-client',
 			'help',
 			'migrate',
-			'telemetry',
 			'whoami',
 		]);
 		assert.strictEqual(result.devConfig, null);

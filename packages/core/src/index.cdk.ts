@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Declare functions for infra (secret/config). The runtime getters
-// (getSecret/getConfig) are imported from '@aws-blocks/hosting' — core's own
+// (getSecret/getConfig) are imported from '@aws-cdk-blocks/hosting' — core's own
 // getConfig (backend config loader, above) owns that name here.
 export {
 	type ConfigValue,
@@ -16,7 +16,7 @@ export {
 	type SecretValue,
 	secret,
 	type ValueKind,
-} from '@aws-blocks/hosting';
+} from '@aws-cdk-blocks/hosting';
 export { type ApiHandler, ApiNamespace, type ApiNamespaceConstructor, type ApiNamespaceOptions, type AsyncAPI, type BlocksContext } from './api.js';
 export {
 	type ComputeOptions,
@@ -87,7 +87,7 @@ export {
 	getSdkIdentifiers,
 	registerSdkIdentifiers,
 } from './common/sdk-registry.js';
-export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
+export { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX, canonicalBlocksPath } from './constants.js';
 export {
 	type ContainerPollerHandle,
 	type ContainerPollerStarter,

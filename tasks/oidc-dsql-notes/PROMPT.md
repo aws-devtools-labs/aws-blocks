@@ -19,12 +19,12 @@ Replace the scaffold's starter todo demo with your OIDC-gated notes app.
 
 ### The `api` namespace (primary surface)
 
-Expose an **`api` namespace** (the framework's server-side RPC surface — a `POST /aws-blocks/api` JSON-RPC endpoint) whose note methods derive the current user from the **OIDC session** (the sign-in cookie) — never from a client-supplied id — and persist through a **`Database`** table on the block's default Aurora DSQL cluster (create a `.sql` migration under `aws-blocks/migrations/<block id>/`):
+Expose an **`api` namespace** (the framework's server-side RPC surface — a `POST /cdk-blocks/api` JSON-RPC endpoint) whose note methods derive the current user from the **OIDC session** (the sign-in cookie) — never from a client-supplied id — and persist through a **`Database`** table on the block's default Aurora DSQL cluster (create a `.sql` migration under `cdk-blocks/migrations/<block id>/`):
 
 1. **`api.addNote(text)`** — inserts a note for the current user and returns the created row `{ id, text }`. Text is stored **verbatim** via **parameterized** SQL — a note containing a single quote such as `' OR '1'='1` round-trips intact (never breaks or injects into the query) and is never HTML-processed. There is **no deduplication** (adding the same text twice creates two rows). A blank/whitespace-only or non-string `text` is rejected with a JSON-RPC **error** envelope (no row inserted).
 2. **`api.listNotes()`** — returns the current user's notes as `[{ id, text }]` in **oldest-first** creation order, backed by a stored timestamp / sequential id plus an explicit `ORDER BY` (identical on every call, never relying on unspecified row order).
 
-**Auth gating (framework-enforced):** both methods require an authenticated OIDC session. Called with **no session** (a direct `POST /aws-blocks/api` carrying no sign-in cookie), a note method returns a JSON-RPC **error** envelope — never a `result` and never another user's notes.
+**Auth gating (framework-enforced):** both methods require an authenticated OIDC session. Called with **no session** (a direct `POST /cdk-blocks/api` carrying no sign-in cookie), a note method returns a JSON-RPC **error** envelope — never a `result` and never another user's notes.
 
 ### The page (thin client / light smoke)
 

@@ -5,7 +5,7 @@
  * `defaults.permissionsBoundary` coverage for `Auth`, on both stores.
  *
  * Each synth runs in a child process with `--conditions=cdk` (the package's
- * tests run without it, where the bare `@aws-blocks/bb-app-setting` import
+ * tests run without it, where the bare `@aws-cdk-blocks/bb-app-setting` import
  * resolves to the mock and the session secret creates no CDK resources). Under
  * the condition the session secret synthesizes its own roles (`BlocksSecretInitFn`
  * and the `BlocksSecretProvider` framework role), and these tests check them too.
@@ -91,9 +91,9 @@ function synthBounded(build: string): { outdir: string; artifactId: string } {
 		probe,
 		`
 import * as cdk from 'aws-cdk-lib';
-import { BlocksPresets, BlocksStack, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import { ComputeBase } from '@aws-blocks/core/cdk/internal';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { BlocksPresets, BlocksStack, DEFAULT_NODE_RUNTIME } from '@aws-cdk-blocks/core/cdk';
+import { ComputeBase } from '@aws-cdk-blocks/core/cdk/internal';
+import { AppSetting } from '@aws-cdk-blocks/bb-app-setting';
 import { Auth } from './index.cdk.js';
 
 // A minimal default compute (bb-auth doesn't depend on bb-lambda-compute):

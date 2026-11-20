@@ -20,7 +20,7 @@ import 'package:blocks_runtime/blocks_runtime.dart';
 Future<void> main() async {
   // No WidgetsFlutterBinding.ensureInitialized() needed: the secure store
   // creates the binding itself before its first read.
-  final client = BlocksClient(baseUrl: 'https://your-api.example.com/aws-blocks/api');
+  final client = BlocksClient(baseUrl: 'https://your-api.example.com/cdk-blocks/api');
   await client.call('authApi.getAuthState', const []);
 }
 ```
@@ -66,7 +66,16 @@ The secure storage comes from `flutter_secure_storage`, which needs some setup p
   <array/>
   ```
 
-  Without it every read fails with `errSecMissingEntitlement` (-34018), reported as above, and the session is never saved. If the app uses an App Group, list it in the array, or writes appear to succeed but store nothing. The entitlement needs a provisioning profile; an app that can't have one registers its own default with `MacOsOptions(usesDataProtectionKeychain: false)`, as shown above.
+  Without it every read fails with `errSecMissingEntitlement` (-34018), reported as above, and the session is never saved. If the app uses an App Group, list it in the array, or writes appear to succeed but store nothing. The entitlement needs a provisioning profile: choose a development team under Signing & Capabilities in Xcode, or the build fails with `"Runner" has entitlements that require signing with a development certificate`. An app that can't have one leaves the entitlement out and registers its own default with `MacOsOptions(usesDataProtectionKeychain: false)`, as shown above.
+
+  The App Sandbox also blocks network access by default. Add `com.apple.security.network.client` to both files so the app can reach the backend, and `com.apple.security.network.server` to `Release.entitlements` (Flutter's template has it in `DebugProfile.entitlements` only) so a desktop sign-in can receive the browser's redirect on its loopback listener:
+
+  ```xml
+  <key>com.apple.security.network.client</key>
+  <true/>
+  <key>com.apple.security.network.server</key>
+  <true/>
+  ```
 - **Android:** set `android:allowBackup="false"` on the `<application>` element in `AndroidManifest.xml`, or exclude flutter_secure_storage's shared preferences from backup. The session is encrypted with a Keystore key that a backup does not carry, so a restored copy cannot be read and the user signs in again.
 - **Linux:** the app needs the libsecret runtime (`libsecret-1-0` on Debian and Ubuntu, `libsecret` on Fedora and Arch) and a running Secret Service, such as GNOME Keyring. Install the development package (`libsecret-1-dev`) to build. Without them the session is kept in memory and the error is reported.
 - **iOS and Windows:** no setup.
@@ -81,42 +90,37 @@ import 'package:blocks_runtime_flutter/blocks_runtime_flutter.dart';
 
 final tokenStore = FlutterSecureStore();
 final client = BlocksClient(
-  baseUrl: 'https://your-api.example.com/aws-blocks/api',
+  baseUrl: 'https://your-api.example.com/cdk-blocks/api',
   tokenStore: tokenStore,
 );
 ```
 
 ### OIDC sign-in
 
-`FlutterBrowserLauncher` is the `BrowserLauncher` that opens the identity provider's sign-in page and returns the callback URL to `OidcClient.signIn` or `signInDirect`.
+`FlutterBrowserLauncher` is the `BrowserLauncher` that opens the identity provider's sign-in page and returns the callback URL to `OidcClient.signIn` or `signInDirect`. Use it on iOS and Android, with a `relayTo` listed in the block's `redirects.allowedRelayOrigins`. On macOS, Linux and Windows, call `signIn` without a launcher to sign in through a loopback listener instead (see "Using Auth" in the `blocks_runtime` README).
 
 ```dart
 import 'package:blocks_runtime/blocks_runtime.dart';
 import 'package:blocks_runtime_flutter/blocks_runtime_flutter.dart';
 import 'blocks.blocks.dart'; // the generated client
 
-final blocks = Blocks(baseUrl: 'https://your-api.example.com/aws-blocks/api');
-final OidcClient oidc = await blocks.oidcApi.getClient();
-await oidc.signIn(
-  'google',
-  launcher: FlutterBrowserLauncher(),
-  relayTo: 'com.example.app://auth',
-);
-```
-
-`FlutterBrowserLauncher` opens the sign-in page in the system browser. The browser is a separate app, and neither `url_launcher` nor `app_links` reports when the user closes it, so the launcher watches the app's lifecycle: when the app comes back to the foreground and no redirect arrives within `resumeGracePeriod` (2 seconds by default), the sign-in throws `OidcCancelledException`. It throws the same exception once its optional `timeout` passes, or when the `cancel` future passed to `signIn` completes:
-
-```dart
-try {
-  await oidc.signIn(
-    'google',
-    launcher: FlutterBrowserLauncher(timeout: const Duration(minutes: 5)),
-    relayTo: 'com.example.app://auth',
-  );
-} on OidcCancelledException {
-  // The user closed the browser, or the sign-in timed out.
+/// Signs in with Google. Returns false when the user closed the browser.
+Future<bool> signIn(Blocks blocks) async {
+  final oidc = await blocks.oidcApi.getClient();
+  try {
+    await oidc.signIn(
+      OidcApiGetClientProvider.google,
+      launcher: FlutterBrowserLauncher(),
+      relayTo: 'com.example.app://auth',
+    );
+    return true;
+  } on OidcCancelledException {
+    return false;
+  }
 }
 ```
+
+`FlutterBrowserLauncher` opens the sign-in page in the system browser. The browser is a separate app, and neither `url_launcher` nor `app_links` reports when the user closes it, so the launcher watches the app's lifecycle: when the app comes back to the foreground and no redirect arrives within `resumeGracePeriod` (2 seconds by default), the sign-in throws `OidcCancelledException`. It throws the same exception once its optional `timeout` passes (`FlutterBrowserLauncher(timeout: const Duration(minutes: 5))`), or when the `cancel` future passed to `signIn` completes. `OidcCancelledException` comes from `blocks_runtime`, which the generated client does not re-export, hence the first import.
 
 Pass `resumeGracePeriod: null` to turn the lifecycle check off, for example when the user has to switch back to the app during sign-in. It throws a `StateError` when no browser could be opened.
 

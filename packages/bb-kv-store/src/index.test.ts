@@ -4,7 +4,7 @@
 import assert from 'node:assert';
 import { readFileSync, rmSync } from 'node:fs';
 import { beforeEach, describe, test } from 'node:test';
-import { ApiError, isBlocksError, Scope } from '@aws-blocks/core';
+import { ApiError, isBlocksError, Scope } from '@aws-cdk-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { z } from 'zod';
 import { KVStore, KVStoreErrors } from './index.mock.js';
@@ -13,6 +13,7 @@ import { probeKeyType } from './item.js';
 // Clean mock data between tests to avoid cross-contamination
 beforeEach(() => {
 	try {
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
 		rmSync('.bb-data', { recursive: true, force: true });
 	} catch {}
 });
@@ -147,7 +148,8 @@ describe('a store with no options (string key, string value)', () => {
 		await strings.put('a', 'hello', { expiresAt: 1800000000 });
 		const objs = new KVStore<{ name: string }>(scope, 'objs');
 		await objs.put('o', { name: 'A' });
-		const stored = (fullId: string) => JSON.parse(readFileSync(`.bb-data/${fullId}/store.json`, 'utf8')).items;
+		const stored = (fullId: string) =>
+			JSON.parse(readFileSync(`.cdk-blocks/local/data/${fullId}/store.json`, 'utf8')).items;
 		assert.deepStrictEqual(Object.values(stored(strings.fullId)), [
 			{ _bkv_pk: 'a', _bkv_value: 'hello', _bkv_ttl: 1800000000 },
 		]);
@@ -528,7 +530,7 @@ describe('a store with a declared key', () => {
 	test('the stored item is flat: the key fields and the value fields, no _bkv_ attributes', async () => {
 		const store = orders();
 		await store.put({ userId: 'alice', orderId: '001' }, { total: 12 });
-		const stored = JSON.parse(readFileSync(`.bb-data/${store.fullId}/store.json`, 'utf8')).items;
+		const stored = JSON.parse(readFileSync(`.cdk-blocks/local/data/${store.fullId}/store.json`, 'utf8')).items;
 		assert.deepStrictEqual(Object.values(stored), [{ userId: 'alice', orderId: '001', total: 12 }]);
 	});
 
@@ -1085,7 +1087,7 @@ describe('expiry', () => {
 		// An expiry option writes the field.
 		await store.put({ sessionId: 'live' }, { userId: 'a', expiresAt: future }, { expiresAt: future + 10 });
 		assert.strictEqual((await store.get({ sessionId: 'live' }))?.expiresAt, future + 10);
-		const stored = JSON.parse(readFileSync(`.bb-data/${store.fullId}/store.json`, 'utf8')).items;
+		const stored = JSON.parse(readFileSync(`.cdk-blocks/local/data/${store.fullId}/store.json`, 'utf8')).items;
 		assert.ok(
 			Object.values(stored).every((item: any) => !('_bkv_ttl' in item)),
 			'no _bkv_ttl when ttl names a field',

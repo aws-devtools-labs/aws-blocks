@@ -12,7 +12,7 @@ The workspace has already been scaffolded. Begin by reading README.md (and any A
 
 ### The `api` namespace (primary surface)
 
-Expose an **`api` namespace** (a `POST /aws-blocks/api` JSON-RPC endpoint) with these methods:
+Expose an **`api` namespace** (a `POST /cdk-blocks/api` JSON-RPC endpoint) with these methods:
 
 1. **`api.enqueue(text)`** — enqueues a background word-count job for `text` and returns the new job's id as `{ "id": <string> }` (a non-empty job id). It must:
    - do the counting in a **background job** (the AsyncJob block) — **not** inline in the request handler;

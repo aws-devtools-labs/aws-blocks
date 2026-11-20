@@ -25,14 +25,14 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { S3Client } from '@aws-sdk/client-s3';
-import { ApiError, Scope, getSdkIdentifiers, isBlocksError, isWireSafeError } from '@aws-blocks/core';
+import { ApiError, Scope, getSdkIdentifiers, isBlocksError, isWireSafeError } from '@aws-cdk-blocks/core';
 import { deriveBucketName } from './bucket-name.js';
 import { FileBucket as MockFileBucket, FileBucketErrors } from './index.mock.js';
 import { FileBucket as AwsFileBucket } from './index.aws.js';
 import type { FileBucketOptions } from './types.js';
 
-// Every bucket uses a unique fullId, so its `.bb-data/{fullId}/` is already
-// isolated — no `.bb-data` wipe here, which would race the other test files'
+// Every bucket uses a unique fullId, so its `.cdk-blocks/local/data/{fullId}/` is already
+// isolated — no `.cdk-blocks/local/data` wipe here, which would race the other test files'
 // processes when the runner executes files concurrently.
 let n = 0;
 const uniqueId = () => `fb-parity-${Date.now()}-${n++}`;

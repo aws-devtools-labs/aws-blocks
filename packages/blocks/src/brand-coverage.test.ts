@@ -59,7 +59,7 @@ const packagesDir = join(fileURLToPath(import.meta.url), '..', '..', '..', '..',
  * entry is a documented exception, not a place to hide a real miss.
  */
 const FILE_ALLOWLIST: Record<string, string> = {
-	// The `bb-auth` codemod (`npx @aws-blocks/bb-auth migrate`): a CLI that rewrites the
+	// The `bb-auth` codemod (`npx @aws-cdk-blocks/bb-auth migrate`): a CLI that rewrites the
 	// app's source files. Its errors are codemod bugs reported in the terminal, never
 	// thrown from an API method, so they never reach the RPC serializer.
 	'bb-auth/src/migrate/text.ts': 'codemod CLI — OverlappingEditError goes to the terminal, not the RPC wire',

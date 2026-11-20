@@ -5,7 +5,7 @@ import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, relative, resolve } from 'node:path';
-import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
+import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-cdk-blocks/hosting/constructs';
 import {
   appBuildEnv,
   detectFramework,
@@ -15,7 +15,7 @@ import {
   normalizeBasePath,
   withBuildProfile,
   withComputeTarget,
-} from '@aws-blocks/hosting/adapters';
+} from '@aws-cdk-blocks/hosting/adapters';
 import {
   buildFrontDoor,
   cf,
@@ -39,7 +39,7 @@ import {
   type SkewProtectionConfig,
   type WebFunctionConstruct,
   type WebFunctionOptions,
-} from '@aws-blocks/hosting/constructs';
+} from '@aws-cdk-blocks/hosting/constructs';
 import * as cdk from 'aws-cdk-lib';
 import type { AddBehaviorOptions, Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
@@ -51,8 +51,8 @@ import { resolveAppIdentity, tagAppResources } from './cdk/app-identity.js';
 import { isSandboxContext } from './cdk/stack-metadata.js';
 import { coverHosting, snapshotForHosting } from './cdk/blocks-roles.js';
 import { findBackendRoot, getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
-import { BLOCKS_SANDBOX_DIR, BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
-import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX } from './constants.js';
+import { BLOCKS_SANDBOX_SERVED_DIR, BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
+import { BLOCKS_AUTH_PREFIX, BLOCKS_RPC_PREFIX, LEGACY_BLOCKS_NAMESPACE } from './constants.js';
 import {
 	assertMarkersExistAtSynth,
   collectSynthMarkers,
@@ -176,7 +176,7 @@ export interface HostingDomain extends Omit<HostingDomainConfig, 'domainName'> {
  * instance but kept structural so Hosting doesn't depend on the concrete class.
  */
 export interface BlocksStackApi {
-  /** Fully-qualified API Gateway URL of the RPC endpoint (e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/aws-blocks/api`). */
+  /** Fully-qualified API Gateway URL of the RPC endpoint (e.g. `https://{id}.execute-api.{region}.amazonaws.com/{stage}/cdk-blocks/api`). */
   readonly apiUrl: string;
   /**
    * Claim the API front-door role for this `Hosting` distribution, suppressing
@@ -222,10 +222,10 @@ export interface BlocksStackApi {
  * Wraps the L3 {@link HostingConstruct} with Blocks conventions:
  *   • Runs the build command during CDK synth (optional)
  *   • Auto-detects the framework (Next.js / SPA / static)
- *   • Deploys `.cdk-blocks-sandbox/config.json` for client-side config loading
+ *   • Deploys `.blocks-sandbox/config.json` for client-side config loading
  *     (public in every stage, production included: it holds only `apiUrl`,
  *     the build id and `backendConfig`; see "Runtime config" in the
- *     `@aws-blocks/core` README)
+ *     `@aws-cdk-blocks/core` README)
  *   • Injects `BLOCKS_API_URL` + `BLOCKS_CONFIG` env vars into compute functions
  *   • When `api` is provided, adds CloudFront behaviors to proxy API traffic
  *     through the same domain (single-origin architecture)
@@ -290,7 +290,7 @@ export interface HostingProps {
    *
    * When provided, Hosting creates CloudFront behaviors that proxy API
    * requests through the same domain as the frontend — enabling relative
-   * URL access (`/aws-blocks/...`) without CORS.
+   * URL access (`/cdk-blocks/...`) without CORS.
    *
    * Omit when deploying a static-only site with no backend.
    */
@@ -300,7 +300,7 @@ export interface HostingProps {
    * Additional backend configuration to include in config.json.
    * Merged with apiUrl to produce the final config.
    *
-   * ⚠️ WARNING: These values will be publicly accessible at /.cdk-blocks-sandbox/config.json
+   * ⚠️ WARNING: These values will be publicly accessible at /.blocks-sandbox/config.json
    * and in the BLOCKS_CONFIG Lambda environment variable. Do NOT include secrets,
    * API keys, or sensitive configuration here.
    */
@@ -569,20 +569,20 @@ export interface HostingProps {
    * pages (and its API forwarder the headers), except on responses routed
    * straight to the server or image function — synth names those
    * (`DoorRulesNotApplied`). Settings the ALB doesn't implement are a type
-   * error in `features`. The ALB proxies the same-origin API (`/aws-blocks/*`
+   * error in `features`. The ALB proxies the same-origin API (`/cdk-blocks/*`
    * and the backend's raw routes) through a forwarder Lambda, so cookie auth
    * works with no CORS. SSR responses are buffered. Give it a `certificate`
    * and `features.domain` for HTTPS at your domain. Without them it serves
    * plain HTTP, which with an API is sandbox-only: a production deploy fails
    * synth (`PlainHttpFrontDoorError`), and a sandbox deploy (`sandboxMode`
-   * context) warns (`@aws-blocks/hosting:PlainHttpFrontDoor`). Only on a
+   * context) warns (`@aws-cdk-blocks/hosting:PlainHttpFrontDoor`). Only on a
    * trusted network path, `allowPlainHttp: true` opts a production deploy out
-   * (with the `@aws-blocks/hosting:PlainHttpAllowedInProduction` warning, and
+   * (with the `@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction` warning, and
    * `Auth`'s session cookie without `Secure`).
    *
    * Pass `{ kind: 'apiGateway', … }` to serve behind an Amazon API Gateway
    * instead — the serverless, no-VPC, scale-to-zero sibling of the ALB door.
-   * It owns routing and proxies `/aws-blocks/*` and the raw routes same-origin
+   * It owns routing and proxies `/cdk-blocks/*` and the raw routes same-origin
    * natively (no forwarder Lambda). Choose the flavor with `api`: `'http'`
    * (HTTP API v2, default; SSR responses are buffered) or `'rest'` (streamed
    * SSR; requires `domain`, since its own URL carries the `/prod` stage — synth
@@ -607,7 +607,7 @@ export interface HostingProps {
    *
    * Pass `{ kind: 'custom', door }` to bring your own door, written as one
    * function: `defineFrontDoor({ service, build(scope, input) })` from
-   * `@aws-blocks/hosting/constructs`. Hosting calls `build` once at synth with
+   * `@aws-cdk-blocks/hosting/constructs`. Hosting calls `build` once at synth with
    * everything it built (the `DoorInput`), and uses the `url` it returns as the
    * app's address (`HostingUrl`, `BLOCKS_PUBLIC_ORIGIN`, CORS). The door's
    * routing is checked (see `wiringCheck`); the features it applies are not.
@@ -872,8 +872,8 @@ export interface CloudFrontOverRouterFrontDoor {
    * internet-facing ALB it reaches the ALB's public addresses: a production
    * deploy fails synth (`OriginSecretOverPlainHttpError`), and a sandbox
    * deploy (`sandboxMode` context) warns
-   * (`@aws-blocks/hosting:StackedRouterPlainHttp`,
-   * `@aws-blocks/hosting:OriginSecretOverPlainHttp`), unless
+   * (`@aws-cdk-blocks/hosting:StackedRouterPlainHttp`,
+   * `@aws-cdk-blocks/hosting:OriginSecretOverPlainHttp`), unless
    * {@link CloudFrontOverRouterFrontDoor.allowPlainHttp}.
    */
   certificate?: import('aws-cdk-lib/aws-certificatemanager').ICertificate;
@@ -895,8 +895,8 @@ export interface CloudFrontOverRouterFrontDoor {
    * origin, on the AWS network) or a router `certificate` avoids the need.
    *
    * Outside a sandbox, synth warns
-   * (`@aws-blocks/hosting:PlainHttpAllowedInProduction`, acknowledge it with
-   * `Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpAllowedInProduction')`).
+   * (`@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction`, acknowledge it with
+   * `Annotations.of(stack).acknowledgeWarning('@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction')`).
    * A sandbox deploy is unchanged (it always only warns).
    * @default false
    */
@@ -971,7 +971,7 @@ function contentBuildId(manifest: DeployManifest, errorPageFiles: readonly strin
 /**
  * The path whose existence means a reusable build exists, for a destroy's
  * `if-present` reuse. It must be the marker the framework adapter itself checks
- * (see `shouldSkipBuild` in `@aws-blocks/hosting`), or `Hosting` could skip
+ * (see `shouldSkipBuild` in `@aws-cdk-blocks/hosting`), or `Hosting` could skip
  * `buildCommand` while the adapter still runs its full build. The built-in
  * Next.js adapter deploys the OpenNext output, not `.next`; every other
  * framework (and a custom adapter) is keyed on the build output dir.
@@ -1034,7 +1034,7 @@ const runAdapterNamingSkippedBuild = (
  *
  * Supports SPA, static sites, and Next.js SSR out of the box.
  * When the `api` prop is provided, CloudFront behaviors are added to proxy
- * `/aws-blocks/*` (and any registered {@link RawRoute} paths) through the
+ * `/cdk-blocks/*` (and any registered {@link RawRoute} paths) through the
  * same domain — enabling a single-origin architecture with no CORS issues.
  *
  * @example SPA deployment with API
@@ -1216,7 +1216,7 @@ export class Hosting extends Construct {
       console.log(`🏗️  Building frontend (${framework}): ${props.buildCommand}`);
       const apiUrl = props.api?.apiUrl;
       // Remove the synth's `cdk` export condition from NODE_OPTIONS: a build
-      // that inherits it resolves `@aws-blocks/*` to their CDK constructs (and
+      // that inherits it resolves `@aws-cdk-blocks/*` to their CDK constructs (and
       // breaks e.g. Next.js webpack module resolution). The framework adapter's
       // own build of the app gets the same environment (see `appBuildEnv`).
       const buildEnv = appBuildEnv(apiUrl ? { BLOCKS_API_URL: apiUrl } : {});
@@ -1331,11 +1331,11 @@ export class Hosting extends Construct {
 
     // ── 5. Write placeholder config.json into static assets ─────────
     //    A placeholder is needed so the L3 construct sees
-    //    .cdk-blocks-sandbox/ in the static directory during bundling.
+    //    .blocks-sandbox/ in the static directory during bundling.
     //    The real config with resolved CDK tokens is deployed in
     //    step 8 via BucketDeployment + Source.jsonData().
     const staticDir = manifest.staticAssets.directory;
-    const blocksSandboxDir = join(staticDir, BLOCKS_SANDBOX_DIR);
+    const blocksSandboxDir = join(staticDir, BLOCKS_SANDBOX_SERVED_DIR);
     mkdirSync(blocksSandboxDir, { recursive: true });
     writeFileSync(join(blocksSandboxDir, 'config.json'), JSON.stringify({ _placeholder: true }));
 
@@ -1346,17 +1346,17 @@ export class Hosting extends Construct {
     //    as a no-cache path uploads the build-time placeholder with
     //    `no-cache, no-store, must-revalidate` so an edge never caches it
     //    long-term; the real config is deployed in step 8 with `max-age=60`.
-    const configNoCachePath = `${BLOCKS_SANDBOX_DIR}/config.json`;
+    const configNoCachePath = `${BLOCKS_SANDBOX_SERVED_DIR}/config.json`;
     const existingNoCachePaths = manifest.staticAssets.noCachePaths ?? [];
     manifest.staticAssets.noCachePaths = existingNoCachePaths.includes(configNoCachePath)
       ? existingNoCachePaths
       : [...existingNoCachePaths, configNoCachePath];
 
-    // ── 5b. Inject static route for .cdk-blocks-sandbox config ──────────
-    //    Insert a static route for /.cdk-blocks-sandbox/* so CloudFront
+    // ── 5b. Inject static route for .blocks-sandbox config ──────────
+    //    Insert a static route for /.blocks-sandbox/* so CloudFront
     //    serves config.json from S3 instead of routing to compute.
     const blocksConfigRoute: RouteBehavior = {
-      pattern: `/${BLOCKS_SANDBOX_DIR}/*`,
+      pattern: `/${BLOCKS_SANDBOX_SERVED_DIR}/*`,
       target: 'static',
     };
     // Insert before any catch-all route
@@ -1446,7 +1446,7 @@ export class Hosting extends Construct {
         : toL3FrontDoor(nonStacked(props.frontDoor), l3Settings),
       // Every door that proxies the API same-origin (the ALB, API Gateway, the
       // stacked router, a custom door) is handed every path that must reach the
-      // backend: `/aws-blocks/*` (added by the L3) plus this backend's raw routes,
+      // backend: `/cdk-blocks/*` (added by the L3) plus this backend's raw routes,
       // so it can't silently drop one — the same set the CloudFront default turns
       // into behaviors (`addApiBehaviors`). The CloudFront door and `'none'`
       // ignore it.
@@ -1485,12 +1485,12 @@ export class Hosting extends Construct {
       // `addCloudFrontOverAlb` outside a sandbox (the edge refuses to send the
       // origin-verify secret over it), so only a sandbox deploy reaches this warning.
       // With `allowPlainHttp: true` a production deploy reaches it too; the edge
-      // then emits `@aws-blocks/hosting:PlainHttpAllowedInProduction` instead, so
+      // then emits `@aws-cdk-blocks/hosting:PlainHttpAllowedInProduction` instead, so
       // there is one warning to acknowledge.
       const edge = this.addCloudFrontOverAlb(hosting, props);
       if (hosting.frontDoor.originHandle.protocol === 'http' && !cfOverRouter.internal && isSandboxContext(this)) {
         cdk.Annotations.of(this).addWarningV2(
-          '@aws-blocks/hosting:StackedRouterPlainHttp',
+          '@aws-cdk-blocks/hosting:StackedRouterPlainHttp',
           "The stacked door's edge reaches its internet-facing ALB router over plain HTTP: requests (cookies, " +
             'sign-in) cross to the ALB\'s public addresses unencrypted. Give the router a ' +
             '`certificate` and `features.router.domain` for HTTPS :443, or use `internal: true` (a VPC origin, on the ' +
@@ -1503,7 +1503,7 @@ export class Hosting extends Construct {
     }
 
     if (props.api && isCloudFrontDoor && !cfOverRouter) {
-      // CloudFront default door: proxy the same-origin API subtree (`/aws-blocks/*`,
+      // CloudFront default door: proxy the same-origin API subtree (`/cdk-blocks/*`,
       // the auth subtree, RawRoutes) as CloudFront behaviors → the backend API
       // Gateway, and claim the API front-door role for this distribution.
       // Resolve the backend root this distribution fronts, so we only add its own
@@ -1531,7 +1531,7 @@ export class Hosting extends Construct {
     // the proxied API included: with an `httpErrorStatus` namespace, a 403/404
     // from the API would come back as the error page (HTML) instead of its
     // JSON-RPC body. CloudFront can't scope error responses away from
-    // `/aws-blocks/*`, so the combination fails synth.
+    // `/cdk-blocks/*`, so the combination fails synth.
     if (props.api && publicDistribution) {
       assertHttpErrorStatusNotShadowed(publicDistribution, props.api);
     }
@@ -1576,11 +1576,11 @@ export class Hosting extends Construct {
     if (buildId) {
       // The S3-website door serves from its OWN public bucket at ROOT (no
       // `builds/<id>/` prefix, and NOT the private assets bucket). Publish
-      // config.json there, at the root `.cdk-blocks-sandbox/` path the SPA fetches,
+      // config.json there, at the root `.blocks-sandbox/` path the SPA fetches,
       // so the cross-origin client can read its absolute API URL. Every other
       // door serves the private assets bucket under `builds/<id>/`.
       const configBucket = hosting.websiteBucket ?? hosting.bucket;
-      const configKeyPrefix = hosting.websiteBucket ? BLOCKS_SANDBOX_DIR : `builds/${buildId}/${BLOCKS_SANDBOX_DIR}`;
+      const configKeyPrefix = hosting.websiteBucket ? BLOCKS_SANDBOX_SERVED_DIR : `builds/${buildId}/${BLOCKS_SANDBOX_SERVED_DIR}`;
       const configDeployment = new s3deploy.BucketDeployment(this, 'BlocksConfigDeployment', {
         sources: [s3deploy.Source.jsonData('config.json', this.buildConfigJson(props, buildId))],
         destinationBucket: configBucket,
@@ -1595,15 +1595,15 @@ export class Hosting extends Construct {
           ? {
               distribution: publicDistribution,
               // The skew-protection viewer-request CloudFront function rewrites
-              // the URI to `/builds/<buildId>/.cdk-blocks-sandbox/config.json`
+              // the URI to `/builds/<buildId>/.blocks-sandbox/config.json`
               // BEFORE the cache lookup, so the real edge cache key lives under
-              // `/builds/<id>/`. Invalidating only `/.cdk-blocks-sandbox/*` never
+              // `/builds/<id>/`. Invalidating only `/.blocks-sandbox/*` never
               // matches that key and is a no-op for config.json. Invalidate the
               // post-rewrite key too. (The primary guard against staleness is
               // step 5a's no-cache placeholder; this is defense-in-depth so a
               // post-deploy invalidation actually clears any edge entry at its
               // real key.)
-              distributionPaths: [`/builds/${buildId}/${BLOCKS_SANDBOX_DIR}/*`, `/${BLOCKS_SANDBOX_DIR}/*`],
+              distributionPaths: [`/builds/${buildId}/${BLOCKS_SANDBOX_SERVED_DIR}/*`, `/${BLOCKS_SANDBOX_SERVED_DIR}/*`],
             }
           : {}),
         cacheControl: [s3deploy.CacheControl.fromString('public, max-age=60, must-revalidate')],
@@ -1611,9 +1611,9 @@ export class Hosting extends Construct {
 
       // Ensure the config deployment runs AFTER the hosting construct's
       // asset deployments. Those deployments upload the whole static dir —
-      // which includes the *placeholder* `.cdk-blocks-sandbox/config.json`
+      // which includes the *placeholder* `.blocks-sandbox/config.json`
       // (`{_placeholder:true}`) written during synth — to the same
-      // `builds/<id>/.cdk-blocks-sandbox/config.json` key this deployment writes
+      // `builds/<id>/.blocks-sandbox/config.json` key this deployment writes
       // the resolved config to. Without an ordering dependency the
       // placeholder can land last and clobber the real config.
       //
@@ -1669,7 +1669,7 @@ export class Hosting extends Construct {
       // domain — where the session cookie is scoped — instead of the raw
       // execute-api host (which strips the viewer Host header). Kept a literal
       // key (like CORS_HOSTING_ORIGINS below) rather than a shared constant.
-      // Only a door that serves `/aws-blocks/*` to browsers owns it: `'none'` (an
+      // Only a door that serves `/cdk-blocks/*` to browsers owns it: `'none'` (an
       // S3 website) serves none, so it publishes nothing — the managed
       // `cloudfront` distribution's URL, or the request's own host, is the origin.
       if (props.frontDoor !== 'none') {
@@ -1732,7 +1732,7 @@ export class Hosting extends Construct {
 
     // Surface this deploy's build id so a post-deploy liveness poll can confirm
     // the new build is served (matched against the config at
-    // `/.cdk-blocks-sandbox/config.json`). Gated on a build id existing, like the
+    // `/.blocks-sandbox/config.json`). Gated on a build id existing, like the
     // config deployment above.
     if (manifest.buildId) {
       new cdk.CfnOutput(this, 'HostingBuildId', {
@@ -1787,16 +1787,16 @@ export class Hosting extends Construct {
   /**
    * Build the config.json payload from props.
    *
-   * When `api` is provided, the config normally uses a relative `/aws-blocks/api`
+   * When `api` is provided, the config normally uses a relative `/cdk-blocks/api`
    * URL so the frontend fetches through the same front-door origin (no CORS) —
    * every door that proxies the API subtree same-origin (CloudFront, the composed
    * CF → ALB, the ALB and API-Gateway doors) works this way.
    *
    * The S3-website door is the exception: a static website bucket cannot proxy a
-   * POST to the backend (it answers `/aws-blocks/api` with 405). There is no
+   * POST to the backend (it answers `/cdk-blocks/api` with 405). There is no
    * same-origin proxy, so the client must call the backend cross-origin at its
    * ABSOLUTE RPC URL — which is exactly `props.api.apiUrl` (the BlocksStack
-   * already exposes the full `…/aws-blocks/api` endpoint). CORS is already allowed
+   * already exposes the full `…/cdk-blocks/api` endpoint). CORS is already allowed
    * for this origin — the L3 registers the website URL as `CORS_HOSTING_ORIGINS`.
    *
    * `buildId` is stamped under `__blocksBuildId` so a post-deploy liveness poll
@@ -1948,7 +1948,7 @@ export class Hosting extends Construct {
     // Attach the same security-headers / CSP policy the distribution's static,
     // SSR and image behaviors carry. Without it the API and auth responses go
     // to the viewer with no security headers, while the static root has them —
-    // the gap reported for the proxied `/aws-blocks/api` and `/aws-blocks/auth/*`
+    // the gap reported for the proxied `/cdk-blocks/api` and `/cdk-blocks/auth/*`
     // behaviors.
     // The viewer-request function stamps the viewer's host for the handlers behind
     // the gateway (CloudFront forwards the gateway's own `Host`): they take it when
@@ -1963,7 +1963,7 @@ export class Hosting extends Construct {
 
     // On the `cloudfront` tier, a namespace on a container compute skips the
     // gateway: its exact path goes straight to the container's load balancer.
-    // Added before `/aws-blocks/api/*`, which would otherwise match first. Synth
+    // Added before `/cdk-blocks/api/*`, which would otherwise match first. Synth
     // checks the distribution's final behavior count against the door's
     // `quotas.cacheBehaviors` (the construction-time check can't see these).
     addDirectApiBehaviors(distribution, api._apiDirectRoutes ?? [], apiBehaviorOptions, {
@@ -1982,6 +1982,10 @@ export class Hosting extends Construct {
     // via the route loop below) so it's emitted exactly once even with multiple
     // `Auth` instances.
     distribution.addBehavior(`${BLOCKS_AUTH_PREFIX}/*`, apiGatewayOrigin, apiBehaviorOptions);
+
+    // The legacy `/aws-blocks/*` alias of the whole subtree, for clients and
+    // registered callbacks that predate the rename. The gateway serves it too.
+    distribution.addBehavior(`${LEGACY_BLOCKS_NAMESPACE}/*`, apiGatewayOrigin, apiBehaviorOptions);
 
     for (const { path, pattern } of rawRouteBehaviors(ownerRootId)) {
       if (pattern.endsWith('/*')) {
@@ -2015,7 +2019,7 @@ export class Hosting extends Construct {
  *
  * This was a synth warning; it is an error because a warning still deploys a
  * client that receives HTML where it expects a JSON-RPC body, and CloudFront
- * cannot scope error responses away from `/aws-blocks/*`.
+ * cannot scope error responses away from `/cdk-blocks/*`.
  *
  * @throws HostingError('HttpErrorStatusErrorPagesError') naming the namespaces and the mapped codes.
  */
@@ -2041,7 +2045,7 @@ function assertHttpErrorStatusNotShadowed(distribution: Distribution, api: objec
     message:
       `API namespace${exports.length > 1 ? 's' : ''} ${exports.map((e) => `'${e}'`).join(', ')} ` +
       `use${exports.length > 1 ? '' : 's'} \`httpErrorStatus: true\`, but this CloudFront distribution maps HTTP ${list} to an error page, ` +
-      'and CloudFront applies that to the proxied API too (`/aws-blocks/*`): such a response would reach the client as the HTML page ' +
+      'and CloudFront applies that to the proxied API too (`/cdk-blocks/*`): such a response would reach the client as the HTML page ' +
       `instead of its JSON-RPC error, which the typed client cannot read. ${resolution}`,
     resolution,
   });
@@ -2049,7 +2053,7 @@ function assertHttpErrorStatusNotShadowed(distribution: Distribution, api: objec
 
 /**
  * The CloudFront behavior pattern for each RawRoute owned by `ownerRootId` —
- * the paths, beyond the reserved `/aws-blocks/*` subtree, that must reach the
+ * the paths, beyond the reserved `/cdk-blocks/*` subtree, that must reach the
  * backend. De-duplicated, in registration order; a parameterized route
  * (`/hooks/{id}`) becomes its prefix wildcard (`/hooks/*`).
  *
@@ -2304,13 +2308,13 @@ function validateStackedDoor(door: CloudFrontOverRouterFrontDoor): void {
  * assert the build-id stamp — half of the `--wait-live` contract — directly,
  * without reaching into the hashed `BucketDeployment` asset.
  *
- * When `api` is provided, the config uses a relative `/aws-blocks/api` URL so
+ * When `api` is provided, the config uses a relative `/cdk-blocks/api` URL so
  * the frontend fetches through the same CloudFront domain (no CORS). `buildId`
  * is stamped under `__blocksBuildId` so a post-deploy liveness poll can tell
  * this deploy's config from a previously-served one during the CloudFront
  * cutover (see `scripts/wait-live.ts`); the rest of the body is deploy-invariant.
  *
- * Every visitor can read this body at `/.cdk-blocks-sandbox/config.json`, in every
+ * Every visitor can read this body at `/.blocks-sandbox/config.json`, in every
  * stage. Keep it to values the browser receives anyway: never add the account,
  * the stack name, an ARN, or any other deploy-time value the page does not
  * already see in its own requests.

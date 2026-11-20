@@ -3,6 +3,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { BLOCKS_RPC_PREFIX, LEGACY_BLOCKS_RPC_PREFIX } from './rpc-codec.js';
 
 /**
  * Environment detection probes for the doctor report.
@@ -44,7 +45,7 @@ export interface LocalDevServerStatus {
 	portSource: 'server-script' | 'default' | 'indeterminate';
 	/** API namespaces the running server reported, `[]` when unknown. */
 	namespaces: string[];
-	/** `.bb-data` exists — local data has been generated at least once. */
+	/** `.cdk-blocks/local/data` exists — local data has been generated at least once. */
 	bbDataPresent: boolean;
 }
 
@@ -75,7 +76,7 @@ export function resolveLocalPort(projectRoot: string): {
 	source: 'server-script' | 'default' | 'indeterminate';
 } {
 	try {
-		const script = readFileSync(join(projectRoot, 'aws-blocks', 'scripts', 'server.ts'), 'utf-8');
+		const script = readFileSync(join(projectRoot, 'cdk-blocks', 'scripts', 'server.ts'), 'utf-8');
 		const match = PORT_PATTERN.exec(script);
 		if (match) {
 			const port = Number.parseInt(match[1], 10);
@@ -154,7 +155,12 @@ export function stackNameCandidates(projectRoot: string): string[] {
 
 /** Deployed stack id, else the package name. Never throws. */
 function readStackId(projectRoot: string): string | undefined {
+	// The pre-rename file is read before the package name, as core's `getStackId`
+	// does. A scaffolded stackId carries a random suffix, so falling through to the
+	// package name makes the dashboard look up the wrong stack and report a deployed
+	// app as not deployed.
 	return (
+		readJsonString(join(projectRoot, '.cdk-blocks', 'config.json'), 'stackId') ??
 		readJsonString(join(projectRoot, '.blocks', 'config.json'), 'stackId') ??
 		readJsonString(join(projectRoot, 'package.json'), 'name')
 	);
@@ -203,17 +209,21 @@ export async function detectLocalDevServer(
 	const { port, source } = resolveLocalPort(projectRoot);
 	const serverUrl = `http://localhost:${port}`;
 	// Independent of the server: data can be generated and the server stopped.
-	const bbDataPresent = existsSync(join(projectRoot, '.bb-data'));
+	const bbDataPresent = existsSync(join(projectRoot, '.cdk-blocks/local/data'));
 
 	let serverUp = false;
 	let namespaces: string[] = [];
 	try {
-		const response = await fetchImpl(`${serverUrl}/aws-blocks/api`, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: PROBE_RPC_BODY,
-			signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-		});
+		const probe = (prefix: string) =>
+			fetchImpl(`${serverUrl}${prefix}`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: PROBE_RPC_BODY,
+				signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+			});
+		let response = await probe(BLOCKS_RPC_PREFIX);
+		// A dev server older than the `/cdk-blocks/` prefix answers only the legacy path.
+		if (response.status === 404) response = await probe(LEGACY_BLOCKS_RPC_PREFIX);
 		serverUp = response.ok;
 		if (serverUp) namespaces = await mineNamespaces(response);
 	} catch {

@@ -3,10 +3,10 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import * as shared from '@aws-blocks/auth-common/ui';
+import * as shared from '@aws-cdk-blocks/auth-common/ui';
 import * as ui from './ui.js';
 
-describe('@aws-blocks/bb-auth/ui', () => {
+describe('@aws-cdk-blocks/bb-auth/ui', () => {
 	test('re-exports the shared renderer, notifier and store — the same functions, so one store per api', () => {
 		for (const name of [
 			'Authenticator',
@@ -23,7 +23,7 @@ describe('@aws-blocks/bb-auth/ui', () => {
 		}
 	});
 
-	test('re-exports every runtime export of @aws-blocks/auth-common/ui', () => {
+	test('re-exports every runtime export of @aws-cdk-blocks/auth-common/ui', () => {
 		const missing = Object.keys(shared).filter((name) => !(name in ui));
 		assert.deepStrictEqual(missing, []);
 	});

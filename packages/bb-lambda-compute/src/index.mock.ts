@@ -11,7 +11,7 @@
  * CDK-free `Compute` handle.
  */
 
-import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+import { assertNotMockInDeployedEnv } from '@aws-cdk-blocks/core/bb-utils';
 
 // Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
 assertNotMockInDeployedEnv('bb-lambda-compute');

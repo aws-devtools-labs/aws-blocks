@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `bb-auth users …` against the local (mock) pool: `.bb-data/<fullId>/state.json`.
+ * `bb-auth users …` against the local (mock) pool: `.cdk-blocks/local/data/<fullId>/state.json`.
  *
  * The file is edited the way the pool writes it (write-then-rename), keeping
  * every key this CLI does not touch. A running dev server holds the pool in
@@ -21,6 +21,7 @@ import {
 	type LocalPoolDir,
 	type LocalPoolState,
 	listLocalPools,
+	listLocalPoolsAcrossRoots,
 	readJson,
 	selectBlocks,
 } from '../local-pool-files.js';
@@ -34,7 +35,7 @@ import {
 	usernameShadowsContact,
 } from './target.js';
 
-/** Where the dev server records its process (`@aws-blocks/core`'s singleton guard): `.cdk-blocks-sandbox/dev-server.<port>.pid`. */
+/** Where the dev server records its process (`@aws-cdk-blocks/core`'s singleton guard): `.cdk-blocks-sandbox/dev-server.<port>.pid`. */
 const PIDFILE = /^dev-server\.\d+\.pid$/;
 
 /** True when a signal can be delivered to `pid`. `EPERM` (exists, not ours) counts as alive. */
@@ -76,7 +77,7 @@ function str(v: unknown): string | undefined {
 /** The pool behind `--block` (or the only one) under `cwd`. */
 export function selectLocalPool(cwd: string, block: string | undefined): LocalPoolDir {
 	const dataDir = dataDirOf(cwd);
-	const all = listLocalPools(dataDir);
+	const all = listLocalPoolsAcrossRoots(cwd);
 	if (all.length === 0) {
 		throw new UsersCliError(
 			`No local user pool under ${dataDir}. Run this from your project's root after \`npm run dev\` has started ` +

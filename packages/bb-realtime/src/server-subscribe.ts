@@ -22,7 +22,7 @@
  * So each published message reaches the handler exactly once.
  */
 
-import { brandBlocksError } from '@aws-blocks/core';
+import { brandBlocksError } from '@aws-cdk-blocks/core';
 import type { DisconnectReason, RealtimeSubscription } from './types.js';
 
 /** A server-side subscription, plus whether its socket currently delivers messages. */

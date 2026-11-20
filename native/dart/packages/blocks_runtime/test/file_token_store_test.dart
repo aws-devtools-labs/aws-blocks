@@ -1,3 +1,6 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
 @TestOn('vm')
 library;
 
@@ -146,7 +149,7 @@ Future<void> main(List<String> args) async {
   });
 
   test('backs a PersistentSessionStore across restarts', () async {
-    final uri = Uri.parse('https://api.example.com/aws-blocks/api');
+    final uri = Uri.parse('https://api.example.com/cdk-blocks/api');
     final first = PersistentSessionStore(store: store('com.example.app'))
       ..setCookies('blocks_session=s1; Path=/; HttpOnly', requestUri: uri);
     // File I/O is not a microtask; wait for the write.

@@ -52,8 +52,8 @@ type MetricUnit =
 ### Error Handling
 
 ```typescript
-import { isBlocksError } from '@aws-blocks/core';
-import { MetricsErrors } from '@aws-blocks/bb-metrics';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import { MetricsErrors } from '@aws-cdk-blocks/bb-metrics';
 
 try {
   metrics.emit('', 1);
@@ -76,8 +76,8 @@ try {
 ### Basic Usage
 
 ```typescript
-import { Scope, ApiNamespace } from '@aws-blocks/blocks';
-import { Metrics } from '@aws-blocks/bb-metrics';
+import { Scope, ApiNamespace } from 'aws-cdk-blocks';
+import { Metrics } from '@aws-cdk-blocks/bb-metrics';
 
 const scope = new Scope('my-app');
 const metrics = new Metrics(scope, 'appMetrics', {
@@ -177,7 +177,7 @@ This design means you can emit metrics anywhere — in hot loops, synchronous ca
 
 ## Local Development
 
-Metrics are written as EMF JSON to stdout — the same format as AWS. In local dev, you can see metric emissions in the terminal output. No disk persistence — metrics are ephemeral locally (unlike KVStore which persists to `.bb-data/`).
+Metrics are written as EMF JSON to stdout — the same format as AWS. In local dev, you can see metric emissions in the terminal output. No disk persistence — metrics are ephemeral locally (unlike KVStore which persists to `.cdk-blocks/local/data/`).
 
 Delete nothing to reset — there's no local state to clear.
 

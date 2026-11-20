@@ -47,7 +47,7 @@ describe('defaults.permissionsBoundary covers every role in the comprehensive ap
     execFileSync(
       'npx',
       [
-        'cdk', 'synth', '--app', 'npx tsx -C cdk aws-blocks/index.cdk.ts', '--output', outdir, '--quiet',
+        'cdk', 'synth', '--app', 'npx tsx -C cdk cdk-blocks/index.cdk.ts', '--output', outdir, '--quiet',
         '--context', 'sandboxMode=true', '--context', `blocksPermissionsBoundary=${BOUNDARY}`,
       ],
       {

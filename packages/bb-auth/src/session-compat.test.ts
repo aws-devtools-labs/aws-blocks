@@ -42,9 +42,9 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { KVStore } from '@aws-blocks/bb-kv-store';
-import type { ScopeParent } from '@aws-blocks/core';
-import { Scope } from '@aws-blocks/core';
+import { KVStore } from '@aws-cdk-blocks/bb-kv-store';
+import type { ScopeParent } from '@aws-cdk-blocks/core';
+import { Scope } from '@aws-cdk-blocks/core';
 import { setSessionCookie, signSessionId } from './cookies.js';
 import { Auth } from './index.mock.js';
 import { SESSION_STORE_ID } from './session-store-id.js';
@@ -64,8 +64,8 @@ const rowFixture: { sessionId: string; entry: { value: string } } = JSON.parse(
 	readFileSync(join(fixtures, 'authcognito-session-row.json'), 'utf8'),
 );
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 describe('AuthCognito → Auth: the cookie and the user stay, the stored sessions do not', () => {
 	test('end to end: the cookie the real AuthCognito mock issued is signed out cleanly, and a new sign-in gives the same user', async (t) => {
@@ -101,7 +101,7 @@ describe('AuthCognito → Auth: the cookie and the user stay, the stored session
 			status: 401,
 		});
 		// The old session file is as AuthCognito left it: not read, not converted, not removed.
-		assert.strictEqual(readFileSync('.bb-data/upgrade-app-auth-sessions/store.json', 'utf8'), oldSessionFile);
+		assert.strictEqual(readFileSync('.cdk-blocks/local/data/upgrade-app-auth-sessions/store.json', 'utf8'), oldSessionFile);
 
 		// A new sign-in works. The local user is kept, so the same password signs in as the same user.
 		const signIn = await browser.request((ctx) => auth.signIn('alice', 'Passw0rd!', ctx));
@@ -113,7 +113,7 @@ describe('AuthCognito → Auth: the cookie and the user stay, the stored session
 		assert.strictEqual(user.signInProvider, 'password');
 		assert.strictEqual(user.attributes.email, 'alice@example.com');
 		// The new session is in the session store.
-		assert.ok(existsSync(`.bb-data/upgrade-app-auth-${SESSION_STORE_ID}/store.json`));
+		assert.ok(existsSync(`.cdk-blocks/local/data/upgrade-app-auth-${SESSION_STORE_ID}/store.json`));
 	});
 
 	test('AWS row format: a row that bb-auth-cognito’s SessionStore wrote is not read; its cookie is signed out and cleared', async (t) => {
@@ -142,7 +142,7 @@ describe('AuthCognito → Auth: the cookie and the user stay, the stored session
 		});
 		// The row is where bb-auth-cognito wrote it, and nothing changed it.
 		assert.strictEqual(
-			readFileSync('.bb-data/aws-app-auth-sessions/store.json', 'utf8'),
+			readFileSync('.cdk-blocks/local/data/aws-app-auth-sessions/store.json', 'utf8'),
 			legacy.files['aws-app-auth-sessions/store.json'],
 		);
 	});
@@ -193,7 +193,7 @@ describe('AuthCognito → Auth: the cookie and the user stay, the stored session
 		await browser.request((ctx) => h.auth.signIn('carol', 'Passw0rd!', ctx));
 		// The mock file holds the exact DynamoDB items: `{ version, items }` (`version` there is the file format's).
 		const file: { items: Record<string, unknown>[] } = JSON.parse(
-			readFileSync(`.bb-data/shape-app-auth-${SESSION_STORE_ID}/store.json`, 'utf8'),
+			readFileSync(`.cdk-blocks/local/data/shape-app-auth-${SESSION_STORE_ID}/store.json`, 'utf8'),
 		);
 		const [item] = file.items;
 		// AuthCognito's three tokens, plus `Auth`'s optional sign-in time (#912), which
@@ -220,10 +220,10 @@ describe('AuthCognito → Auth: the cookie and the user stay, the stored session
 		assert.ok(await store.get(String(item._bkv_pk)));
 	});
 
-	test('the mock layer reads AuthCognito’s mock secret from .bb-data/<fullId>/state.json', async () => {
+	test('the mock layer reads AuthCognito’s mock secret from .cdk-blocks/local/data/<fullId>/state.json', async () => {
 		// Frozen at the cutover: the state file `new AuthCognito({ id: 'secret-app' }, 'auth')` wrote.
 		restoreMockFiles(mockStateCapture('cognito-secret-only'));
-		const state = JSON.parse(readFileSync('.bb-data/secret-app-auth/state.json', 'utf8'));
+		const state = JSON.parse(readFileSync('.cdk-blocks/local/data/secret-app-auth/state.json', 'utf8'));
 		const store = new SessionStore(new Auth({ id: 'secret-app' }, 'auth'));
 		const sessionId = await store.create(poolTokens('dave'));
 		const browser = new Browser();

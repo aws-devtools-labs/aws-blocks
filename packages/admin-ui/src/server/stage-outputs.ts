@@ -9,7 +9,7 @@
  * per-stage outputs paths and selects a stack by the output it carries. This
  * is a deliberate reimplementation rather than an import, for the same reason
  * `rpc-codec.ts` reimplements the wire format: `admin-ui` does not depend on
- * `@aws-blocks/core` and must not start, because the dashboard installs into a
+ * `@aws-cdk-blocks/core` and must not start, because the dashboard installs into a
  * *user's* project and a core dependency would have to match whichever core
  * version that app pins. The cost of that independence is drift, so it is paid
  * for explicitly — `stage-outputs.test.ts` cross-checks {@link OUTPUTS_FILE} and
@@ -20,7 +20,7 @@
  * ## Why this file exists at all
  *
  * The dashboard used to take a stage's region from the deploy *record*
- * (`.blocks/deploy-history.jsonl`), which re-derives the region at deploy time
+ * (`.cdk-blocks/deploy-history.jsonl`), which re-derives the region at deploy time
  * through `resolveRegion()` — env, then `aws configure get region`, then a
  * hardcoded `us-east-1`. That resolution can disagree with the region CDK
  * actually deployed to, and once written, a wrong region is indistinguishable

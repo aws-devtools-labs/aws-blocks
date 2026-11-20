@@ -1,6 +1,6 @@
 # Harbor agent check
 
-An opt-in, **non-required** GitHub Actions check for AWS Blocks PRs. It packs the PR head and
+An opt-in, **non-required** GitHub Actions check for AWS CDK Blocks PRs. It packs the PR head and
 its merge-base, then asks Claude Code to create a todo app, add due dates and add labels in one
 resumed session per trial. The default is one trial per arm (**n=1**): that report is
 descriptive, not a statistical claim. More trials give pass-rate intervals and metric
@@ -24,7 +24,7 @@ deployed.
    saves a [phase snapshot](#phase-snapshots), checks package provenance, runs `npm run build`,
    starts `npm run dev` as `node` and drives Chromium (`ui.mjs`) through every behavior added so
    far. Contract controls are located by accessible name among form fields only. It then checks
-   that the records it created appear under the app's Blocks mock data directory (`.bb-data`), a
+   that the records it created appear under the app's Blocks mock data directory (`.cdk-blocks/local/data`), a
    heuristic that catches storage outside Blocks but not a backend writing its own files there.
    Finally it restarts the server and checks the records again in a fresh browser context.
 6. Each trial uploads its allowlisted result as artifact `harbor-result-<arm>-<trial>` and, when
@@ -45,7 +45,7 @@ prompt names it. Nothing sets `PLAYWRIGHT_BROWSERS_PATH` globally, so a project'
 ## Pins and skill delivery
 
 `pins.py` holds the model (`global.anthropic.claude-opus-5-5`), Claude Code version, Harbor
-revision and the public [AWS Blocks skill](https://github.com/aws/agent-toolkit-for-aws/tree/2cb0fa1c2e668e1bb075028800b6b27efb95779e/skills/core-skills/aws-blocks)
+revision and the public [AWS CDK Blocks skill](https://github.com/aws/agent-toolkit-for-aws/tree/2cb0fa1c2e668e1bb075028800b6b27efb95779e/skills/core-skills/aws-blocks)
 revision and SHA-256. `requirements.txt` and the workflow's session policy repeat the Harbor
 revision and model ARN; change them together.
 
@@ -56,11 +56,11 @@ triggered. It is reported, never required.
 
 ## Package provenance
 
-Each arm has a loopback registry (`registry.mjs`) that serves only that arm's `@aws-blocks/*`
+Each arm has a loopback registry (`registry.mjs`) that serves only that arm's `@aws-cdk-blocks/*`
 tarballs and logs requests. Third-party packages come from public npm. `provenance.py` requires
-that the scaffolder tarball was served and that every installed `@aws-blocks/*` package in the
+that the scaffolder tarball was served and that every installed `@aws-cdk-blocks/*` package in the
 app has the arm's lockfile version, registry URL and integrity, was served, and matches the
-packed bytes. The backend must import `@aws-blocks/*` and expose an `ApiNamespace`.
+packed bytes. The backend must import `@aws-cdk-blocks/*` and expose an `ApiNamespace`.
 
 Byte-identical packages in both arms make the run an **A/A infrastructure demonstration**.
 
@@ -128,7 +128,7 @@ statistics live in `stats.py`, shared with the [local calibration](#local-calibr
 Before any check, after the agent's processes are killed and before provenance, build, server
 start or the browser exercise, `verify.py` writes `/logs/verifier/snapshot.tar.gz`
 (`task/tests/snapshot.py`): `todo-app/` as the agent left it, without any `node_modules`
-directory but with `.bb-data` and the lockfile, plus `verifier-state.json`, a copy of the
+directory but with `.cdk-blocks/local/data` and the lockfile, plus `verifier-state.json`, a copy of the
 verifier's record list seeded by the earlier phases. Writing it first means it exists whether
 the checks pass, fail or time out; a snapshot error is logged and never fails the phase. Harbor
 moves each phase's `/logs/verifier` into `steps/<phase>/verifier/`, so every phase keeps its own
@@ -247,7 +247,7 @@ has no `max-parallel`, so one run with `trials=N` holds up to 2N sessions at onc
 
 The task runs with `network_mode = "public"`. At run time the container needs Bedrock Runtime in
 `us-east-1` for the agent's model calls and `registry.npmjs.org` for the generated app's
-third-party dependencies (`@aws-blocks` packages come from the local registry inside the
+third-party dependencies (`@aws-cdk-blocks` packages come from the local registry inside the
 container), and the app's own install scripts may download more (for example, Playwright browsers
 when the agent runs `playwright install` in its project). The pinned Harbor revision also has an
 `allowlist` mode for Docker, enforced by a sidecar transparent proxy and nftables rules. It is not

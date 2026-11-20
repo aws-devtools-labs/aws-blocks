@@ -3,7 +3,7 @@
 
 /**
  * The pool a `bb-auth users` command acts on: the local (mock) pool in
- * `.bb-data/`, or the Cognito pool a deployed stack's `Auth` block owns.
+ * `.cdk-blocks/local/data/`, or the Cognito pool a deployed stack's `Auth` block owns.
  *
  * @internal
  */
@@ -28,7 +28,7 @@ export interface ResolvedUser {
 export interface PoolTarget {
 	/** `true` for a deployed pool: writes need `--yes`. */
 	readonly deployed: boolean;
-	/** A one-line description of the pool, e.g. `local pool my-app-auth (.bb-data/my-app-auth)`. */
+	/** A one-line description of the pool, e.g. `local pool my-app-auth (.cdk-blocks/local/data/my-app-auth)`. */
 	readonly description: string;
 	/** The groups the block declares (`users.groups`). */
 	readonly groups: readonly string[];

@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { THEME_CSS, THEME_STYLE_ID } from '@aws-blocks/blocks/theme';
+import { THEME_CSS, THEME_STYLE_ID } from 'aws-cdk-blocks/theme';
 
 export const metadata: Metadata = {
   title: 'Blocks + Next.js',

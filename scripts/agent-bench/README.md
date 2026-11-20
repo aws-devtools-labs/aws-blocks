@@ -20,7 +20,7 @@ Ten steps per cell, all on the GitHub runner (4b, 4c and 6b are best-effort auxi
    scaffolded; no dev server is running (the agent must not rely on or start one).
 3. **Build and test** — `npm run build`, then launch the dev server fresh and
    discover the port it binds by anchoring on the framework's startup banner
-   (`AWS Blocks local server running on http://localhost:<port>`) — no port
+   (`AWS CDK Blocks local server running on http://localhost:<port>`) — no port
    guessing — exported as `APP_BASE_URL`; then run the task's Playwright spec
    against it. Records build / dev-server / playwright / test signals. The script
    is a trusted supervisor; every process that runs the agent's app or its
@@ -149,7 +149,7 @@ The boundary, outermost first:
      `GITHUB_ACTIONS`, `RUNNER_OS`, `RUNNER_ARCH`), node/TLS/proxy (`NODE_OPTIONS`,
      `NODE_ENV`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`/`DIR`, `HTTP(S)_PROXY`,
      `NO_PROXY`, `ALL_PROXY`), `AWS_REGION`/`AWS_DEFAULT_REGION`, the framework's
-     `AWS_BLOCKS_DISABLE_TELEMETRY`, `WORKSPACE`, and the `NPM_CONFIG_*`/
+     `CDK_DISABLE_CLI_TELEMETRY`, `WORKSPACE`, and the `NPM_CONFIG_*`/
      `npm_config_*`, `PLAYWRIGHT_*` and `BLOCKS_*` prefixes. `PATH` keeps only
      system dirs and the harness's own node dir (both covered by the lockdown);
      `NODE_OPTIONS` keeps only flags that load no code.
@@ -310,7 +310,7 @@ every `*.spec.{ts,tsx,js,jsx,cjs,mjs}` CODE file are excluded from the copy, so
 the judge is blinded by ABSENCE — no `cat`/`grep`/`find` can reach a spec that
 physically isn't there — and a post-copy `find` (`4-judge.ts`
 `assertNoSpecLeak`) fails loudly if one ever leaks in. Framework-generated
-`*.spec.json` manifests (e.g. `aws-blocks/blocks.spec.json`, the OpenRPC
+`*.spec.json` manifests (e.g. `cdk-blocks/blocks.spec.json`, the OpenRPC
 contract) are deliberately NOT treated as leaks: they are build artifacts, not
 the bench objective.
 

@@ -13,15 +13,15 @@ import assert from 'node:assert';
 import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { ApiError } from '@aws-blocks/core';
+import { ApiError } from '@aws-cdk-blocks/core';
 import { AuthErrors } from './errors.js';
 import { Auth } from './index.mock.js';
 import { Browser } from './test-helpers.js';
 import { PACKAGE_DIR } from './test-support/typecheck.js';
 import type { AuthenticatedUser, CodeDeliveryPurpose } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
 const ADMIN_EMAILS = new Set(['you@example.com']);

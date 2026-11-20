@@ -538,7 +538,7 @@ export class CdnConstruct extends Construct {
     const acceptLegacy = serverOriginOpts.acceptLegacyVerifyHeader === true;
     if (acceptLegacy) {
       Annotations.of(this).addWarningV2(
-        '@aws-blocks/hosting:AcceptLegacyVerifyHeader',
+        '@aws-cdk-blocks/hosting:AcceptLegacyVerifyHeader',
         'Remove frontDoor.features.serverOrigin.acceptLegacyVerifyHeader after this deploy. While it is set, the ' +
           'server origin also accepts the origin-verify value derived from the stack name and construct path, and ' +
           'the SSR REST API stage gets no web ACL until the next deploy.',
@@ -1445,9 +1445,9 @@ export class CdnConstruct extends Construct {
         : []),
       ...(hasCompute
         ? [
-            // 500: Don't cache Lambda 500s — they're likely transient.
-            // Image-opt Lambda returns 500 for missing images; caching
-            // that error would serve stale errors to all users.
+            // 500: Don't cache Lambda 500s — they're likely transient, and
+            // caching one would serve a stale error to all users. (A missing
+            // source image is a 404 from the image-opt Lambda, not a 500.)
             // 502/503/504: not cached either (see withServerErrorsNotCached).
             {
               httpStatus: 500,

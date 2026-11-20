@@ -30,7 +30,7 @@ afterEach(() => {
 /** A project with both stack names resolvable: `blocks-app-prod` and `blocks-app-alice-abc123`. */
 function deployedProject(extra: Record<string, string> = {}): string {
 	return makeProject({
-		'.blocks/config.json': JSON.stringify({ stackId: 'blocks-app' }),
+		'.cdk-blocks/config.json': JSON.stringify({ stackId: 'blocks-app' }),
 		'.cdk-blocks-sandbox/sandbox-id.txt': 'alice-abc123\n',
 		...extra,
 	});
@@ -77,24 +77,24 @@ function resolveWithApiUrl(projectRoot: string, apiUrl: string): Promise<Endpoin
 describe('resolveRpcEndpoint — local mode', () => {
 	it('uses the port discovered in the app server script', async () => {
 		const root = deployedProject({
-			'aws-blocks/scripts/server.ts': 'startDevServer({\n\tbackendPath: x,\n\tport: 4321,\n});\n',
+			'cdk-blocks/scripts/server.ts': 'startDevServer({\n\tbackendPath: x,\n\tport: 4321,\n});\n',
 		});
 		const result = assertOk(await resolveRpcEndpoint({ projectRoot: root, stage: 'sandbox', mode: 'local' }));
-		assert.strictEqual(result.endpoint, 'http://localhost:4321/aws-blocks/api');
+		assert.strictEqual(result.endpoint, 'http://localhost:4321/cdk-blocks/api');
 		assert.strictEqual(result.source, 'local-dev-server');
 	});
 
 	it('falls back to port 3000 when no server script names one', async () => {
 		const root = makeProject({});
 		const result = assertOk(await resolveRpcEndpoint({ projectRoot: root, stage: 'sandbox', mode: 'local' }));
-		assert.strictEqual(result.endpoint, 'http://localhost:3000/aws-blocks/api');
+		assert.strictEqual(result.endpoint, 'http://localhost:3000/cdk-blocks/api');
 	});
 
-	it('appends exactly the /aws-blocks/api RPC prefix', async () => {
+	it('appends exactly the /cdk-blocks/api RPC prefix', async () => {
 		const root = makeProject({});
 		const result = assertOk(await resolveRpcEndpoint({ projectRoot: root, stage: 'production', mode: 'local' }));
-		assert.ok(result.endpoint.endsWith('/aws-blocks/api'), result.endpoint);
-		assert.strictEqual(new URL(result.endpoint).pathname, '/aws-blocks/api');
+		assert.ok(result.endpoint.endsWith('/cdk-blocks/api'), result.endpoint);
+		assert.strictEqual(new URL(result.endpoint).pathname, '/cdk-blocks/api');
 	});
 
 	it('consults no cloud source at all, even when both would answer', async () => {
@@ -104,7 +104,7 @@ describe('resolveRpcEndpoint — local mode', () => {
 		const result = assertOk(
 			await resolveRpcEndpoint({ projectRoot: root, stage: 'sandbox', mode: 'local', ...forbiddenSeams }),
 		);
-		assert.strictEqual(result.endpoint, 'http://localhost:3000/aws-blocks/api');
+		assert.strictEqual(result.endpoint, 'http://localhost:3000/cdk-blocks/api');
 	});
 });
 
@@ -112,9 +112,9 @@ describe('resolveRpcEndpoint — cloud mode precedence', () => {
 	it('resolves from the stack ApiUrl output', async () => {
 		const root = deployedProject();
 		const result = assertOk(
-			await resolveWithApiUrl(root, 'https://abc.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api'),
+			await resolveWithApiUrl(root, 'https://abc.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api'),
 		);
-		assert.strictEqual(result.endpoint, 'https://abc.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api');
+		assert.strictEqual(result.endpoint, 'https://abc.execute-api.us-east-1.amazonaws.com/prod/cdk-blocks/api');
 		assert.strictEqual(result.source, 'stack-output');
 	});
 
@@ -125,11 +125,11 @@ describe('resolveRpcEndpoint — cloud mode precedence', () => {
 				projectRoot: root,
 				stage: 'sandbox',
 				mode: 'cloud',
-				describeStackOutputs: outputs({ ApiUrl: 'https://fresh.example.com/aws-blocks/api' }),
-				readSandboxConfig: () => 'https://stale.example.com/aws-blocks/api',
+				describeStackOutputs: outputs({ ApiUrl: 'https://fresh.example.com/cdk-blocks/api' }),
+				readSandboxConfig: () => 'https://stale.example.com/cdk-blocks/api',
 			}),
 		);
-		assert.strictEqual(result.endpoint, 'https://fresh.example.com/aws-blocks/api');
+		assert.strictEqual(result.endpoint, 'https://fresh.example.com/cdk-blocks/api');
 		assert.strictEqual(result.source, 'stack-output');
 	});
 
@@ -141,25 +141,25 @@ describe('resolveRpcEndpoint — cloud mode precedence', () => {
 				stage: 'sandbox',
 				mode: 'cloud',
 				describeStackOutputs: outputs({ SomethingElse: 'https://nope.example.com' }),
-				readSandboxConfig: () => 'https://from-file.example.com/aws-blocks/api',
+				readSandboxConfig: () => 'https://from-file.example.com/cdk-blocks/api',
 			}),
 		);
-		assert.strictEqual(result.endpoint, 'https://from-file.example.com/aws-blocks/api');
+		assert.strictEqual(result.endpoint, 'https://from-file.example.com/cdk-blocks/api');
 		assert.strictEqual(result.source, 'sandbox-config');
 	});
 
 	it("reads the stage's own config file, never the dev server's config.json", async () => {
 		const root = deployedProject({
-			'.cdk-blocks-sandbox/config.json': JSON.stringify({ apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'sandbox' }),
+			'.cdk-blocks-sandbox/config.json': JSON.stringify({ apiUrl: 'http://localhost:3000/cdk-blocks/api', environment: 'sandbox' }),
 			'.cdk-blocks-sandbox/config.production.json': JSON.stringify({
-				apiUrl: 'https://prod.example.com/aws-blocks/api',
+				apiUrl: 'https://prod.example.com/cdk-blocks/api',
 				environment: 'production',
 			}),
 		});
 		const resolve = (stage: string): Promise<EndpointResolution> =>
 			resolveRpcEndpoint({ projectRoot: root, stage, mode: 'cloud', describeStackOutputs: outputs({}) });
 		const production = assertOk(await resolve('production'));
-		assert.strictEqual(production.endpoint, 'https://prod.example.com/aws-blocks/api');
+		assert.strictEqual(production.endpoint, 'https://prod.example.com/cdk-blocks/api');
 		assert.strictEqual(production.source, 'sandbox-config');
 		// No sandbox deploy recorded a URL, and the dev server's local one is not a deployed endpoint.
 		assertNoEndpoint(await resolve('sandbox'));
@@ -175,7 +175,7 @@ describe('resolveRpcEndpoint — cloud mode precedence', () => {
 			region: 'eu-west-1',
 			describeStackOutputs: (stackName, region) => {
 				seen.push([stackName, region]);
-				return Promise.resolve({ ApiUrl: 'https://p.example.com/aws-blocks/api' });
+				return Promise.resolve({ ApiUrl: 'https://p.example.com/cdk-blocks/api' });
 			},
 			readSandboxConfig: forbiddenSeams.readSandboxConfig,
 		});
@@ -191,7 +191,7 @@ describe('resolveRpcEndpoint — cloud mode precedence', () => {
 			mode: 'cloud',
 			describeStackOutputs: (stackName) => {
 				seen.push(stackName);
-				return Promise.resolve({ ApiUrl: 'https://s.example.com/aws-blocks/api' });
+				return Promise.resolve({ ApiUrl: 'https://s.example.com/cdk-blocks/api' });
 			},
 			readSandboxConfig: forbiddenSeams.readSandboxConfig,
 		});
@@ -254,7 +254,7 @@ describe('resolveRpcEndpoint — NO_ENDPOINT', () => {
 			await resolveRpcEndpoint({ projectRoot: root, stage: 'production', mode: 'cloud', ...forbiddenSeams }),
 		);
 		assert.match(message, /stage "production"/);
-		assert.match(message, /\.blocks\/config\.json/);
+		assert.match(message, /\.cdk-blocks\/config\.json/);
 	});
 
 	it('rejects a stage that has no stack', async () => {
@@ -291,13 +291,13 @@ describe('resolveRpcEndpoint — validation of the resolved value', () => {
 
 	it('accepts https to an external host', async () => {
 		const root = deployedProject();
-		const result = assertOk(await resolveWithApiUrl(root, 'https://api.example.com/prod/aws-blocks/api'));
-		assert.strictEqual(result.endpoint, 'https://api.example.com/prod/aws-blocks/api');
+		const result = assertOk(await resolveWithApiUrl(root, 'https://api.example.com/prod/cdk-blocks/api'));
+		assert.strictEqual(result.endpoint, 'https://api.example.com/prod/cdk-blocks/api');
 	});
 
 	it('rejects http to an external host', async () => {
 		const root = deployedProject();
-		const message = assertNoEndpoint(await resolveWithApiUrl(root, 'http://api.example.com/prod/aws-blocks/api'));
+		const message = assertNoEndpoint(await resolveWithApiUrl(root, 'http://api.example.com/prod/cdk-blocks/api'));
 		assert.match(message, /cleartext/);
 		assert.match(message, /api\.example\.com/);
 	});
@@ -305,7 +305,7 @@ describe('resolveRpcEndpoint — validation of the resolved value', () => {
 	it('accepts http to a loopback host', async () => {
 		const root = deployedProject();
 		for (const host of ['localhost', '127.0.0.1', '127.0.0.53', '[::1]']) {
-			const url = `http://${host}:3000/aws-blocks/api`;
+			const url = `http://${host}:3000/cdk-blocks/api`;
 			const result = assertOk(await resolveWithApiUrl(root, url));
 			assert.strictEqual(result.endpoint, url);
 		}
@@ -328,7 +328,7 @@ describe('resolveRpcEndpoint — validation of the resolved value', () => {
 				stage: 'sandbox',
 				mode: 'cloud',
 				describeStackOutputs: outputs({}),
-				readSandboxConfig: () => 'http://api.example.com/aws-blocks/api',
+				readSandboxConfig: () => 'http://api.example.com/cdk-blocks/api',
 			}),
 		);
 		assert.match(message, /cleartext/);

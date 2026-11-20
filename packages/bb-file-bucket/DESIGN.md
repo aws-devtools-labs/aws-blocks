@@ -2,7 +2,7 @@
 
 Design document for FileBucket. For usage, see [README.md](./README.md).
 
-**Package:** `@aws-blocks/bb-file-bucket`
+**Package:** `@aws-cdk-blocks/bb-file-bucket`
 **Type:** Primitive (new infrastructure)
 **AWS Service:** Amazon S3
 
@@ -13,7 +13,7 @@ Design document for FileBucket. For usage, see [README.md](./README.md).
 **Rationale:** ReadableStream adds complexity for the common case (small-to-medium files). Buffer is simpler to work with in Lambda (where the entire response must be buffered anyway). For large files, presigned URLs (`getUrl`/`putUrl`) are the recommended pattern. This favors client-safe return types.
 
 **D-FB-2: Segregated internal storage in mock**
-**Decision:** The mock stores user content, sidecar metadata, and version history under separate sibling roots inside `.bb-data/{fullId}/`:
+**Decision:** The mock stores user content, sidecar metadata, and version history under separate sibling roots inside `.cdk-blocks/local/data/{fullId}/`:
 ```
 content/{key}                     file body (byte-identical to what was written)
 meta/{key}.json                   sidecar metadata
@@ -66,7 +66,7 @@ versions/{key}/__deleted__        delete marker (sentinel)
 **Rationale:** A wildcard origin on a state-changing method lets any website issue authenticated cross-origin writes/deletes against the bucket — a CSRF-shaped exposure. Rather than silently deploying it, FileBucket fails loud at synth with an actionable message pointing the developer at explicit origins. It is a hard error, not a warning: a warning would still let the rule deploy.
 
 **D-FB-13: Posture knobs route through the framework `BlocksDefaults`**
-**Decision:** `removalPolicy`, `accessLogging`, and access-log retention are resolved from the stack-wide `BlocksDefaults` model (exposed as `scope.defaults`), not from a `sandboxMode` CDK context read. Each posture knob follows the framework's `options?.field ?? scope.defaults.field` contract (the same pattern `bb-kv-store` uses for `removalPolicy`/`deletionProtection`, and documented on the `Scope.defaults` getter in `@aws-blocks/core/cdk`):
+**Decision:** `removalPolicy`, `accessLogging`, and access-log retention are resolved from the stack-wide `BlocksDefaults` model (exposed as `scope.defaults`), not from a `sandboxMode` CDK context read. Each posture knob follows the framework's `options?.field ?? scope.defaults.field` contract (the same pattern `bb-kv-store` uses for `removalPolicy`/`deletionProtection`, and documented on the `Scope.defaults` getter in `@aws-cdk-blocks/core/cdk`):
 - `removalPolicy` — an explicit per-block `'destroy'|'retain'` wins; when omitted it falls back to `scope.defaults.removalPolicy` (`DESTROY` in the sandbox preset, `RETAIN` in production).
 - `accessLogging` — falls back to `scope.defaults.accessLogging` when not set per-block, so a production-postured stack can opt every FileBucket into logging without a per-block flag.
 - **access-log retention** — derives from `scope.defaults.logRetention` (a `RetentionDays` enum: `ONE_WEEK` sandbox / `ONE_YEAR` production). `RetentionDays` is a numeric enum whose member value *is* the day count, so it maps directly to `Duration.days(...)`; the one non-day member `INFINITE` omits the lifecycle expiry rule (logs kept forever) rather than expiring at a spurious 9999 days.
@@ -81,7 +81,7 @@ versions/{key}/__deleted__        delete marker (sentinel)
 **Rationale:** Considered and rejected: code defaults (a sandbox-posture localhost origin, or Hosting adding its `distributionUrl` to the FileBuckets it fronts, the way it injects `CORS_HOSTING_ORIGINS` for the API). Each adds configuration overhead — a new `BlocksDefaults` knob or Hosting→FileBucket wiring, plus an opt-out for buckets that should stay server-only — for what most buckets don't need, since most FileBuckets are only accessed server-side. Deriving from the existing inputs also doesn't work: `defaults.allowedOrigins` holds regex patterns that have no S3 `AllowedOrigin` equivalent, and the Hosting URL is a token from a construct created after the backend in `index.cdk.ts`. Documenting the one explicit rule keeps the bucket's exposure visible in the app's own code.
 
 **D-FB-16: Encryption at rest is selectable — SSE-S3 default, SSE-KMS with a dedicated or imported CMK**
-**Decision:** `encryption` accepts the same values as `KVStore`: `'aws-managed'` (default, SSE-S3), `'customer-managed'` (SSE-KMS with a dedicated key this block creates, rotation on, sharing the bucket's removal policy), or `FileBucket.fromKmsKey(arn)` (SSE-KMS with an existing key). The value is parsed by core's shared `resolveKmsEncryption` (`@aws-blocks/core/cdk/internal`), the same parser the DynamoDB resolver delegates to, so an unrecognized value fails the synth with an error listing the valid values, exactly as it does for the tables, rather than falling back to SSE-S3 (which would silently downgrade a customer-managed-key request). SSE-KMS buckets enable S3 Bucket Keys. `grantReadWrite` on a bucket with an `encryptionKey` also grants the runtime role the key permissions, so presigned URLs (signed by that role) keep working. The access-log bucket stays SSE-S3 because S3 server access logging can't deliver to an SSE-KMS target.
+**Decision:** `encryption` accepts the same values as `KVStore`: `'aws-managed'` (default, SSE-S3), `'customer-managed'` (SSE-KMS with a dedicated key this block creates, rotation on, sharing the bucket's removal policy), or `FileBucket.fromKmsKey(arn)` (SSE-KMS with an existing key). The value is parsed by core's shared `resolveKmsEncryption` (`@aws-cdk-blocks/core/cdk/internal`), the same parser the DynamoDB resolver delegates to, so an unrecognized value fails the synth with an error listing the valid values, exactly as it does for the tables, rather than falling back to SSE-S3 (which would silently downgrade a customer-managed-key request). SSE-KMS buckets enable S3 Bucket Keys. `grantReadWrite` on a bucket with an `encryptionKey` also grants the runtime role the key permissions, so presigned URLs (signed by that role) keep working. The access-log bucket stays SSE-S3 because S3 server access logging can't deliver to an SSE-KMS target.
 **Rationale:** `'aws-managed'` maps to SSE-S3 rather than the `aws/s3` KMS key so the default adds no KMS charges or KMS request throttling. The dedicated key is created by this block instead of by `s3.Bucket` so rotation is always on and its removal policy can be set to the bucket's — a sandbox teardown doesn't leave a billed key behind, and a retained bucket is never left without its key.
 
 **D-FB-17: Object Lock with a default retention, rejected at synth when it can't work**
@@ -131,13 +131,13 @@ Creates a single S3 bucket (plus a dedicated log bucket when `accessLogging` is 
 
 ## Mock Implementation
 
-- Files stored on the local filesystem at `.bb-data/{scope.fullId}/` via `getMockDataDir()` from core.
+- Files stored on the local filesystem at `.cdk-blocks/local/data/{scope.fullId}/` via `getMockDataDir()` from core.
 - Internal data is segregated into sibling roots so it can never collide with user keys (see D-FB-2):
   - `content/{key}` — file body, byte-identical to what was written.
   - `meta/{key}.json` — sidecar metadata.
   - `versions/{key}/{versionId}` (+ `.json` sidecars, `__deleted__` marker) — version history.
 - Path mapping for both the mock and the dev file-server is centralized in `paths.ts` so they stay in lockstep.
-- Data persists across dev server restarts. Customers can wipe with `rm -rf .bb-data`.
+- Data persists across dev server restarts. Customers can wipe with `rm -rf .cdk-blocks/local/data .bb-data`.
 - Presigned URLs are served by the dev file-server at `/.bb-file-bucket/{scope.fullId}/{path}?token=...`. The path segments are URL-encoded; the server decodes them and validates an HMAC token scoped to method, path, and expiry. The HMAC secret (`LOCAL_FILE_SECRET` in `tokens.ts`) is a **per-process random value** — the token-minting mock and the validating dev file-server share the same in-process module instance, so tokens are unforgeable without being a hardcoded, source-visible literal.
 - Downloads are served with `X-Content-Type-Options: nosniff` and a `Content-Disposition`: the one signed into the token by `getUrl({ attachment })` (D-FB-20), or plain `attachment` otherwise. The stored body is caller-controlled, so serving it inline would let an uploaded `text/html`/SVG payload run in the local app origin. Forcing a download + disabling MIME sniffing is dev-server hardening only; deployed content is served via S3 presigned URLs, where the stored `Content-Type` is the one signed into the upload URL (D-FB-19) or passed to `put()`, no `nosniff` is applied, and a `Content-Disposition` is only sent when the URL was created with `attachment` — do not assume this dev-server behavior reflects the deployed path.
 - A download with an explicit `versionId` resolves its body and metadata only from that version. A missing version returns HTTP 404, without falling back to the current object. Downloads without `versionId` resolve the current object.

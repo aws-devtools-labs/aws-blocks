@@ -3,7 +3,7 @@
 
 /**
  * Test helper: a default-compute stand-in for core's tests, which can't depend on
- * @aws-blocks/bb-lambda-compute — a Compute owning a NodejsFunction that runs AS
+ * @aws-cdk-blocks/bb-lambda-compute — a Compute owning a NodejsFunction that runs AS
  * the shared execution role, like LambdaCompute.
  */
 import * as cdk from 'aws-cdk-lib';

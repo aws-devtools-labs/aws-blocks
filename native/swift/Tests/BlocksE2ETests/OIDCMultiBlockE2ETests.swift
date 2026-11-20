@@ -22,7 +22,7 @@ final class RecordingRelayLauncher: BrowserLauncher, @unchecked Sendable {
 
 /// Two federated `Auth` blocks, each signed in through the client its `getClient()` returns:
 /// `auth-oidc` on the default routes, signing in with its second provider (`github2`), and
-/// `auth-sso`, whose routes live under `/aws-blocks/auth/sso/` with the callback named `return`.
+/// `auth-sso`, whose routes live under `/cdk-blocks/auth/sso/` with the callback named `return`.
 /// For each: sign in, an authenticated RPC, the state machine, `restore()` on a fresh `Blocks`,
 /// the client's own `signOut()` returning the stub IdP's logout URL, and `restore()` returning nil
 /// afterwards. Then, on one cookie store: a block refuses another block's session, and signing out
@@ -72,9 +72,9 @@ final class OIDCMultiBlockE2ETests: BlocksE2ETestCase {
             URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)?
                 .queryItems?.first { $0.name == "redirect_uri" }?.value
         )
-        // A deployed gateway puts its stage in front of /aws-blocks, so check the suffix.
+        // A deployed gateway puts its stage in front of /cdk-blocks, so check the suffix.
         let redirectPath = try XCTUnwrap(URL(string: redirectURI)?.path)
-        XCTAssertTrue(redirectPath.hasSuffix("/aws-blocks/auth/sso/return"), redirectPath)
+        XCTAssertTrue(redirectPath.hasSuffix("/cdk-blocks/auth/sso/return"), redirectPath)
         XCTAssertEqual(user.signInProvider, "corp")
         let me = try await api.ssoRequireAuth()
         XCTAssertEqual(me.userId, user.userId)
@@ -142,7 +142,7 @@ final class OIDCMultiBlockE2ETests: BlocksE2ETestCase {
 
         let logoutURL = try await client.signOut()
         let logoutPath = try XCTUnwrap(logoutURL?.path)
-        XCTAssertTrue(logoutPath.hasSuffix("/aws-blocks/auth/idp/\(provider)/logout"), logoutPath)
+        XCTAssertTrue(logoutPath.hasSuffix("/cdk-blocks/auth/idp/\(provider)/logout"), logoutPath)
         let state = await client.authState
         XCTAssertEqual(state, .signedOut)
 

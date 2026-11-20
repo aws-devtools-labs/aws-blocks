@@ -61,7 +61,7 @@ startDevServer(${JSON.stringify({
       cwd: tempDir,
       env: {
         ...process.env,
-        AWS_BLOCKS_DISABLE_TELEMETRY: '1',
+        CDK_DISABLE_CLI_TELEMETRY: '1',
         BLOCKS_DEV_QUIET: '1',
         ...options.env,
       },
@@ -163,7 +163,7 @@ createServer((request, response) => {
     // Empty is falsy, keeping verbose logging on even if the parent sets quiet mode.
     const output = startDevProcess(port, { env: { BLOCKS_DEV_QUIET: '' } });
 
-    const response = await fetchWhenReady(`http://127.0.0.1:${port}/aws-blocks/api`, {
+    const response = await fetchWhenReady(`http://127.0.0.1:${port}/cdk-blocks/api`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', method: 'testApi.pingVoid', params: [], id: 1 }),
@@ -189,13 +189,13 @@ createServer((request, response) => {
 
     // A GET on the API path (e.g. opening it in a browser) hits the API handler
     // but not the POST branch — the exact case that used to return an empty 404.
-    const response = await fetchWhenReady(`http://127.0.0.1:${port}/aws-blocks/api`, { method: 'GET' });
+    const response = await fetchWhenReady(`http://127.0.0.1:${port}/cdk-blocks/api`, { method: 'GET' });
     assert.strictEqual(response.status, 404);
     assert.strictEqual(response.headers.get('content-type'), 'application/json');
     const payload = await response.json() as { error?: string; expected?: { method?: string; path?: string } };
     assert.match(payload.error ?? '', /POST/, `404 body should hint at the POST requirement: ${JSON.stringify(payload)}`);
     assert.strictEqual(payload.expected?.method, 'POST');
-    assert.strictEqual(payload.expected?.path, '/aws-blocks/api');
+    assert.strictEqual(payload.expected?.path, '/cdk-blocks/api');
   });
 
   it('serves the per-namespace RPC path and points a wrong-method hint at it', async () => {
@@ -220,7 +220,7 @@ startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\/g, '/')
     const tsxBin = join(__dirname, '..', '..', '..', '..', 'node_modules', '.bin', 'tsx');
     devProcess = spawn(tsxBin, ['--import', join(tempDir, 'preload.mjs'), join(tempDir, 'run-dev.ts')], {
       cwd: tempDir,
-      env: { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1' },
+      env: { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -229,8 +229,8 @@ startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\/g, '/')
     devProcess.stdout?.on('data', chunk => { stdout += chunk.toString(); });
     devProcess.stderr?.on('data', chunk => { stderr += chunk.toString(); });
 
-    // The typed client POSTs to /aws-blocks/api/{namespace}.
-    const nsUrl = `http://127.0.0.1:${port}/aws-blocks/api/testApi`;
+    // The typed client POSTs to /cdk-blocks/api/{namespace}.
+    const nsUrl = `http://127.0.0.1:${port}/cdk-blocks/api/testApi`;
     const deadline = Date.now() + 15_000;
     let response: Response | undefined;
     let lastError: unknown;
@@ -271,7 +271,7 @@ startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\/g, '/')
     assert.strictEqual(hint.status, 404);
     const hintBody = await hint.json() as { expected?: { method?: string; path?: string } };
     assert.strictEqual(hintBody.expected?.method, 'POST');
-    assert.strictEqual(hintBody.expected?.path, '/aws-blocks/api/testApi');
+    assert.strictEqual(hintBody.expected?.path, '/cdk-blocks/api/testApi');
   });
 
   it('sanitizes an uncaught RawRoute exception to a generic 500 while preserving a handler-set header', async () => {
@@ -375,7 +375,7 @@ startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\/g, '/')
     const tsxBin = join(__dirname, '..', '..', '..', '..', 'node_modules', '.bin', 'tsx');
     devProcess = spawn(tsxBin, ['--import', join(tempDir, 'preload.mjs'), join(tempDir, 'run-dev.ts')], {
       cwd: tempDir,
-      env: { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1' },
+      env: { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -384,7 +384,7 @@ startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\/g, '/')
     devProcess.stdout?.on('data', chunk => { stdout += chunk.toString(); });
     devProcess.stderr?.on('data', chunk => { stderr += chunk.toString(); });
 
-    const call = (method: string) => fetch(`http://127.0.0.1:${port}/aws-blocks/api`, {
+    const call = (method: string) => fetch(`http://127.0.0.1:${port}/cdk-blocks/api`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', method: `testApi.${method}`, params: [], id: 1 }),
@@ -460,7 +460,7 @@ export const testApi = new ApiNamespace({ id: 'app' }, 'testApi', () => methods(
 `);
     startDevProcess(port);
     const call = async (method: string) => {
-      const response = await fetchWhenReady(`http://127.0.0.1:${port}/aws-blocks/api`, {
+      const response = await fetchWhenReady(`http://127.0.0.1:${port}/cdk-blocks/api`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', method, params: [], id: 1 }),
@@ -529,7 +529,7 @@ startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\/g, '/')
     const tsxBin = join(__dirname, '..', '..', '..', '..', 'node_modules', '.bin', 'tsx');
     devProcess = spawn(tsxBin, ['--import', join(tempDir, 'preload.mjs'), join(tempDir, 'run-dev.ts')], {
       cwd: tempDir,
-      env: { ...process.env, AWS_BLOCKS_DISABLE_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1' },
+      env: { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1', BLOCKS_DEV_QUIET: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -539,7 +539,7 @@ startDevServer({ backendPath: '${join(tempDir, 'backend.ts').replace(/\\/g, '/')
     devProcess.stderr?.on('data', chunk => { stderr += chunk.toString(); });
 
     const call = async (method: string, params: unknown[] = []) => {
-      const res = await fetch(`http://127.0.0.1:${port}/aws-blocks/api`, {
+      const res = await fetch(`http://127.0.0.1:${port}/cdk-blocks/api`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }),

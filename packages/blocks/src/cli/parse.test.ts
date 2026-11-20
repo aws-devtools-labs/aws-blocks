@@ -175,7 +175,7 @@ describe('parseArgv', () => {
 			[['db', 'migrate', './migrations', '-h'], 'migrate'],
 			[['config', 'remove', 'KEY', '--help'], 'remove'],
 			[['secret', '--stage', 'prod', 'remove', 'KEY', '--force', '--yes', '--help'], 'remove'],
-			[['vendorize', '@aws-blocks/bb-kv-store', '--help'], undefined],
+			[['vendorize', '@aws-cdk-blocks/bb-kv-store', '--help'], undefined],
 			[['config', 'drop', 'x', '--help'], undefined],
 		] as const) {
 			const parsed = parseArgv(argv);
@@ -217,8 +217,8 @@ describe('parseArgv', () => {
 		assert.strictEqual(db.globals.debug, true);
 		usageError(['secret', 'list', '--output', 'json'], /^--output json is not supported for "npm run secret"/);
 		usageError(['config', 'list', '--query', 'keys'], /^--query is not supported for "npm run config"/);
-		usageError(['telemetry', '--output', 'json'], /^--output json is not supported for "npm run telemetry"/);
-		usageError(['--output', 'json', 'telemetry'], /^--output json is not supported for "npm run telemetry"/);
+		usageError(['config', '--output', 'json'], /^--output json is not supported for "npm run config"/);
+		usageError(['--output', 'json', 'config'], /^--output json is not supported for "npm run config"/);
 		usageError(['config', 'list', '--profile'], /option --profile needs a value/);
 		usageError(['db', 'status', '--profile'], /option --profile needs a value/);
 	});

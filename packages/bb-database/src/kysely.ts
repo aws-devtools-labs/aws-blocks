@@ -116,7 +116,7 @@ class DatabaseDriver implements Driver {
  *
  * @example
  * import { type Generated, Kysely } from 'kysely';
- * import { DatabaseDialect } from '@aws-blocks/bb-database/kysely';
+ * import { DatabaseDialect } from '@aws-cdk-blocks/bb-database/kysely';
  *
  * interface Tables {
  *   orders: { id: Generated<number>; customer_id: string; total: number };

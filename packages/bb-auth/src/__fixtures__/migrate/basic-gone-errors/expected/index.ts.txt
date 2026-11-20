@@ -1,6 +1,6 @@
-import { Auth } from '@aws-blocks/bb-auth';
-import { isBlocksError, Scope } from '@aws-blocks/core';
-import type { AuthState } from '@aws-blocks/blocks';
+import { Auth } from '@aws-cdk-blocks/bb-auth';
+import { isBlocksError, Scope } from '@aws-cdk-blocks/core';
+import type { AuthState } from 'aws-cdk-blocks';
 
 const scope = new Scope('app');
 // TODO(aws-blocks-auth-migrate): AuthBasic has no migration path to Auth. Existing users cannot sign in after this deploy and must sign up again.

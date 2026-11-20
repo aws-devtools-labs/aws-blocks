@@ -1,14 +1,14 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, beforeEach, describe } from 'node:test';
 import assert from 'node:assert';
-import { rmSync, existsSync, mkdirSync, writeFileSync, cpSync, symlinkSync, mkdtempSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { tmpdir } from 'node:os';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { isBlocksError } from '@aws-blocks/core';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { beforeEach, describe, test } from 'node:test';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isBlocksError } from '@aws-cdk-blocks/core';
 import { KnowledgeBase, KnowledgeBaseErrors } from './index.mock.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -30,8 +30,13 @@ function setupTestFixtures(): void {
 }
 
 function cleanup(): void {
-	try { rmSync('.bb-data', { recursive: true, force: true }); } catch {}
-	try { rmSync(TEST_KNOWLEDGE, { recursive: true, force: true }); } catch {}
+	try {
+		rmSync('.cdk-blocks/local/data', { recursive: true, force: true });
+		rmSync('.bb-data', { recursive: true, force: true });
+	} catch {}
+	try {
+		rmSync(TEST_KNOWLEDGE, { recursive: true, force: true });
+	} catch {}
 }
 
 // Helpers for tests that build their own temporary corpora under the project
@@ -47,7 +52,9 @@ function freshDir(name: string): string {
 
 function cleanupDirs(...names: string[]): void {
 	for (const name of names) {
-		try { rmSync(join(CWD, name), { recursive: true, force: true }); } catch {}
+		try {
+			rmSync(join(CWD, name), { recursive: true, force: true });
+		} catch {}
 	}
 }
 
@@ -63,10 +70,7 @@ test('retrieve returns results matching query terms', async () => {
 	const results = await kb.retrieve('password reset');
 
 	assert.ok(results.length > 0, 'should return results');
-	assert.ok(
-		results[0].text.toLowerCase().includes('password'),
-		'top result should contain password',
-	);
+	assert.ok(results[0].text.toLowerCase().includes('password'), 'top result should contain password');
 });
 
 test('retrieve returns results for billing query', async () => {
@@ -75,7 +79,7 @@ test('retrieve returns results for billing query', async () => {
 
 	assert.ok(results.length > 0, 'should return results');
 	assert.ok(
-		results.some(r => r.source.includes('billing')),
+		results.some((r) => r.source.includes('billing')),
 		'should include billing source',
 	);
 });
@@ -141,7 +145,7 @@ test('faq files get folder metadata "faq"', async () => {
 	const kb = new KnowledgeBase({ id: 'test' }, 'kb', { source: 'test-knowledge-tmp' });
 	const results = await kb.retrieve('password reset');
 
-	const faqResult = results.find(r => r.source.includes('faq/'));
+	const faqResult = results.find((r) => r.source.includes('faq/'));
 	assert.ok(faqResult, 'should have result from faq folder');
 	assert.strictEqual(faqResult.metadata.folder, 'faq', 'folder metadata should be "faq"');
 });
@@ -150,7 +154,7 @@ test('nested subfolder gets first-level folder as folder metadata', async () => 
 	const kb = new KnowledgeBase({ id: 'test' }, 'kb', { source: 'test-knowledge-tmp' });
 	const results = await kb.retrieve('API authentication OAuth');
 
-	const advancedResult = results.find(r => r.source.includes('guides/advanced/'));
+	const advancedResult = results.find((r) => r.source.includes('guides/advanced/'));
 	assert.ok(advancedResult, 'should have result from guides/advanced');
 	assert.strictEqual(
 		advancedResult.metadata.folder,
@@ -163,7 +167,7 @@ test('root-level files have no folder metadata', async () => {
 	const kb = new KnowledgeBase({ id: 'test' }, 'kb', { source: 'test-knowledge-tmp' });
 	const results = await kb.retrieve('release notes performance improvements');
 
-	const rootResult = results.find(r => r.source === 'release-notes.txt');
+	const rootResult = results.find((r) => r.source === 'release-notes.txt');
 	assert.ok(rootResult, 'should have result from root file');
 	assert.strictEqual(rootResult.metadata.folder, undefined, 'root file should have no folder metadata');
 });
@@ -216,7 +220,7 @@ test('second instance reuses chunks.json cache when the source is unchanged', as
 	const results1 = await kb1.retrieve('password');
 	assert.ok(results1.length > 0);
 
-	const cachePath = join('.bb-data', 'test-persist', 'chunks.json');
+	const cachePath = join('.cdk-blocks/local/data', 'test-persist', 'chunks.json');
 	assert.ok(existsSync(cachePath), 'chunks.json cache should exist');
 
 	// Overwrite the cache with a sentinel chunk while leaving the source (and its
@@ -284,7 +288,7 @@ test('non-string runtime query throws ValidationError', async () => {
 
 test('unsupported file types are skipped without error', async () => {
 	// Add an unsupported binary file to the test knowledge dir
-	writeFileSync(join(TEST_KNOWLEDGE, 'image.png'), Buffer.from([0x89, 0x50, 0x4E, 0x47]));
+	writeFileSync(join(TEST_KNOWLEDGE, 'image.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 	writeFileSync(join(TEST_KNOWLEDGE, 'doc.pdf'), 'fake pdf content');
 
 	const kb = new KnowledgeBase({ id: 'test' }, 'skip', { source: 'test-knowledge-tmp' });
@@ -292,7 +296,7 @@ test('unsupported file types are skipped without error', async () => {
 
 	assert.ok(results.length > 0, 'should still return results from supported files');
 	assert.ok(
-		!results.some(r => r.source.endsWith('.png') || r.source.endsWith('.pdf')),
+		!results.some((r) => r.source.endsWith('.png') || r.source.endsWith('.pdf')),
 		'should not include unsupported file results',
 	);
 });
@@ -336,7 +340,7 @@ test('folder with only unsupported files returns empty results', async () => {
 	const unsupportedDir = join(process.cwd(), 'test-unsupported-knowledge-tmp');
 	if (existsSync(unsupportedDir)) rmSync(unsupportedDir, { recursive: true, force: true });
 	mkdirSync(unsupportedDir, { recursive: true });
-	writeFileSync(join(unsupportedDir, 'image.png'), Buffer.from([0x89, 0x50, 0x4E, 0x47]));
+	writeFileSync(join(unsupportedDir, 'image.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
 	writeFileSync(join(unsupportedDir, 'data.bin'), Buffer.from([0x00, 0x01, 0x02]));
 	writeFileSync(join(unsupportedDir, 'doc.pdf'), 'fake pdf');
 
@@ -355,7 +359,10 @@ test('short paragraphs under 20 chars are filtered out', async () => {
 	const shortDir = join(process.cwd(), 'test-short-knowledge-tmp');
 	if (existsSync(shortDir)) rmSync(shortDir, { recursive: true, force: true });
 	mkdirSync(shortDir, { recursive: true });
-	writeFileSync(join(shortDir, 'doc.md'), 'Short.\n\nAlso tiny.\n\nThis paragraph is definitely long enough to be included in the index results.');
+	writeFileSync(
+		join(shortDir, 'doc.md'),
+		'Short.\n\nAlso tiny.\n\nThis paragraph is definitely long enough to be included in the index results.',
+	);
 
 	try {
 		const kb = new KnowledgeBase({ id: 'test' }, 'short', { source: 'test-short-knowledge-tmp' });
@@ -404,11 +411,7 @@ test('maxResults clamped to maximum 100', async () => {
 
 test('concurrent retrieve calls work correctly', async () => {
 	const kb = new KnowledgeBase({ id: 'test' }, 'concurrent', { source: 'test-knowledge-tmp' });
-	const [r1, r2, r3] = await Promise.all([
-		kb.retrieve('password'),
-		kb.retrieve('billing'),
-		kb.retrieve('API'),
-	]);
+	const [r1, r2, r3] = await Promise.all([kb.retrieve('password'), kb.retrieve('billing'), kb.retrieve('API')]);
 	assert.ok(r1.length > 0, 'password query should return results');
 	assert.ok(r2.length > 0, 'billing query should return results');
 	assert.ok(r3.length > 0, 'API query should return results');
@@ -420,7 +423,7 @@ test('rebuilds index when cache is corrupted', async () => {
 	const kb = new KnowledgeBase({ id: 'test' }, 'corrupt-test', { source: 'test-knowledge-tmp' });
 	await kb.retrieve('test query');
 
-	const cachePath = join('.bb-data', 'test-corrupt-test', 'chunks.json');
+	const cachePath = join('.cdk-blocks/local/data', 'test-corrupt-test', 'chunks.json');
 	assert.ok(existsSync(cachePath), 'Cache file should exist');
 
 	writeFileSync(cachePath, '{ INVALID JSON !!!');
@@ -436,11 +439,15 @@ test('customer-provided metadata.json is used instead of auto-generated folder',
 	const kb = new KnowledgeBase({ id: 'test' }, 'custmeta', { source: 'test-knowledge-tmp' });
 	const results = await kb.retrieve('deploying applications production staging');
 
-	const tutorialResult = results.find(r => r.source.includes('tutorials/'));
+	const tutorialResult = results.find((r) => r.source.includes('tutorials/'));
 	assert.ok(tutorialResult, 'should have result from tutorials folder');
 	assert.strictEqual(tutorialResult.metadata.category, 'deployment', 'should have customer category metadata');
 	assert.strictEqual(tutorialResult.metadata.difficulty, 'intermediate', 'should have customer difficulty metadata');
-	assert.strictEqual(tutorialResult.metadata.folder, undefined, 'should NOT have auto-generated folder metadata when customer sidecar exists');
+	assert.strictEqual(
+		tutorialResult.metadata.folder,
+		undefined,
+		'should NOT have auto-generated folder metadata when customer sidecar exists',
+	);
 });
 
 test('filter by customer-provided metadata returns only matching docs', async () => {
@@ -468,7 +475,7 @@ test('auto-generated folder metadata still works for docs without sidecar', asyn
 	const kb = new KnowledgeBase({ id: 'test' }, 'autocoexist', { source: 'test-knowledge-tmp' });
 	const results = await kb.retrieve('password reset billing', { maxResults: 20 });
 
-	const faqResult = results.find(r => r.source.includes('faq/'));
+	const faqResult = results.find((r) => r.source.includes('faq/'));
 	assert.ok(faqResult, 'should have result from faq folder');
 	assert.strictEqual(faqResult.metadata.folder, 'faq', 'faq docs should still have auto-generated folder metadata');
 	assert.strictEqual(faqResult.metadata.category, undefined, 'faq docs should NOT have customer category metadata');
@@ -680,9 +687,15 @@ try {
 describe('cache invalidation', () => {
 	test('switching the source folder returns new content, not stale cache', async () => {
 		const v1 = freshDir('_cache-v1');
-		writeFileSync(join(v1, 'doc.md'), 'Version one content about apples oranges and fruit orchards in the countryside.');
+		writeFileSync(
+			join(v1, 'doc.md'),
+			'Version one content about apples oranges and fruit orchards in the countryside.',
+		);
 		const v2 = freshDir('_cache-v2');
-		writeFileSync(join(v2, 'doc.md'), 'Version two content about spaceships rockets and interstellar galactic travel.');
+		writeFileSync(
+			join(v2, 'doc.md'),
+			'Version two content about spaceships rockets and interstellar galactic travel.',
+		);
 
 		try {
 			const kb1 = new KnowledgeBase({ id: 'app' }, 'cache', { source: '_cache-v1' });
@@ -708,14 +721,20 @@ describe('cache invalidation', () => {
 
 	test('editing a document in the source folder is reflected on next load', async () => {
 		const src = freshDir('_cache-edit');
-		writeFileSync(join(src, 'doc.md'), 'Original content about dinosaurs and prehistoric creatures from the Jurassic period.');
+		writeFileSync(
+			join(src, 'doc.md'),
+			'Original content about dinosaurs and prehistoric creatures from the Jurassic period.',
+		);
 
 		try {
 			const kb1 = new KnowledgeBase({ id: 'app' }, 'edit', { source: '_cache-edit' });
 			const r1 = await kb1.retrieve('dinosaurs prehistoric Jurassic');
 			assert.ok(r1.length > 0, 'original query should match');
 
-			writeFileSync(join(src, 'doc.md'), 'Updated content about quantum computing and artificial intelligence breakthroughs in modern science.');
+			writeFileSync(
+				join(src, 'doc.md'),
+				'Updated content about quantum computing and artificial intelligence breakthroughs in modern science.',
+			);
 
 			const kb2 = new KnowledgeBase({ id: 'app' }, 'edit', { source: '_cache-edit' });
 			const r2 = await kb2.retrieve('quantum computing artificial intelligence');
@@ -745,7 +764,7 @@ describe('cache invalidation', () => {
 			const r1 = await kb1.retrieve('renewable energy sustainable');
 			assert.ok(r1.length > 0, 'first load should return results');
 			assert.ok(
-				existsSync(join('.bb-data', 'app-deltest', 'chunks.json')),
+				existsSync(join('.cdk-blocks/local/data', 'app-deltest', 'chunks.json')),
 				'cache should be written after the first load',
 			);
 
@@ -1074,4 +1093,6 @@ describe('sync', () => {
 });
 
 // ── Cleanup after all tests ────────────────────────────────────────────────
-test('cleanup', () => { cleanup(); });
+test('cleanup', () => {
+	cleanup();
+});

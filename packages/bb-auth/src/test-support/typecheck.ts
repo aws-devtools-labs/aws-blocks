@@ -3,7 +3,7 @@
 
 /**
  * Typecheck snippets of customer code against the real, built packages: the
- * files are written under this package's `dist/`, so `@aws-blocks/*` resolve
+ * files are written under this package's `dist/`, so `@aws-cdk-blocks/*` resolve
  * through the workspace `node_modules` exactly as an app's would.
  */
 

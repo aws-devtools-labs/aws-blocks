@@ -363,7 +363,8 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
   });
 
   it("refuses while the app's dev server on another port is alive, names that port, and removes its own record", () => {
-    // Two dev servers of one app share its .bb-data: the second one, on another port, must not start either.
+    // Two dev servers of one app share its .cdk-blocks/local/data: the second one, on another port, must not start
+    // either.
     const other = '/app/.cdk-blocks-sandbox/dev-server.4100.pid';
     const owner = JSON.stringify({ pid: 1000, ppid: 500, port: 4100, command: 'a', parentCommand: 'q' });
     const foreign = '/elsewhere/.cdk-blocks-sandbox/dev-server.4200.pid';
@@ -595,8 +596,8 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
 
   describe('the starting record of a dev task launcher', () => {
     // The CLI (pid 700, run from a shell, pid 600) claimed the port before it started tsx watch.
-    const cli = { pid: 700, ppid: 600, port: 3000, command: 'node --input-type=module -e "import \'@aws-blocks/blocks/run\'" -- dev', parentCommand: 'bash', starting: true as const, frontend: { pgid: 4242, port: 3100 } };
-    const live = { isAlive: (pid: number) => pid === 700 || pid === 600, commandOf: (pid: number) => (pid === 700 ? 'node --input-type=module -e "import \'@aws-blocks/blocks/run\'" -- dev' : 'bash') };
+    const cli = { pid: 700, ppid: 600, port: 3000, command: 'node --input-type=module -e "import \'aws-cdk-blocks/run\'" -- dev', parentCommand: 'bash', starting: true as const, frontend: { pgid: 4242, port: 3100 } };
+    const live = { isAlive: (pid: number) => pid === 700 || pid === 600, commandOf: (pid: number) => (pid === 700 ? 'node --input-type=module -e "import \'aws-cdk-blocks/run\'" -- dev' : 'bash') };
 
     it('is replaced in place by the dev server that CLI started, which keeps its leftover frontend group', () => {
       const fs = memoryFs({ [path]: JSON.stringify(cli) });
@@ -836,7 +837,7 @@ describe('runsUnderTsxWatch — whether a failed first start must end its tsx wa
     assert.strictEqual(runsUnderTsxWatch({ BLOCKS_DEV_UNDER_WATCH: '1' }, ''), true);
     assert.strictEqual(runsUnderTsxWatch({}, ''), false);
     assert.strictEqual(runsUnderTsxWatch({ BLOCKS_DEV_UNDER_WATCH: '0' }, 'bash'), false);
-    assert.strictEqual(runsUnderTsxWatch({}, 'node /app/node_modules/.bin/tsx watch aws-blocks/scripts/server.ts'), true);
+    assert.strictEqual(runsUnderTsxWatch({}, 'node /app/node_modules/.bin/tsx watch cdk-blocks/scripts/server.ts'), true);
   });
 });
 

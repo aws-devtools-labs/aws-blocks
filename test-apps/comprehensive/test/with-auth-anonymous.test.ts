@@ -3,9 +3,9 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { AuthErrors, isAuthError } from '@aws-blocks/bb-auth';
-import { ApiError } from '@aws-blocks/core';
-import { withAuth } from '@aws-blocks/blocks/server';
+import { AuthErrors, isAuthError } from '@aws-cdk-blocks/bb-auth';
+import { ApiError } from '@aws-cdk-blocks/core';
+import { withAuth } from 'aws-cdk-blocks/server';
 import type { ProtectApis } from './auth-protect.test.js';
 
 /**

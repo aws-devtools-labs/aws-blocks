@@ -5,9 +5,9 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { testBaseUrl } from './api-url.js';
 import { createHmac } from 'node:crypto';
-import { AuthErrors } from '@aws-blocks/bb-auth';
-import { isBlocksError } from '@aws-blocks/core';
-import type { api as apiType } from 'aws-blocks';
+import { AuthErrors } from '@aws-cdk-blocks/bb-auth';
+import { isBlocksError } from '@aws-cdk-blocks/core';
+import type { api as apiType } from 'cdk-blocks';
 import { signInPoller } from './poll-for-signin.js';
 
 // The `oidc-auth*` instances were `AuthOIDC`; they are now the unified `Auth`
@@ -29,7 +29,7 @@ const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 /**
  * The stub IdP is sandbox-only: in production the comprehensive app configures
  * placeholder real providers instead (see `e2eOidcProvider()` in
- * `aws-blocks/index.ts`), so every suite that drives the stub sign-in flow is
+ * `cdk-blocks/index.ts`), so every suite that drives the stub sign-in flow is
  * skipped there. They still run in local and sandbox.
  */
 const stubSkip = ENV === 'production' && 'stub IdP is sandbox-only';
@@ -50,7 +50,7 @@ async function rpcCall(
   args: unknown[],
   init?: { cookies?: string[] },
 ): Promise<{ status: number; result?: any; error?: any }> {
-  const resp = await fetch(`${baseUrl}/aws-blocks/api`, {
+  const resp = await fetch(`${baseUrl}/cdk-blocks/api`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -91,7 +91,7 @@ async function signInVia(
   provider: string,
   requireAuthMethod: string,
 ): Promise<{ userId: string; sessionCookies: string[] }> {
-  const signinResp = await fetch(`${baseUrl}/aws-blocks/auth/${signinPath}/${provider}`, { redirect: 'manual' });
+  const signinResp = await fetch(`${baseUrl}/cdk-blocks/auth/${signinPath}/${provider}`, { redirect: 'manual' });
   assert.strictEqual(signinResp.status, 302, `signin kickoff should 302, got ${signinResp.status}`);
   const cookies = collectCookies(signinResp);
 
@@ -119,7 +119,7 @@ async function signInVia(
 }
 
 // Runs locally and against a sandbox alike: a sandbox deployment serves the
-// stub IdP too (see `e2eOidcProvider()` in `aws-blocks/index.ts`), as
+// stub IdP too (see `e2eOidcProvider()` in `cdk-blocks/index.ts`), as
 // `AuthOIDC`'s does. In production the app configures placeholder real
 // providers instead, so the suites that drive the stub are skipped there.
 export function oidcAuthTests(getApi: () => typeof apiType) {
@@ -163,7 +163,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const api = getApi();
         const { url } = await api.oidcGetSignInUrl('google');
         assert.ok(url, 'Should return a URL');
-        assert.match(url, /\/aws-blocks\/auth\/idp\/google\/authorize\?/, 'URL should point to stub IdP');
+        assert.match(url, /\/cdk-blocks\/auth\/idp\/google\/authorize\?/, 'URL should point to stub IdP');
         // Verify PKCE and required params are present
         const parsed = new URL(url);
         assert.ok(parsed.searchParams.get('client_id'), 'Should have client_id');
@@ -179,7 +179,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const api = getApi();
         const { url } = await api.oidcGetSignInUrl('corporate');
         assert.ok(url, 'Should return a URL');
-        assert.match(url, /\/aws-blocks\/auth\/idp\/corporate\/authorize\?/, 'URL should point to stub IdP');
+        assert.match(url, /\/cdk-blocks\/auth\/idp\/corporate\/authorize\?/, 'URL should point to stub IdP');
       });
 
       // `getSignInUrl` only accepts configured ids at compile time, so the
@@ -197,7 +197,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
 
       test('an undeclared provider has no signin route at all (404)', async () => {
         const baseUrl = getBaseUrl();
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/signin/nonexistent`, { redirect: 'manual' });
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/signin/nonexistent`, { redirect: 'manual' });
         await resp.text();
         // One GET route is mounted per *configured* provider, so an unknown name
         // never reaches a handler and cannot surface ProviderNotConfigured.
@@ -208,11 +208,11 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const baseUrl = getBaseUrl();
 
         // Step 1: Hit the sign-in kickoff route (mounted by the Auth block)
-        const signinResp = await fetch(`${baseUrl}/aws-blocks/auth/signin/google`, { redirect: 'manual' });
+        const signinResp = await fetch(`${baseUrl}/cdk-blocks/auth/signin/google`, { redirect: 'manual' });
         assert.strictEqual(signinResp.status, 302, 'Sign-in kickoff should 302');
         const authorizeUrl = signinResp.headers.get('location');
         assert.ok(authorizeUrl, 'Should redirect to authorize URL');
-        assert.match(authorizeUrl!, /\/aws-blocks\/auth\/idp\/google\/authorize/);
+        assert.match(authorizeUrl!, /\/cdk-blocks\/auth\/idp\/google\/authorize/);
 
         // Collect cookies from the sign-in response (pending-auth cookie)
         const cookies = collectCookies(signinResp);
@@ -223,7 +223,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.strictEqual(authResp.status, 302, 'Stub IdP should 302 back to callback');
         const callbackUrl = authResp.headers.get('location');
         assert.ok(callbackUrl, 'Should redirect to callback');
-        assert.match(callbackUrl!, /\/aws-blocks\/auth\/callback\?code=/);
+        assert.match(callbackUrl!, /\/cdk-blocks\/auth\/callback\?code=/);
 
         // Step 3: Hit the callback with the pending-auth cookie
         const cbResp = await fetch(callbackUrl!, {
@@ -251,7 +251,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.strictEqual(me.name, 'Stub google User');
 
         // Step 5: Sign out
-        const signoutResp = await fetch(`${baseUrl}/aws-blocks/auth/signout`, {
+        const signoutResp = await fetch(`${baseUrl}/cdk-blocks/auth/signout`, {
           method: 'POST',
           redirect: 'manual',
           headers: { cookie: allCookies.join('; ') },
@@ -269,10 +269,10 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const baseUrl = getBaseUrl();
 
         // Step 1: Hit the sign-in kickoff route
-        const signinResp = await fetch(`${baseUrl}/aws-blocks/auth/signin/corporate`, { redirect: 'manual' });
+        const signinResp = await fetch(`${baseUrl}/cdk-blocks/auth/signin/corporate`, { redirect: 'manual' });
         assert.strictEqual(signinResp.status, 302);
         const authorizeUrl = signinResp.headers.get('location');
-        assert.match(authorizeUrl!, /\/aws-blocks\/auth\/idp\/corporate\/authorize/);
+        assert.match(authorizeUrl!, /\/cdk-blocks\/auth\/idp\/corporate\/authorize/);
 
         const cookies = collectCookies(signinResp);
 
@@ -298,7 +298,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.ok(me.userId.includes(':stub-corporate-user'), 'userId should contain corporate sub');
 
         // Cleanup: sign out
-        await fetch(`${baseUrl}/aws-blocks/auth/signout`, {
+        await fetch(`${baseUrl}/cdk-blocks/auth/signout`, {
           method: 'POST',
           headers: { cookie: sessionCookies.join('; ') },
         });
@@ -311,7 +311,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const api = getApi();
 
         // Do a full sign-in flow
-        const signinResp = await fetch(`${baseUrl}/aws-blocks/auth/signin/google`, { redirect: 'manual' });
+        const signinResp = await fetch(`${baseUrl}/cdk-blocks/auth/signin/google`, { redirect: 'manual' });
         const cookies = collectCookies(signinResp);
         const authorizeUrl = signinResp.headers.get('location')!;
 
@@ -338,7 +338,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.strictEqual(lastUser.email, 'google-user@stub.invalid');
 
         // Cleanup: sign out
-        await fetch(`${baseUrl}/aws-blocks/auth/signout`, {
+        await fetch(`${baseUrl}/cdk-blocks/auth/signout`, {
           method: 'POST',
           headers: { cookie: sessionCookies.join('; ') },
         });
@@ -368,7 +368,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
           'unknown userId should read as null, not the most recent sign-in',
         );
 
-        await fetch(`${baseUrl}/aws-blocks/auth/signout`, {
+        await fetch(`${baseUrl}/cdk-blocks/auth/signout`, {
           method: 'POST',
           headers: { cookie: sessionCookies.join('; ') },
         });
@@ -391,7 +391,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.strictEqual(await api.oidcExtrasGetLastSignInUser(first.userId), null);
 
         for (const [path, session] of [['signout', first], ['extras/signout', second]] as const) {
-          await fetch(`${baseUrl}/aws-blocks/auth/${path}`, {
+          await fetch(`${baseUrl}/cdk-blocks/auth/${path}`, {
             method: 'POST',
             headers: { cookie: session.sessionCookies.join('; ') },
           });
@@ -406,7 +406,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
     describe('onSignIn hook failure', { skip: stubSkip }, () => {
       async function callbackAfterSignIn(provider: string): Promise<Response> {
         const baseUrl = getBaseUrl();
-        const signinResp = await fetch(`${baseUrl}/aws-blocks/auth/hookfail/signin/${provider}`, { redirect: 'manual' });
+        const signinResp = await fetch(`${baseUrl}/cdk-blocks/auth/hookfail/signin/${provider}`, { redirect: 'manual' });
         assert.strictEqual(signinResp.status, 302, `signin kickoff should 302, got ${signinResp.status}`);
         const cookies = collectCookies(signinResp);
         const authResp = await fetch(signinResp.headers.get('location')!, { redirect: 'manual' });
@@ -443,7 +443,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       test('userId is ${iss}:${sub}', async () => {
         const baseUrl = getBaseUrl();
 
-        const signinResp = await fetch(`${baseUrl}/aws-blocks/auth/signin/google`, { redirect: 'manual' });
+        const signinResp = await fetch(`${baseUrl}/cdk-blocks/auth/signin/google`, { redirect: 'manual' });
         const cookies = collectCookies(signinResp);
         const authorizeUrl = signinResp.headers.get('location')!;
 
@@ -460,14 +460,13 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const me = meCall.result;
         assert.strictEqual(me.userId, `${me.iss}:${me.sub}`, 'userId should be ${iss}:${sub}');
 
-        // The unchanged `userId`, checked independently of the session's own claims: the issuer the
-        // stub IdP advertises in discovery, plus the stub's subject for google.
-        // AuthOIDC produced exactly this value, so `oidcProfiles` keys survive.
-        const discovery = await (await fetch(`${baseUrl}/aws-blocks/auth/idp/google/.well-known/openid-configuration`)).json();
+        // The `userId`, checked independently of the session's own claims: the issuer the stub IdP
+        // advertises in discovery, plus the stub's subject for google.
+        const discovery = await (await fetch(`${baseUrl}/cdk-blocks/auth/idp/google/.well-known/openid-configuration`)).json();
         assert.strictEqual(me.userId, `${discovery.issuer}:stub-google-user`);
 
         // Cleanup
-        await fetch(`${baseUrl}/aws-blocks/auth/signout`, {
+        await fetch(`${baseUrl}/cdk-blocks/auth/signout`, {
           method: 'POST',
           headers: { cookie: sessionCookies.join('; ') },
         });
@@ -491,7 +490,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
           const names = state.actions.map((a: any) => a.name);
           assert.deepStrictEqual(names, ['signIn:google', 'signIn:corporate']);
           for (const action of state.actions) {
-            assert.strictEqual(action.url, `/aws-blocks/auth/signin/${action.name.slice('signIn:'.length)}`);
+            assert.strictEqual(action.url, `/cdk-blocks/auth/signin/${action.name.slice('signIn:'.length)}`);
           }
         }
       });
@@ -501,7 +500,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       test('callback without pending cookie returns error', async () => {
         const baseUrl = getBaseUrl();
         // Hit callback directly without going through the sign-in flow
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/callback?code=fake&state=fake`, {
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/callback?code=fake&state=fake`, {
           redirect: 'manual',
         });
         // Should fail — no pending-auth cookie
@@ -512,11 +511,11 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const baseUrl = getBaseUrl();
 
         // Start a real sign-in to get a valid pending cookie
-        const signinResp = await fetch(`${baseUrl}/aws-blocks/auth/signin/google`, { redirect: 'manual' });
+        const signinResp = await fetch(`${baseUrl}/cdk-blocks/auth/signin/google`, { redirect: 'manual' });
         const cookies = collectCookies(signinResp);
 
         // Hit callback with a bogus code but the real pending cookie
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/callback?code=bogus-code&state=wrong-state`, {
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/callback?code=bogus-code&state=wrong-state`, {
           redirect: 'manual',
           headers: { cookie: cookies.join('; ') },
         });
@@ -529,7 +528,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const baseUrl = getBaseUrl();
 
         // Sign in first
-        const signinResp = await fetch(`${baseUrl}/aws-blocks/auth/signin/google`, { redirect: 'manual' });
+        const signinResp = await fetch(`${baseUrl}/cdk-blocks/auth/signin/google`, { redirect: 'manual' });
         const cookies = collectCookies(signinResp);
         const authResp = await fetch(signinResp.headers.get('location')!, { redirect: 'manual' });
         const cbResp = await fetch(authResp.headers.get('location')!, {
@@ -539,7 +538,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const sessionCookies = mergeCookies(cookies, collectCookies(cbResp));
 
         // Sign out
-        const signoutResp = await fetch(`${baseUrl}/aws-blocks/auth/signout`, {
+        const signoutResp = await fetch(`${baseUrl}/cdk-blocks/auth/signout`, {
           method: 'POST',
           headers: { cookie: sessionCookies.join('; ') },
         });
@@ -559,7 +558,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const baseUrl = getBaseUrl();
         const { sessionCookies } = await signInVia(baseUrl, 'signin', 'google', 'oidcRequireAuth');
 
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/signout`, {
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/signout`, {
           redirect: 'manual',
           headers: { cookie: sessionCookies.join('; ') },
         });
@@ -572,7 +571,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const meCall = await rpcCall(baseUrl, 'api', 'oidcRequireAuth', [], { cookies: sessionCookies });
         assert.strictEqual(meCall.status, 200, 'the session must survive a GET on the sign-out path');
 
-        await fetch(`${baseUrl}/aws-blocks/auth/signout`, {
+        await fetch(`${baseUrl}/cdk-blocks/auth/signout`, {
           method: 'POST',
           headers: { cookie: sessionCookies.join('; ') },
         });
@@ -582,7 +581,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
     describe('stub IdP routes', { skip: stubSkip }, () => {
       test('discovery endpoint returns valid OIDC configuration', async () => {
         const baseUrl = getBaseUrl();
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/idp/google/.well-known/openid-configuration`);
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/idp/google/.well-known/openid-configuration`);
         assert.strictEqual(resp.status, 200);
         const doc = await resp.json();
         assert.ok(doc.issuer);
@@ -595,7 +594,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
 
       test('JWKS endpoint returns a valid key set', async () => {
         const baseUrl = getBaseUrl();
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/idp/google/jwks.json`);
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/idp/google/jwks.json`);
         assert.strictEqual(resp.status, 200);
         const jwks = await resp.json();
         assert.ok(Array.isArray(jwks.keys));
@@ -614,7 +613,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
 
       test('authorize endpoint rejects missing params', async () => {
         const baseUrl = getBaseUrl();
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/idp/google/authorize`);
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/idp/google/authorize`);
         assert.strictEqual(resp.status, 400);
       });
     });
@@ -625,9 +624,9 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const api = getApi();
 
         // Sign in via the second instance (oidcAuthExtras — with onSignIn hook).
-        // Its routes derive from callbackPath '/aws-blocks/auth/extras/callback', so the
-        // signin kickoff is /aws-blocks/auth/extras/signin/<provider>.
-        const signinResp = await fetch(`${baseUrl}/aws-blocks/auth/extras/signin/google-extras`, { redirect: 'manual' });
+        // Its routes derive from callbackPath '/cdk-blocks/auth/extras/callback', so the
+        // signin kickoff is /cdk-blocks/auth/extras/signin/<provider>.
+        const signinResp = await fetch(`${baseUrl}/cdk-blocks/auth/extras/signin/google-extras`, { redirect: 'manual' });
         assert.strictEqual(signinResp.status, 302);
         const cookies = collectCookies(signinResp);
         const authorizeUrl = signinResp.headers.get('location')!;
@@ -660,7 +659,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.ok(profile.lastSignIn, 'Should have lastSignIn timestamp');
 
         // Cleanup
-        await fetch(`${baseUrl}/aws-blocks/auth/extras/signout`, {
+        await fetch(`${baseUrl}/cdk-blocks/auth/extras/signout`, {
           method: 'POST',
           headers: { cookie: sessionCookies.join('; ') },
         });
@@ -671,7 +670,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const api = getApi();
 
         // First sign-in
-        const signin1 = await fetch(`${baseUrl}/aws-blocks/auth/extras/signin/google-extras`, { redirect: 'manual' });
+        const signin1 = await fetch(`${baseUrl}/cdk-blocks/auth/extras/signin/google-extras`, { redirect: 'manual' });
         const cookies1 = collectCookies(signin1);
         const auth1 = await fetch(signin1.headers.get('location')!, { redirect: 'manual' });
         const cb1 = await fetch(auth1.headers.get('location')!, {
@@ -691,7 +690,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const firstSignIn = profile1.lastSignIn;
 
         // Sign out
-        await fetch(`${baseUrl}/aws-blocks/auth/extras/signout`, {
+        await fetch(`${baseUrl}/cdk-blocks/auth/extras/signout`, {
           method: 'POST',
           headers: { cookie: session1.join('; ') },
         });
@@ -700,7 +699,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         await new Promise(r => setTimeout(r, 50));
 
         // Second sign-in (same user — stub IdP returns the same sub)
-        const signin2 = await fetch(`${baseUrl}/aws-blocks/auth/extras/signin/google-extras`, { redirect: 'manual' });
+        const signin2 = await fetch(`${baseUrl}/cdk-blocks/auth/extras/signin/google-extras`, { redirect: 'manual' });
         const cookies2 = collectCookies(signin2);
         const auth2 = await fetch(signin2.headers.get('location')!, { redirect: 'manual' });
         const cb2 = await fetch(auth2.headers.get('location')!, {
@@ -716,7 +715,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.notStrictEqual(profile2.lastSignIn, firstSignIn, 'lastSignIn should be updated');
 
         // Cleanup
-        await fetch(`${baseUrl}/aws-blocks/auth/extras/signout`, {
+        await fetch(`${baseUrl}/cdk-blocks/auth/extras/signout`, {
           method: 'POST',
           headers: { cookie: session2.join('; ') },
         });
@@ -741,9 +740,9 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
     });
 
     describe('client-initiated PKCE', { skip: stubSkip }, () => {
-      test('GET /aws-blocks/auth/authorize-params/:provider returns public params', async () => {
+      test('GET /cdk-blocks/auth/authorize-params/:provider returns public params', async () => {
         const baseUrl = getBaseUrl();
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/authorize-params/google`);
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/authorize-params/google`);
         assert.strictEqual(resp.status, 200);
         const params = await resp.json() as any;
         assert.ok(params.authorizeUrl, 'should have authorizeUrl');
@@ -753,15 +752,15 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.ok(params.kind, 'should have kind');
       });
 
-      test('GET /aws-blocks/auth/authorize-params/:provider returns 400 for unknown provider', async () => {
+      test('GET /cdk-blocks/auth/authorize-params/:provider returns 400 for unknown provider', async () => {
         const baseUrl = getBaseUrl();
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/authorize-params/nonexistent`);
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/authorize-params/nonexistent`);
         assert.ok(resp.status >= 400, `Expected error status, got ${resp.status}`);
       });
 
-      test('POST /aws-blocks/auth/exchange returns 400 when fields are missing', async () => {
+      test('POST /cdk-blocks/auth/exchange returns 400 when fields are missing', async () => {
         const baseUrl = getBaseUrl();
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/exchange`, {
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/exchange`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ code: 'abc' }),
@@ -771,9 +770,9 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.ok(body.error.includes('Missing required fields'));
       });
 
-      test('POST /aws-blocks/auth/exchange returns 400 for unknown provider', async () => {
+      test('POST /cdk-blocks/auth/exchange returns 400 for unknown provider', async () => {
         const baseUrl = getBaseUrl();
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/exchange`, {
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/exchange`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -782,7 +781,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
             state: 'state1',
             nonce: 'nonce1',
             provider: 'nonexistent',
-            callbackUrl: 'http://localhost/aws-blocks/auth/callback',
+            callbackUrl: 'http://localhost/cdk-blocks/auth/callback',
           }),
         });
         assert.ok(resp.status >= 400);
@@ -792,7 +791,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const baseUrl = getBaseUrl();
 
         // Step 1: Get authorize params from the server.
-        const paramsResp = await fetch(`${baseUrl}/aws-blocks/auth/authorize-params/google`);
+        const paramsResp = await fetch(`${baseUrl}/cdk-blocks/auth/authorize-params/google`);
         assert.strictEqual(paramsResp.status, 200);
         const params = await paramsResp.json() as any;
 
@@ -808,7 +807,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const nonceBytes = new Uint8Array(32);
         crypto.getRandomValues(nonceBytes);
         const nonce = Buffer.from(nonceBytes).toString('base64url');
-        const callbackUrl = `${baseUrl}/aws-blocks/auth/callback`;
+        const callbackUrl = `${baseUrl}/cdk-blocks/auth/callback`;
 
         // Step 3: Build authorize URL and hit the stub IdP.
         const authorizeUrl = new URL(params.authorizeUrl);
@@ -829,8 +828,8 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.ok(code, 'Should have code in redirect');
         assert.strictEqual(redirectUrl.searchParams.get('state'), state, 'State should round-trip');
 
-        // Step 4: POST /aws-blocks/auth/exchange with the code + verifier.
-        const exchangeResp = await fetch(`${baseUrl}/aws-blocks/auth/exchange`, {
+        // Step 4: POST /cdk-blocks/auth/exchange with the code + verifier.
+        const exchangeResp = await fetch(`${baseUrl}/cdk-blocks/auth/exchange`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -849,7 +848,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.ok(result.user.userId, 'Should have userId');
         assert.ok(result.user.userId.includes(':'), 'userId should be iss:sub format');
 
-        // On the cookie-only instance (allowBearerAuth not set), /aws-blocks/auth/exchange
+        // On the cookie-only instance (allowBearerAuth not set), /cdk-blocks/auth/exchange
         // must NOT expose tokens in the response body.
         assert.strictEqual(result.accessToken, undefined, 'Cookie-only instance should not expose accessToken');
         assert.strictEqual(result.refreshToken, undefined, 'Cookie-only instance should not expose refreshToken');
@@ -860,11 +859,11 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.ok(setCookies.some(c => isSessionCookie(c, 'oidc-auth')), 'Should set session cookie');
       });
 
-      test('POST /aws-blocks/auth/refresh is not mounted when allowBearerAuth is disabled', async () => {
+      test('POST /cdk-blocks/auth/refresh is not mounted when allowBearerAuth is disabled', async () => {
         // The default `oidc-auth` instance does not enable allowBearerAuth,
         // so the refresh route must not exist.
         const baseUrl = getBaseUrl();
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/refresh`, {
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ refreshToken: 'any', provider: 'google' }),
@@ -876,16 +875,16 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
     describe('bearer-token auth (native clients)', { skip: stubSkip }, () => {
       // These tests exercise the native-client path on the second instance
       // (`oidc-auth-extras`), which enables `allowBearerAuth: true`. The flow:
-      //   1. Client does PKCE exchange → /aws-blocks/auth/extras/exchange returns
+      //   1. Client does PKCE exchange → /cdk-blocks/auth/extras/exchange returns
       //      { user, accessToken, refreshToken, expiresIn }
       //   2. Client stores the refresh token and later POSTs it to
-      //      /aws-blocks/auth/extras/refresh → gets a rotated access token back.
+      //      /cdk-blocks/auth/extras/refresh → gets a rotated access token back.
 
       async function completePkceExchange(baseUrl: string) {
         // Same client-PKCE flow as above, but targeted at the second instance.
-        // Its routes are rooted at /aws-blocks/auth/extras (derived from callbackPath),
+        // Its routes are rooted at /cdk-blocks/auth/extras (derived from callbackPath),
         // so authorize-params, exchange, and refresh all sit under that base.
-        const paramsResp = await fetch(`${baseUrl}/aws-blocks/auth/extras/authorize-params/google-extras`);
+        const paramsResp = await fetch(`${baseUrl}/cdk-blocks/auth/extras/authorize-params/google-extras`);
         assert.strictEqual(paramsResp.status, 200);
         const params = await paramsResp.json() as any;
 
@@ -900,7 +899,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const nonceBytes = new Uint8Array(32);
         crypto.getRandomValues(nonceBytes);
         const nonce = Buffer.from(nonceBytes).toString('base64url');
-        const callbackUrl = `${baseUrl}/aws-blocks/auth/extras/callback`;
+        const callbackUrl = `${baseUrl}/cdk-blocks/auth/extras/callback`;
 
         const authorizeUrl = new URL(params.authorizeUrl);
         authorizeUrl.searchParams.set('response_type', 'code');
@@ -915,7 +914,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const authResp = await fetch(authorizeUrl.toString(), { redirect: 'manual' });
         const code = new URL(authResp.headers.get('location')!).searchParams.get('code')!;
 
-        const exchangeResp = await fetch(`${baseUrl}/aws-blocks/auth/extras/exchange`, {
+        const exchangeResp = await fetch(`${baseUrl}/cdk-blocks/auth/extras/exchange`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ code, verifier, state, nonce, provider: 'google-extras', callbackUrl }),
@@ -923,7 +922,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         return { exchangeResp, result: await exchangeResp.json() as any };
       }
 
-      test('/aws-blocks/auth/extras/exchange returns tokens when allowBearerAuth is enabled', async () => {
+      test('/cdk-blocks/auth/extras/exchange returns tokens when allowBearerAuth is enabled', async () => {
         const baseUrl = getBaseUrl();
         const { exchangeResp, result } = await completePkceExchange(baseUrl);
 
@@ -935,12 +934,12 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.ok(typeof result.expiresIn === 'number' && result.expiresIn > 0, 'Should include expiresIn');
       });
 
-      test('POST /aws-blocks/auth/extras/refresh returns new tokens for a valid refresh token', async () => {
+      test('POST /cdk-blocks/auth/extras/refresh returns new tokens for a valid refresh token', async () => {
         const baseUrl = getBaseUrl();
         const { result: exchange } = await completePkceExchange(baseUrl);
         assert.ok(exchange.refreshToken, 'Exchange should produce a refresh token');
 
-        const refreshResp = await fetch(`${baseUrl}/aws-blocks/auth/extras/refresh`, {
+        const refreshResp = await fetch(`${baseUrl}/cdk-blocks/auth/extras/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ refreshToken: exchange.refreshToken, provider: 'google-extras' }),
@@ -952,9 +951,9 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.ok(typeof refreshed.expiresIn === 'number' && refreshed.expiresIn > 0, 'Should include expiresIn');
       });
 
-      test('POST /aws-blocks/auth/extras/refresh returns 401 for an invalid refresh token', async () => {
+      test('POST /cdk-blocks/auth/extras/refresh returns 401 for an invalid refresh token', async () => {
         const baseUrl = getBaseUrl();
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/extras/refresh`, {
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/extras/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ refreshToken: 'invalid-token-does-not-exist', provider: 'google-extras' }),
@@ -977,10 +976,10 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         // session first (the jar drops the cleared cookie), so only the bearer
         // token can authenticate the call below. A bearer token deliberately
         // outlives signOut until it expires.
-        const signoutResp = await fetch(`${baseUrl}/aws-blocks/auth/extras/signout`, { method: 'POST' });
+        const signoutResp = await fetch(`${baseUrl}/cdk-blocks/auth/extras/signout`, { method: 'POST' });
         assert.strictEqual(signoutResp.status, 204);
 
-        const resp = await fetch(`${baseUrl}/aws-blocks/api`, {
+        const resp = await fetch(`${baseUrl}/cdk-blocks/api`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', authorization: `Bearer ${exchange.accessToken}` },
           body: JSON.stringify({ jsonrpc: '2.0', method: 'api.oidcExtrasRequireAuth', params: [], id: 1 }),
@@ -990,9 +989,9 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.strictEqual(body.result.userId, exchange.user.userId);
       });
 
-      test('POST /aws-blocks/auth/extras/refresh returns 400 when fields are missing', async () => {
+      test('POST /cdk-blocks/auth/extras/refresh returns 400 when fields are missing', async () => {
         const baseUrl = getBaseUrl();
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/extras/refresh`, {
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/extras/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ provider: 'google-extras' }),
@@ -1008,13 +1007,13 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       // OIDC instance (`oidc-auth-relay`), which has:
       //   - allowedRelayOrigins: [relayOrigin('testapp://auth')]
       //   - allowBearerAuth: true
-      //   - routes at /aws-blocks/auth/relay/*
+      //   - routes at /cdk-blocks/auth/relay/*
       //
       // The relay flow:
-      //   1. POST /aws-blocks/auth/relay/authorize-params/google-relay with { csrf, relayTo }
-      //   2. Build authorize URL, hit stub IdP → IdP 302s to /aws-blocks/auth/relay/callback
+      //   1. POST /cdk-blocks/auth/relay/authorize-params/google-relay with { csrf, relayTo }
+      //   2. Build authorize URL, hit stub IdP → IdP 302s to /cdk-blocks/auth/relay/callback
       //   3. Backend decodes state, sees relay, 302s to testapp://auth?code=...&state=...
-      //   4. Client extracts code, POSTs to /aws-blocks/auth/relay/exchange → gets tokens
+      //   4. Client extracts code, POSTs to /cdk-blocks/auth/relay/exchange → gets tokens
 
       function generateCsrf(): string {
         const bytes = new Uint8Array(32);
@@ -1036,8 +1035,8 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const csrf = generateCsrf();
         const { verifier, challenge } = await generatePkce();
 
-        // Step 1: POST /aws-blocks/auth/relay/authorize-params/google-relay with relay request.
-        const paramsResp = await fetch(`${baseUrl}/aws-blocks/auth/relay/authorize-params/google-relay`, {
+        // Step 1: POST /cdk-blocks/auth/relay/authorize-params/google-relay with relay request.
+        const paramsResp = await fetch(`${baseUrl}/cdk-blocks/auth/relay/authorize-params/google-relay`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1053,7 +1052,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.ok(params.scopes, 'should have scopes');
 
         // Step 2: Build authorize URL and hit the stub IdP.
-        const callbackUrl = `${baseUrl}/aws-blocks/auth/relay/callback`;
+        const callbackUrl = `${baseUrl}/cdk-blocks/auth/relay/callback`;
         const authorizeUrl = new URL(params.authorizeUrl);
         authorizeUrl.searchParams.set('response_type', 'code');
         authorizeUrl.searchParams.set('client_id', params.clientId);
@@ -1067,7 +1066,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const authResp = await fetch(authorizeUrl.toString(), { redirect: 'manual' });
         assert.strictEqual(authResp.status, 302, 'Stub IdP should 302');
         const idpRedirect = authResp.headers.get('location')!;
-        assert.ok(idpRedirect.includes('/aws-blocks/auth/relay/callback'), 'IdP should redirect to backend callback');
+        assert.ok(idpRedirect.includes('/cdk-blocks/auth/relay/callback'), 'IdP should redirect to backend callback');
 
         // Step 3: Hit the callback — NO cookies (relay flow).
         // The backend should 302 to testapp://auth with code + state.
@@ -1082,8 +1081,8 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.ok(code, 'Relay should include code');
         assert.strictEqual(returnedState, params.state, 'Relay should include unmodified state envelope');
 
-        // Step 4: POST /aws-blocks/auth/relay/exchange with the code + verifier.
-        const exchangeResp = await fetch(`${baseUrl}/aws-blocks/auth/relay/exchange`, {
+        // Step 4: POST /cdk-blocks/auth/relay/exchange with the code + verifier.
+        const exchangeResp = await fetch(`${baseUrl}/cdk-blocks/auth/relay/exchange`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1110,7 +1109,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const { verifier, challenge } = await generatePkce();
 
         // Loopback relay — http://127.0.0.1:<port> is implicitly allowed.
-        const paramsResp = await fetch(`${baseUrl}/aws-blocks/auth/relay/authorize-params/google-relay`, {
+        const paramsResp = await fetch(`${baseUrl}/cdk-blocks/auth/relay/authorize-params/google-relay`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1123,7 +1122,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.ok(params.state, 'should have signed state');
 
         // Drive through the IdP.
-        const callbackUrl = `${baseUrl}/aws-blocks/auth/relay/callback`;
+        const callbackUrl = `${baseUrl}/cdk-blocks/auth/relay/callback`;
         const authorizeUrl = new URL(params.authorizeUrl);
         authorizeUrl.searchParams.set('response_type', 'code');
         authorizeUrl.searchParams.set('client_id', params.clientId);
@@ -1151,7 +1150,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const csrf = generateCsrf();
         const { challenge } = await generatePkce();
 
-        const paramsResp = await fetch(`${baseUrl}/aws-blocks/auth/relay/authorize-params/google-relay`, {
+        const paramsResp = await fetch(`${baseUrl}/cdk-blocks/auth/relay/authorize-params/google-relay`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1168,7 +1167,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.ok(params.state, 'should have state with appState encoded');
 
         // Drive through IdP and verify relay works.
-        const callbackUrl = `${baseUrl}/aws-blocks/auth/relay/callback`;
+        const callbackUrl = `${baseUrl}/cdk-blocks/auth/relay/callback`;
         const authorizeUrl = new URL(params.authorizeUrl);
         authorizeUrl.searchParams.set('response_type', 'code');
         authorizeUrl.searchParams.set('client_id', params.clientId);
@@ -1192,7 +1191,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const csrf = generateCsrf();
         const { challenge } = await generatePkce();
 
-        const paramsResp = await fetch(`${baseUrl}/aws-blocks/auth/relay/authorize-params/google-relay`, {
+        const paramsResp = await fetch(`${baseUrl}/cdk-blocks/auth/relay/authorize-params/google-relay`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ csrf, relayTo: 'testapp://auth' }),
@@ -1200,7 +1199,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const params = await paramsResp.json() as any;
 
         // The authorize URL the SDK builds must have redirect_uri = backend callback.
-        const callbackUrl = `${baseUrl}/aws-blocks/auth/relay/callback`;
+        const callbackUrl = `${baseUrl}/cdk-blocks/auth/relay/callback`;
         const authorizeUrl = new URL(params.authorizeUrl);
         authorizeUrl.searchParams.set('redirect_uri', callbackUrl);
 
@@ -1220,7 +1219,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
 
       test('negative: relay not in allowlist → 400 unknown-origin', async () => {
         const baseUrl = getBaseUrl();
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/relay/authorize-params/google-relay`, {
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/relay/authorize-params/google-relay`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ csrf: generateCsrf(), relayTo: 'evilapp://steal' }),
@@ -1236,7 +1235,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const csrf = generateCsrf();
         const { verifier, challenge } = await generatePkce();
 
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/relay/authorize-params/google-relay`, {
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/relay/authorize-params/google-relay`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ csrf, relayTo: 'testapp://auth/callback' }),
@@ -1246,7 +1245,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.ok(params.state, 'should have signed state envelope');
 
         // Drive through IdP and verify path is preserved in relay Location.
-        const callbackUrl = `${baseUrl}/aws-blocks/auth/relay/callback`;
+        const callbackUrl = `${baseUrl}/cdk-blocks/auth/relay/callback`;
         const authorizeUrl = new URL(params.authorizeUrl);
         authorizeUrl.searchParams.set('response_type', 'code');
         authorizeUrl.searchParams.set('client_id', params.clientId);
@@ -1271,7 +1270,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
 
       test('negative: relay over plain HTTP (non-loopback) → 400 plaintext-non-loopback', async () => {
         const baseUrl = getBaseUrl();
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/relay/authorize-params/google-relay`, {
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/relay/authorize-params/google-relay`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ csrf: generateCsrf(), relayTo: 'http://example.com:8080' }),
@@ -1284,7 +1283,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
 
       test('negative: malformed URI → 400 malformed', async () => {
         const baseUrl = getBaseUrl();
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/relay/authorize-params/google-relay`, {
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/relay/authorize-params/google-relay`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ csrf: generateCsrf(), relayTo: 'not a uri' }),
@@ -1300,7 +1299,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       test('negative: tampered state → 400 invalid_state', async () => {
         const baseUrl = getBaseUrl();
         // Hit callback directly with a tampered state (no pending-auth cookie).
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/relay/callback?code=fake&state=tampered.garbage`, {
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/relay/callback?code=fake&state=tampered.garbage`, {
           redirect: 'manual',
         });
         assert.strictEqual(resp.status, 400);
@@ -1314,14 +1313,14 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const { verifier, challenge } = await generatePkce();
 
         // Get valid params and drive through IdP to get a valid relay redirect.
-        const paramsResp = await fetch(`${baseUrl}/aws-blocks/auth/relay/authorize-params/google-relay`, {
+        const paramsResp = await fetch(`${baseUrl}/cdk-blocks/auth/relay/authorize-params/google-relay`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ csrf, relayTo: 'testapp://auth' }),
         });
         const params = await paramsResp.json() as any;
 
-        const callbackUrl = `${baseUrl}/aws-blocks/auth/relay/callback`;
+        const callbackUrl = `${baseUrl}/cdk-blocks/auth/relay/callback`;
         const authorizeUrl = new URL(params.authorizeUrl);
         authorizeUrl.searchParams.set('response_type', 'code');
         authorizeUrl.searchParams.set('client_id', params.clientId);
@@ -1338,7 +1337,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const returnedState = relayUrl.searchParams.get('state')!;
 
         // Try to exchange with a wrong code.
-        const exchangeResp = await fetch(`${baseUrl}/aws-blocks/auth/relay/exchange`, {
+        const exchangeResp = await fetch(`${baseUrl}/cdk-blocks/auth/relay/exchange`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1362,7 +1361,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         // accidentally sent the custom scheme to the IdP instead of the
         // backend's HTTPS callback.
         const resp = await fetch(
-          `${baseUrl}/aws-blocks/auth/idp/google-relay/authorize?` +
+          `${baseUrl}/cdk-blocks/auth/idp/google-relay/authorize?` +
           `response_type=code&client_id=stub-client-id&` +
           `redirect_uri=${encodeURIComponent('testapp://auth/callback')}&` +
           `scope=openid&state=test&code_challenge=test&code_challenge_method=S256`,
@@ -1377,7 +1376,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       test('stub IdP rejects plain HTTP non-loopback redirect_uri', async () => {
         const baseUrl = getBaseUrl();
         const resp = await fetch(
-          `${baseUrl}/aws-blocks/auth/idp/google-relay/authorize?` +
+          `${baseUrl}/cdk-blocks/auth/idp/google-relay/authorize?` +
           `response_type=code&client_id=stub-client-id&` +
           `redirect_uri=${encodeURIComponent('http://example.com/cb')}&` +
           `scope=openid&state=test&code_challenge=test&code_challenge_method=S256`,
@@ -1391,9 +1390,9 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       test("stub IdP accepts the app's own callback as redirect_uri (its registered redirect URI)", async () => {
         const baseUrl = getBaseUrl();
         // The relay Auth's `redirects.callbackPath`: loopback HTTP locally, HTTPS deployed.
-        const callbackUrl = `${baseUrl}/aws-blocks/auth/relay/callback`;
+        const callbackUrl = `${baseUrl}/cdk-blocks/auth/relay/callback`;
         const resp = await fetch(
-          `${baseUrl}/aws-blocks/auth/idp/google-relay/authorize?` +
+          `${baseUrl}/cdk-blocks/auth/idp/google-relay/authorize?` +
           `response_type=code&client_id=stub-client-id&` +
           `redirect_uri=${encodeURIComponent(callbackUrl)}&` +
           `scope=openid&state=test&nonce=test&code_challenge=test&code_challenge_method=S256`,
@@ -1408,10 +1407,10 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         for (const redirectUri of [
           'http://127.0.0.1:54321/cb',
           'https://example.com/cb',
-          `${baseUrl}/aws-blocks/auth/callback`, // another Auth instance's callback
+          `${baseUrl}/cdk-blocks/auth/callback`, // another Auth instance's callback
         ]) {
           const resp = await fetch(
-            `${baseUrl}/aws-blocks/auth/idp/google-relay/authorize?` +
+            `${baseUrl}/cdk-blocks/auth/idp/google-relay/authorize?` +
             `response_type=code&client_id=stub-client-id&` +
             `redirect_uri=${encodeURIComponent(redirectUri)}&` +
             `scope=openid&state=test&nonce=test&code_challenge=test&code_challenge_method=S256`,
@@ -1427,7 +1426,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       test('stub IdP refuses a foreign client_id with 400 and no redirect', async () => {
         const baseUrl = getBaseUrl();
         const resp = await fetch(
-          `${baseUrl}/aws-blocks/auth/idp/google-relay/authorize?` +
+          `${baseUrl}/cdk-blocks/auth/idp/google-relay/authorize?` +
           `response_type=code&client_id=anything&` +
           `redirect_uri=${encodeURIComponent('https://evil.example/land')}&` +
           `code_challenge=abc&code_challenge_method=S256`,
@@ -1458,7 +1457,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       for (const name of stubProviderNames) {
         test(`GET stub discovery for '${name}' is 404`, async () => {
           const baseUrl = getBaseUrl();
-          const resp = await fetch(`${baseUrl}/aws-blocks/auth/idp/${name}/.well-known/openid-configuration`, { redirect: 'manual' });
+          const resp = await fetch(`${baseUrl}/cdk-blocks/auth/idp/${name}/.well-known/openid-configuration`, { redirect: 'manual' });
           await resp.text();
           assert.strictEqual(resp.status, 404, `stub discovery route for '${name}' must not exist in production`);
         });
@@ -1466,7 +1465,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
 
       test('POST stub token endpoint is 404', async () => {
         const baseUrl = getBaseUrl();
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/idp/google/token`, {
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/idp/google/token`, {
           method: 'POST',
           redirect: 'manual',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1484,7 +1483,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
 
       test('GET stub authorize endpoint is 404', async () => {
         const baseUrl = getBaseUrl();
-        const resp = await fetch(`${baseUrl}/aws-blocks/auth/idp/google/authorize`, { redirect: 'manual' });
+        const resp = await fetch(`${baseUrl}/cdk-blocks/auth/idp/google/authorize`, { redirect: 'manual' });
         await resp.text();
         assert.strictEqual(resp.status, 404, 'stub authorize route must not exist in production');
       });
@@ -1495,11 +1494,11 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       // provider's /token. All other fields of the token request are taken from
       // the same authorize request, so a rejection can only come from the code.
       // The stub accepts only the app's registered callback as `redirect_uri`.
-      const callbackUri = (baseUrl: string) => `${baseUrl}/aws-blocks/auth/callback`;
+      const callbackUri = (baseUrl: string) => `${baseUrl}/cdk-blocks/auth/callback`;
 
       async function authorizeCode(baseUrl: string, provider: string, challenge: string): Promise<string> {
         const resp = await fetch(
-          `${baseUrl}/aws-blocks/auth/idp/${provider}/authorize?` + new URLSearchParams({
+          `${baseUrl}/cdk-blocks/auth/idp/${provider}/authorize?` + new URLSearchParams({
             response_type: 'code',
             client_id: STUB_CLIENT_ID,
             redirect_uri: callbackUri(baseUrl),
@@ -1518,7 +1517,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       }
 
       function exchangeCode(baseUrl: string, provider: string, code: string, verifier: string): Promise<Response> {
-        return fetch(`${baseUrl}/aws-blocks/auth/idp/${provider}/token`, {
+        return fetch(`${baseUrl}/cdk-blocks/auth/idp/${provider}/token`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({

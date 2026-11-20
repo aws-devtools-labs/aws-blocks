@@ -10,8 +10,8 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import type { AuthActionInput, AuthState, AuthStateApi } from '@aws-blocks/auth-common';
-import type { BlocksContext } from '@aws-blocks/core';
+import type { AuthActionInput, AuthState, AuthStateApi } from '@aws-cdk-blocks/auth-common';
+import type { BlocksContext } from '@aws-cdk-blocks/core';
 import { WRONG_CODE_MESSAGE } from './enumeration.js';
 import { AuthErrors } from './errors.js';
 import {
@@ -29,8 +29,8 @@ import {
 import { Browser, makeAuth, makeContext, sdkError } from './test-helpers.js';
 import type { AppSettingRef, SignInNextStep } from './types.js';
 
-beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
-afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
+beforeEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
+afterEach(() => rmSync('.cdk-blocks/local/data', { recursive: true, force: true }));
 
 const secret: AppSettingRef = { fullId: 's', get: async () => 's' };
 const delivery = { destination: 'a***@e***', deliveryMedium: 'EMAIL' as const, attributeName: 'email' };
@@ -266,14 +266,14 @@ describe('signedOut shapes', () => {
 				name: 'signIn:google',
 				label: 'Sign in with Google',
 				fields: [],
-				url: '/aws-blocks/auth/signin/google',
+				url: '/cdk-blocks/auth/signin/google',
 				method: 'GET',
 			},
 			{
 				name: 'signIn:my okta',
 				label: 'Okta SSO',
 				fields: [],
-				url: '/aws-blocks/auth/signin/my%20okta',
+				url: '/cdk-blocks/auth/signin/my%20okta',
 				method: 'GET',
 			},
 		]);
@@ -317,8 +317,8 @@ describe('signedOut shapes', () => {
 
 	test('a federated signed-in session gets a url-bearing POST signOut', () => {
 		const user = { userId: 'u', username: 'u' };
-		assert.deepStrictEqual(signedIn(user, { federatedSignOutUrl: '/aws-blocks/auth/signout' }).actions, [
-			{ name: 'signOut', label: 'Sign Out', fields: [], url: '/aws-blocks/auth/signout', method: 'POST' },
+		assert.deepStrictEqual(signedIn(user, { federatedSignOutUrl: '/cdk-blocks/auth/signout' }).actions, [
+			{ name: 'signOut', label: 'Sign Out', fields: [], url: '/cdk-blocks/auth/signout', method: 'POST' },
 		]);
 		assert.deepStrictEqual(names(signedIn(user, { passkeys: true })), [
 			'signOut',
@@ -440,7 +440,7 @@ describe('public names: data-testid contract and log redaction', () => {
 	});
 
 	test('core/src/redact.ts masks every secret-bearing field this state machine emits', async () => {
-		const redactUrl = new URL('./redact.js', import.meta.resolve('@aws-blocks/core'));
+		const redactUrl = new URL('./redact.js', import.meta.resolve('@aws-cdk-blocks/core'));
 		const { redactForLogging }: { redactForLogging: (v: unknown) => unknown } = await import(redactUrl.href);
 		const secretFields = ['password', 'newPassword', 'session', 'sharedSecret', 'otpauthUri', 'credential', 'code'];
 		const states = allStates.map((s) => JSON.stringify(redactForLogging(s)));
