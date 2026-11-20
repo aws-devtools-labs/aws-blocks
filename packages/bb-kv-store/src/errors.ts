@@ -29,7 +29,10 @@ import type { ReadValidationMode } from './types.js';
  * ```
  */
 export const KVStoreErrors = {
-	/** A condition on `put` or `delete` failed. Serializes to HTTP 409 (Conflict). */
+	/**
+	 * A condition on `put` or `delete` failed, or `increment` found no item where
+	 * it may only update one. Serializes to HTTP 409 (Conflict).
+	 */
 	ConditionalCheckFailed: 'ConditionalCheckFailedException',
 	/**
 	 * A value fails the schema, disagrees with its key, has a top-level field
@@ -39,7 +42,8 @@ export const KVStoreErrors = {
 	 * indexed field over DynamoDB's size limit (2,048 bytes for a partition key,
 	 * 1,024 bytes for a sort key), lists or maps nested more than 32 levels deep,
 	 * and a bad expiry (`ttlSeconds` together with `expiresAt`, or a time that is
-	 * not usable).
+	 * not usable). Also an `increment` of a stored field that does not hold a
+	 * number, or of a stored value that is not an object.
 	 */
 	ValidationFailed: 'ValidationFailedException',
 	/**
@@ -61,6 +65,9 @@ export const KVStoreErrors = {
 	 *   reads)
 	 * - an empty `ifFieldEquals`
 	 * - `ifValueEquals` with an object value
+	 * - an `increment` of a field that is not a number field of the store (a key
+	 *   field, a field with the reserved prefix `_bkv_`, or a field that the schema
+	 *   or an index types as something else), or a `by` that is not a safe integer
 	 * - a cursor that does not decode or belongs to another store, index, or
 	 *   partition
 	 *
@@ -205,6 +212,14 @@ export const KVStoreMessages = {
 		`a value cannot have a field named '${field}', at any depth: DynamoDB cannot store that field name`,
 	keyValueDisagree: (field: string) => `value field '${field}' does not equal the key`,
 	valueMustBeObject: 'a store with a declared key takes an object value',
+	incrementFieldInvalid: (received: string) =>
+		`increment() takes the name of a top-level field (received ${received})`,
+	incrementKeyField: (field: string) => `increment() cannot change key field '${field}'`,
+	incrementNotNumberField: (field: string) => `increment() needs a number field; '${field}' does not hold a number`,
+	incrementByInvalid: (received: string) => `increment() 'by' must be a safe integer (received ${received})`,
+	incrementStoredNotNumber: (field: string) =>
+		`the stored field '${field}' is not a number, so it cannot be incremented`,
+	incrementStoredNotObject: 'the stored value is not an object, so it has no field to increment',
 	limitInvalid: (received: string) => `limit must be a positive integer (received ${received})`,
 	cursorInvalid: 'cursor is not a cursor of this store',
 	cursorIndexMismatch: (expected: string | undefined, got: string | undefined) =>
@@ -255,7 +270,8 @@ export function normalizeSortKeyCondition<C extends Record<string, unknown>>(con
  * raised for an oversized item.
  *
  * DynamoDB raises a single `ValidationException` for many unrelated conditions,
- * so we match the size-specific message ("size has exceeded") before re-mapping.
+ * so we match the size-specific message ("size has exceeded", or "size to update
+ * has exceeded" for an `UpdateItem`) before re-mapping.
  * Other `ValidationException` causes (malformed expressions, type mismatches)
  * are left untouched and propagate unchanged. This matches the mock's
  * client-side size check, so both layers are catchable with
@@ -266,7 +282,11 @@ export function normalizeSortKeyCondition<C extends Record<string, unknown>>(con
  * so its stack and requestId remain available for debugging.
  */
 export function remapItemTooLarge(err: unknown): unknown {
-	if (err instanceof Error && err.name === 'ValidationException' && /size has exceeded/i.test(err.message)) {
+	if (
+		err instanceof Error &&
+		err.name === 'ValidationException' &&
+		/size (to update )?has exceeded/i.test(err.message)
+	) {
 		const remapped = new Error(
 			`${KVStoreErrors.ItemTooLarge}: Item size has exceeded the maximum allowed size of 400 KB`,
 			{ cause: err },

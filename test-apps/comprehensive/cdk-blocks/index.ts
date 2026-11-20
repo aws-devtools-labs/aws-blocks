@@ -1356,6 +1356,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
+  async kvObjIncrement(...args: Parameters<typeof objStore.increment>) {
+    return await objStore.increment(...args);
+  },
+
   // ------------------------------------------------------------------------
   // KVStore with schema validation
   // ------------------------------------------------------------------------
@@ -1400,6 +1404,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async tableDelete(...args: Parameters<typeof table.delete>) {
     await table.delete(...args);
     return { success: true };
+  },
+
+  async tableIncrement(...args: Parameters<typeof table.increment>) {
+    return await table.increment(...args);
   },
 
   async tableQuery(...args: Parameters<typeof table.query>) {

@@ -15,6 +15,7 @@ import {
 	PutCommand,
 	QueryCommand,
 	ScanCommand,
+	UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { blocksError, conditionalCheckFailed, KVStoreErrors, KVStoreMessages, remapItemTooLarge } from './errors.js';
 import {
@@ -24,6 +25,7 @@ import {
 	createReader,
 	decodeCursor,
 	deleteCondition,
+	incrementFailure,
 	type Item,
 	type KeyModel,
 	type KeyValue,
@@ -32,6 +34,7 @@ import {
 	MARSHALL_OPTIONS,
 	normalizeKey,
 	normalizeLimit,
+	planIncrement,
 	planQuery,
 	prepareItem,
 	presentOptions,
@@ -48,6 +51,8 @@ import type {
 	ExternalKmsKeyRef,
 	ExternalTableRef,
 	GetOptions,
+	IncrementField,
+	IncrementOptions,
 	IndexConfig,
 	KeyConfig,
 	KeyOf,
@@ -323,6 +328,91 @@ export class KVStore<
 				throw conditionalCheckFailed(condition.retriable, err);
 			}
 			throw err;
+		}
+	}
+
+	/**
+	 * Add a number to one field of a value, atomically, and return the new value
+	 * of the field. Concurrent calls never lose an update, so `increment` is the
+	 * way to keep a counter: a `get` followed by a `put` can lose the increments
+	 * of other callers in between.
+	 *
+	 * The field is a top-level number field of an object value, other than a
+	 * field of the declared key. An absent field counts as `0`. An indexed field
+	 * can be incremented when the index types it as a number, and the index then
+	 * reads the new value.
+	 *
+	 * When the key is absent, `increment` creates the item with the key fields and
+	 * the field alone (`by`), if the schema accepts that as a value. A store with
+	 * no schema always creates the item. When the schema needs more fields, or
+	 * with `{ ifExists: true }`, `increment` only updates an item that exists.
+	 *
+	 * The schema checks that the field holds a number. It does not validate the
+	 * whole value after the change, so a refinement such as a maximum is not
+	 * enforced: a read reconciles the value with the schema (`readValidation`).
+	 * The expiry of the item stays as it is. An item whose expiry has passed is
+	 * updated where it is stored, and reads still hide it.
+	 *
+	 * @param key - The key of the item.
+	 * @param field - The number field to change.
+	 * @param options - `by` (default `1`, a safe integer, negative to subtract)
+	 *   and `ifExists`.
+	 * @returns The value of the field after the change.
+	 * @throws {KVStoreErrors.InvalidQuery} If the key has the wrong shape, the field
+	 *   is a key field, starts with `_bkv_`, is named `__proto__`, or does not hold
+	 *   a number in the schema or in an index, or if `by` is not a safe integer.
+	 * @throws {KVStoreErrors.ValidationFailed} If the stored field is not a number,
+	 *   or the stored value is not an object.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If the key is absent and the
+	 *   item may not be created (`ifExists`, or a schema that needs more fields).
+	 *   Serializes to HTTP 409 (Conflict). Not retriable.
+	 * @throws {KVStoreErrors.ItemTooLarge} If the item would exceed the 400 KB
+	 *   DynamoDB per-item size limit.
+	 *
+	 * @example
+	 * ```typescript
+	 * const views = new KVStore<{ count: number }>(scope, 'views');
+	 * const count = await views.increment('page:home', 'count'); // 1, then 2, ...
+	 *
+	 * // Subtract from a field of a record that exists.
+	 * await stock.increment({ sku: 'A-1' }, 'available', { by: -1, ifExists: true });
+	 * ```
+	 */
+	async increment(
+		key: KeyOf<Out, K>,
+		field: IncrementField<In, Out, K>,
+		options?: IncrementOptions,
+	): Promise<number> {
+		// One UpdateItem with ADD: DynamoDB applies it atomically. The checks and the
+		// expressions come from item.ts, shared with the mock.
+		const plan = await planIncrement(this.model, key, field, presentOptions(options));
+		try {
+			const result = await this.docClient.send(
+				new UpdateCommand({
+					TableName: getSdkIdentifiers(this).tableName,
+					Key: plan.keyAttrs,
+					...plan.expression,
+					ReturnValues: 'UPDATED_NEW',
+					ReturnValuesOnConditionCheckFailure: 'ALL_OLD',
+				}),
+			);
+			return result.Attributes?.[plan.field] as number;
+		} catch (err: unknown) {
+			// The condition failed. The item that DynamoDB returns with the failure
+			// tells which check: no item (it must exist), a stored value that is not
+			// an object, or a stored field that is not a number. The mock names the
+			// same cause for the same item. The document client does not unmarshall
+			// the item of an error, so its attributes are raw (`{ S: 'x' }`): a field
+			// that is not a plain number reads as a field that is not a number, which
+			// is the only way the field arm of the condition fails.
+			if (err instanceof Error && err.name === KVStoreErrors.ConditionalCheckFailed) {
+				const stored = (err as { Item?: Item }).Item;
+				throw (
+					incrementFailure(plan, stored, err) ??
+					blocksError(KVStoreErrors.ValidationFailed, KVStoreMessages.incrementStoredNotNumber(plan.field))
+				);
+			}
+			throw remapItemTooLarge(err);
 		}
 	}
 

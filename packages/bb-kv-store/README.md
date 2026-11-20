@@ -63,6 +63,7 @@ const store = new KVStore(scope, id, options?)
 | `get(key, options?)` | `Promise<T \| null>` | Read one value. Returns `null` if the key is absent or expired. A consistent read by default. |
 | `put(key, value, options?)` | `Promise<void>` | Store a value. Replaces the old value unless you set a condition. Takes an optional expiry. |
 | `delete(key, options?)` | `Promise<void>` | Remove a value. Takes an optional condition. |
+| `increment(key, field, options?)` | `Promise<number>` | Add to a number field atomically, and return the new value. See [Counters](#counters). |
 | `query(options)` | `Results` | Read the items of one partition, or of one index partition, in sort order. |
 | `scan(options?)` | `Results` | Read every item. The cost grows with the size of the table. |
 | `getBatch(keys)` | `Promise<(T \| null)[]>` | Read many values by key. |
@@ -100,7 +101,7 @@ Match an error by name with `isBlocksError`. See the catch in [Rewrite a store o
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
-| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | A condition on `put` or `delete` failed. Status 409 in the JSON-RPC error. The HTTP status is also 409 when the namespace sets `httpErrorStatus: true`. |
+| `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | A condition on `put` or `delete` failed, or `increment` found no item where it may only update one. Status 409 in the JSON-RPC error. The HTTP status is also 409 when the namespace sets `httpErrorStatus: true`. |
 | `KVStoreErrors.ValidationFailed` | `ValidationFailedException` | A value or an expiry is not valid. The causes are listed below. |
 | `KVStoreErrors.InvalidQuery` | `InvalidQueryException` | The call has the wrong shape. The causes are listed below. |
 | `KVStoreErrors.ItemTooLarge` | `ItemTooLargeException` | An item is larger than 400 KB. |
@@ -115,7 +116,7 @@ Match an error by name with `isBlocksError`. See the catch in [Rewrite a store o
 - has a key or indexed field over DynamoDB's size limit (2,048 bytes for a partition key, 1,024 for a sort key)
 - nests lists or maps more than 32 levels deep
 
-It is also thrown for a bad expiry.
+It is also thrown for a bad expiry, and for an `increment` of a stored field that is not a number or of a stored value that is not an object.
 
 `InvalidQueryException` is thrown for:
 
@@ -131,6 +132,7 @@ It is also thrown for a bad expiry.
 - `ifValueEquals` with an object
 - an empty `ifFieldEquals`
 - a batch that repeats a key within one DynamoDB request (25 writes or 100 reads)
+- an `increment` of a field that is not a number field of the store, or with a `by` that is not a safe integer
 
 ## Keys
 
@@ -272,33 +274,29 @@ A conditional write is atomic for its item, on AWS and in the local mock. No oth
 
 There is no transaction across items. A batch call is not atomic on AWS. After a `BatchIncompleteException`, the entries that DynamoDB processed stay written. For a transaction, use `transaction()` on [`Database`](../bb-database/README.md#transactions).
 
-There is no atomic increment. For a shared counter, read its value and write the increment only if the value has not changed. Give the counter no expiry: `get()` hides expired items that write conditions still see.
+## Counters
+
+`increment` adds a number to one field of a value, atomically, and returns the new value of the field. Concurrent calls never lose an update. Use it for a counter, in place of a `get` followed by a `put`, which loses the increments that other requests make in between.
 
 ```typescript
-import { isBlocksError, KVStoreErrors } from 'aws-cdk-blocks';
+const views = new KVStore<{ count: number }>(scope, 'views');
+await views.increment('page:home', 'count'); // 1: the item did not exist
+await views.increment('page:home', 'count', { by: 5 }); // 6
+await views.increment('page:home', 'count', { by: -1 }); // 5
 
-const counters = new KVStore<number>(scope, 'counters');
-
-async function increment(name: string): Promise<number> {
-	for (let attempt = 0; attempt < 10; attempt++) {
-		const current = await counters.get(name);
-		const next = (current ?? 0) + 1;
-		try {
-			await counters.put(name, next, current === null ? { ifNotExists: true } : { ifValueEquals: current });
-			return next;
-		} catch (e: unknown) {
-			if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
-		}
-	}
-	throw new Error(`Could not increment ${name} after 10 attempts`);
-}
-
-await increment('visits');
+// Bump the version of a record that exists.
+await todos.increment({ userId: 'alice', todoId: '001' }, 'version');
+// await todos.increment({ userId: 'alice', todoId: '001' }, 'title');   compile error: 'title' is not a number field
 ```
 
-If another writer creates the counter first, the failed create has `retriable: false`. The loop does not repeat that `put()`: it reads the new value and computes a new increment.
+- The field is a top-level number field of an object value, and not a field of the key. An absent field counts as `0`. An indexed field can be incremented when the index holds a number in it.
+- `by` is a safe integer, and defaults to `1`. A negative `by` subtracts.
+- When the key is absent, `increment` creates the item with the key and the field alone, if the schema accepts that as a value. A store with no schema always creates it. When the schema needs more fields, as for `todos`, or with `{ ifExists: true }`, `increment` only updates an item that exists. For an absent key it throws `ConditionalCheckFailedException` with status 409, which is not retriable.
+- A stored field that is not a number, or a stored value that is not an object, throws `ValidationFailedException` and changes nothing.
+- The schema decides that the field holds a number. It does not validate the value after the change, so a refinement such as a maximum is not enforced. A read reconciles the value with the schema, as described in [Reads and schema changes](#reads-and-schema-changes).
+- The expiry of the item stays as it is. An item whose expiry has passed is updated where it is stored, and reads still hide it.
 
-Alternatively, write one item per event in a store with a `key` such as `{ partitionKey: 'counterId', sortKey: 'eventId' }`. To get the total, use `query()` on the counter's partition and count the items. Each total reads every event for that counter and is eventually consistent on AWS.
+On AWS, each call is one DynamoDB `UpdateItem` with `ADD` and a condition expression. The local mock reads, checks, and writes the item with no `await` in between, so no other request runs between them.
 
 ## Read consistency
 

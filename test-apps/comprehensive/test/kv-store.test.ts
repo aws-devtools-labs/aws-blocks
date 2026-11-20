@@ -369,6 +369,29 @@ export function kvStoreTests(getApi: () => typeof apiType) {
         await api.kvObjDelete(key);
       });
 
+      test('object - increment adds to a number field and keeps the other fields', async () => {
+        const api = getApi();
+        const key = `kvo-inc-${Date.now().toString(36)}`;
+        await api.kvObjPut(key, { name: 'Alice', age: 30, tags: ['admin'] });
+        const results = await Promise.all(Array.from({ length: 10 }, () => api.kvObjIncrement(key, 'age')));
+        assert.deepStrictEqual([...results].sort((a, b) => a - b), Array.from({ length: 10 }, (_, i) => 31 + i));
+        assert.deepStrictEqual(await api.kvObjGet(key), { name: 'Alice', age: 40, tags: ['admin'] });
+        await api.kvObjDelete(key);
+      });
+
+      test('object - increment creates an absent item unless ifExists is set', async () => {
+        const api = getApi();
+        const key = `kvo-inc-new-${Date.now().toString(36)}`;
+        try {
+          await api.kvObjIncrement(key, 'age', { ifExists: true });
+          assert.fail('Expected error');
+        } catch (e) { assertConditionalCheckFailed(e); }
+        assert.strictEqual(await api.kvObjGet(key), null);
+        assert.strictEqual(await api.kvObjIncrement(key, 'age', { by: 3 }), 3);
+        assert.strictEqual((await api.kvObjGet(key))?.age, 3);
+        await api.kvObjDelete(key);
+      });
+
       test('object - overwrite replaces entire object', async () => {
         const api = getApi();
         const key = `kvo-${Date.now().toString(36)}`;

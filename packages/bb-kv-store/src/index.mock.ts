@@ -17,6 +17,7 @@ import {
 	createReader,
 	decodeCursor,
 	deleteCondition,
+	incrementFailure,
 	type Item,
 	type KeyModel,
 	type KeyValue,
@@ -25,6 +26,7 @@ import {
 	normalizeKey,
 	normalizeLimit,
 	orderedResults,
+	planIncrement,
 	planQuery,
 	prepareItem,
 	presentOptions,
@@ -44,6 +46,8 @@ import type {
 	ExternalKmsKeyRef,
 	ExternalTableRef,
 	GetOptions,
+	IncrementField,
+	IncrementOptions,
 	IndexConfig,
 	KeyConfig,
 	KeyOf,
@@ -300,6 +304,76 @@ export class KVStore<
 		}
 		this.data.delete(keyStr);
 		this.flushToDisk();
+	}
+
+	/**
+	 * Add a number to one field of a value, atomically, and return the new value
+	 * of the field. Concurrent calls never lose an update, so `increment` is the
+	 * way to keep a counter: a `get` followed by a `put` can lose the increments
+	 * of other callers in between.
+	 *
+	 * The field is a top-level number field of an object value, other than a
+	 * field of the declared key. An absent field counts as `0`. An indexed field
+	 * can be incremented when the index types it as a number, and the index then
+	 * reads the new value.
+	 *
+	 * When the key is absent, `increment` creates the item with the key fields and
+	 * the field alone (`by`), if the schema accepts that as a value. A store with
+	 * no schema always creates the item. When the schema needs more fields, or
+	 * with `{ ifExists: true }`, `increment` only updates an item that exists.
+	 *
+	 * The schema checks that the field holds a number. It does not validate the
+	 * whole value after the change, so a refinement such as a maximum is not
+	 * enforced: a read reconciles the value with the schema (`readValidation`).
+	 * The expiry of the item stays as it is. An item whose expiry has passed is
+	 * updated where it is stored, and reads still hide it.
+	 *
+	 * @param key - The key of the item.
+	 * @param field - The number field to change.
+	 * @param options - `by` (default `1`, a safe integer, negative to subtract)
+	 *   and `ifExists`.
+	 * @returns The value of the field after the change.
+	 * @throws {KVStoreErrors.InvalidQuery} If the key has the wrong shape, the field
+	 *   is a key field, starts with `_bkv_`, is named `__proto__`, or does not hold
+	 *   a number in the schema or in an index, or if `by` is not a safe integer.
+	 * @throws {KVStoreErrors.ValidationFailed} If the stored field is not a number,
+	 *   or the stored value is not an object.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If the key is absent and the
+	 *   item may not be created (`ifExists`, or a schema that needs more fields).
+	 *   Serializes to HTTP 409 (Conflict). Not retriable.
+	 * @throws {KVStoreErrors.ItemTooLarge} If the item would exceed 400 KB.
+	 *
+	 * @example
+	 * ```typescript
+	 * const views = new KVStore<{ count: number }>(scope, 'views');
+	 * const count = await views.increment('page:home', 'count'); // 1, then 2, ...
+	 *
+	 * // Subtract from a field of a record that exists.
+	 * await stock.increment({ sku: 'A-1' }, 'available', { by: -1, ifExists: true });
+	 * ```
+	 */
+	async increment(
+		key: KeyOf<Out, K>,
+		field: IncrementField<In, Out, K>,
+		options?: IncrementOptions,
+	): Promise<number> {
+		const plan = await planIncrement(this.model, key, field, presentOptions(options));
+		// No await from here on: the read, the check and the write are one step, so
+		// concurrent calls in this process cannot interleave and lose an update.
+		const keyStr = serializeKey(this.model, plan.keyAttrs);
+		const existing = this.data.get(keyStr);
+		const failure = incrementFailure(plan, existing);
+		if (failure) throw failure;
+		const current = existing?.[plan.field];
+		const value = (typeof current === 'number' ? current : 0) + plan.by;
+		const item: Item = { ...(existing ?? plan.keyAttrs), [plan.field]: value };
+		const bytes = Buffer.byteLength(JSON.stringify(item), 'utf8');
+		if (bytes > MAX_ITEM_BYTES) {
+			throw blocksError(KVStoreErrors.ItemTooLarge, KVStoreMessages.itemTooLarge(bytes));
+		}
+		this.data.set(keyStr, item);
+		this.flushToDisk();
+		return value;
 	}
 
 	/**

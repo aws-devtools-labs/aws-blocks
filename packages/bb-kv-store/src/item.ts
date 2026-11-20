@@ -20,6 +20,7 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 import {
 	applyReadValidation,
 	blocksError,
+	conditionalCheckFailed,
 	isPlainObject,
 	KVStoreErrors,
 	KVStoreMessages,
@@ -765,6 +766,149 @@ export function valueCheckHolds(check: Exclude<ValueCheckPlan, undefined>, exist
 	if (check.kind === 'value')
 		return VALUE_ATTRIBUTE in existing && deepEqual(existing[VALUE_ATTRIBUTE], check.expected);
 	return check.entries.every(([field, value]) => deepEqual(existing[field], value));
+}
+
+// ── Increment ───────────────────────────────────────────────────────────────
+
+/** The options of an `increment`, as the shared helpers read them. */
+interface LooseIncrementOptions {
+	by?: unknown;
+	ifExists?: boolean;
+}
+
+/** One `increment` call, checked and resolved: what the mock applies and what AWS sends. */
+export interface IncrementPlan {
+	/** The key attributes of the item. */
+	keyAttrs: Record<string, KeyValue>;
+	/** The field to change. */
+	field: string;
+	/** The amount to add. */
+	by: number;
+	/**
+	 * Whether the item must exist already. True for `ifExists`, and for a store
+	 * whose schema refuses the key fields and the field alone as a value: an
+	 * `increment` creates no item that a `put` would refuse.
+	 */
+	mustExist: boolean;
+	/** The `UpdateItem` expressions that the AWS runtime sends. */
+	expression: {
+		UpdateExpression: string;
+		ConditionExpression: string;
+		ExpressionAttributeNames: Record<string, string>;
+		ExpressionAttributeValues: Record<string, unknown>;
+	};
+}
+
+/**
+ * Whether `field` can hold a number: an index field when the index types it as a
+ * number ({@link keyType}), any other field when the schema accepts a number in
+ * it (the samples of {@link probeKeyType}). A store with no schema can hold a
+ * number in any field that no index names.
+ */
+function holdsNumber(model: KeyModel, field: string): boolean {
+	if (Object.values(model.indexes).some((index) => keyFields(index).includes(field))) {
+		return keyType(model, field) === 'N';
+	}
+	const schema = model.schema;
+	return !schema || NUMBER_SAMPLES.some((sample) => schemaAccepts(schema, field, sample) !== false);
+}
+
+/** Whether the schema of the store (if any) accepts `value`. */
+async function schemaAcceptsValue(model: KeyModel, value: unknown): Promise<boolean> {
+	if (!model.schema) return true;
+	const result = await model.schema['~standard'].validate(value);
+	return !result.issues;
+}
+
+/**
+ * Check an `increment` call and resolve it, the same way in both runtimes. The
+ * steps are the key check, the field check, the `by` check, and then whether
+ * the call may create the item.
+ *
+ * The `UpdateItem` adds `by` to the field (`ADD`), under a condition that holds
+ * when the field is absent or holds a number, and (on a store with no declared
+ * key) when the stored value is an object. For `mustExist`, the condition also
+ * requires the item.
+ *
+ * @throws {KVStoreErrors.InvalidQuery} If the key has the wrong shape, the field
+ *   is not a number field of the store, or `by` is not a safe integer.
+ * @throws {KVStoreErrors.ValidationFailed} If a key field is an empty string.
+ */
+export async function planIncrement(
+	model: KeyModel,
+	key: unknown,
+	field: unknown,
+	options: LooseIncrementOptions | undefined,
+): Promise<IncrementPlan> {
+	const keyAttrs = normalizeKey(model, key);
+	if (typeof field !== 'string' || field === '') {
+		const received = typeof field === 'string' ? 'an empty string' : describe(field);
+		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.incrementFieldInvalid(received));
+	}
+	if (keyFields(model.table).includes(field)) {
+		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.incrementKeyField(field));
+	}
+	if (field.startsWith(RESERVED_PREFIX)) {
+		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.reservedField(field));
+	}
+	if (field === UNSTORABLE_FIELD) {
+		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.unstorableField(UNSTORABLE_FIELD));
+	}
+	if (!holdsNumber(model, field)) {
+		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.incrementNotNumberField(field));
+	}
+	const by = options?.by ?? 1;
+	if (typeof by !== 'number' || !Number.isSafeInteger(by)) {
+		const received = typeof by === 'number' ? String(by) : describe(by);
+		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.incrementByInvalid(received));
+	}
+	const mustExist =
+		options?.ifExists === true ||
+		!(await schemaAcceptsValue(model, mergeKeyIntoValue(model, keyAttrs, { [field]: by })));
+
+	const names: Record<string, string> = { '#field': field };
+	const arms = ['(attribute_not_exists(#field) OR attribute_type(#field, :number))'];
+	if (!model.declared) {
+		names['#value'] = VALUE_ATTRIBUTE;
+		arms.push('attribute_not_exists(#value)');
+	}
+	if (mustExist) {
+		names['#pk'] = model.table.partitionKey;
+		arms.unshift('attribute_exists(#pk)');
+	}
+	return {
+		keyAttrs,
+		field,
+		by,
+		mustExist,
+		expression: {
+			UpdateExpression: 'ADD #field :by',
+			ConditionExpression: arms.join(' AND '),
+			ExpressionAttributeNames: names,
+			ExpressionAttributeValues: { ':by': by, ':number': 'N' },
+		},
+	};
+}
+
+/**
+ * The error for an `increment` whose condition does not hold on the item that
+ * is stored (`undefined` when there is none). The mock calls this on its own
+ * item. The AWS runtime calls it on the item that DynamoDB returns with a
+ * failed condition (`ReturnValuesOnConditionCheckFailure: 'ALL_OLD'`), so the
+ * two name the same cause.
+ *
+ * @returns `undefined` when the condition holds.
+ */
+export function incrementFailure(plan: IncrementPlan, existing: Item | undefined, cause?: unknown): Error | undefined {
+	if (existing === undefined) return plan.mustExist ? conditionalCheckFailed(false, cause) : undefined;
+	if (VALUE_ATTRIBUTE in existing) {
+		return blocksError(KVStoreErrors.ValidationFailed, KVStoreMessages.incrementStoredNotObject);
+	}
+	const current = existing[plan.field];
+	if (current !== undefined && typeof current !== 'number') {
+		return blocksError(KVStoreErrors.ValidationFailed, KVStoreMessages.incrementStoredNotNumber(plan.field));
+	}
+	return undefined;
 }
 
 // ── Query ───────────────────────────────────────────────────────────────────

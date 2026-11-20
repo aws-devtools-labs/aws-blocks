@@ -1100,3 +1100,192 @@ describe('the mock measures item size the way DynamoDB does', () => {
 		await store.put({ id: '1' }, { blob: 'x'.repeat(409_600 - 7 - 7), note: undefined, meta: { tag: undefined } });
 	});
 });
+
+// ── Increment ───────────────────────────────────────────────────────────────
+
+describe('increment', () => {
+	const counters = { schema: z.object({ id: z.string(), count: z.number() }), key: { partitionKey: 'id' } };
+	const orders = {
+		schema: z.object({ id: z.string(), title: z.string(), stock: z.number().int(), score: z.number().optional() }),
+		key: { partitionKey: 'id' },
+		indexes: { byScore: { partitionKey: 'title', sortKey: 'score' } },
+	};
+
+	test('AWS sends one UpdateItem with ADD under the field-type condition, and returns the new value', async () => {
+		const { store, input } = awsStore('kv', undefined, () => ({ Attributes: { count: 6 } }));
+		assert.equal(await store.increment('views', 'count', { by: 5 }), 6);
+		assert.deepEqual(input(), {
+			Key: { _bkv_pk: 'views' },
+			UpdateExpression: 'ADD #field :by',
+			ConditionExpression:
+				'(attribute_not_exists(#field) OR attribute_type(#field, :number)) AND attribute_not_exists(#value)',
+			ExpressionAttributeNames: { '#field': 'count', '#value': '_bkv_value' },
+			ExpressionAttributeValues: { ':by': 5, ':number': 'N' },
+			ReturnValues: 'UPDATED_NEW',
+			ReturnValuesOnConditionCheckFailure: 'ALL_OLD',
+		});
+	});
+
+	test('a declared key sends its key, and no _bkv_value check; by defaults to 1', async () => {
+		const { store, input } = awsStore('c', counters, () => ({ Attributes: { count: 1 } }));
+		assert.equal(await store.increment({ id: 'a' }, 'count'), 1);
+		assert.deepEqual(input(), {
+			Key: { id: 'a' },
+			UpdateExpression: 'ADD #field :by',
+			ConditionExpression: '(attribute_not_exists(#field) OR attribute_type(#field, :number))',
+			ExpressionAttributeNames: { '#field': 'count' },
+			ExpressionAttributeValues: { ':by': 1, ':number': 'N' },
+			ReturnValues: 'UPDATED_NEW',
+			ReturnValuesOnConditionCheckFailure: 'ALL_OLD',
+		});
+	});
+
+	test('ifExists, or a schema that needs more fields, requires the item on AWS', async () => {
+		const plain = awsStore('kv', undefined, () => ({ Attributes: { count: 1 } }));
+		await plain.store.increment('views', 'count', { ifExists: true });
+		assert.match(plain.input().ConditionExpression, /^attribute_exists\(#pk\) AND /);
+		assert.equal(plain.input().ExpressionAttributeNames['#pk'], '_bkv_pk');
+
+		const typed = awsStore('o', orders, () => ({ Attributes: { stock: 4 } }));
+		await typed.store.increment({ id: 'a' }, 'stock', { by: -1 });
+		assert.match(typed.input().ConditionExpression, /^attribute_exists\(#pk\) AND /);
+		assert.equal(typed.input().ExpressionAttributeNames['#pk'], 'id');
+
+		const creatable = awsStore('c', counters, () => ({ Attributes: { count: 1 } }));
+		await creatable.store.increment({ id: 'a' }, 'count');
+		assert.doesNotMatch(creatable.input().ConditionExpression, /attribute_exists\(#pk\)/);
+	});
+
+	test('the mock creates an absent item, adds to it, and keeps its other fields', async () => {
+		const views = mockStore('kv');
+		assert.equal(await views.increment('views', 'count'), 1);
+		assert.equal(await views.increment('views', 'count', { by: 5 }), 6);
+		assert.equal(await views.increment('views', 'count', { by: -2 }), 4);
+		assert.deepEqual(await views.get('views'), { count: 4 });
+
+		await views.put('page', { title: 'Home', count: 10 });
+		assert.equal(await views.increment('page', 'count'), 11);
+		assert.equal(await views.increment('page', 'other'), 1);
+		assert.deepEqual(await views.get('page'), { title: 'Home', count: 11, other: 1 });
+
+		const typed = mockStore('c', counters);
+		assert.equal(await typed.increment({ id: 'a' }, 'count', { by: 3 }), 3);
+		assert.deepEqual(await typed.get({ id: 'a' }), { id: 'a', count: 3 });
+	});
+
+	test('concurrent increments on the mock lose no update, and survive a reload', async () => {
+		const scope = testScope();
+		const store = new KVStore<{ count: number }>(scope, 'kv');
+		const results = await Promise.all(Array.from({ length: 50 }, () => store.increment('hits', 'count')));
+		assert.deepEqual(
+			[...results].sort((a, b) => a - b),
+			Array.from({ length: 50 }, (_, i) => i + 1),
+		);
+		assert.deepEqual(await new KVStore<{ count: number }>(scope, 'kv').get('hits'), { count: 50 });
+	});
+
+	test('an indexed number field can be incremented, and the index reads the new value', async () => {
+		const store = mockStore('o', orders);
+		await store.put({ id: 'a' }, { title: 't', stock: 1, score: 10 });
+		assert.equal(await store.increment({ id: 'a' }, 'score', { by: 5 }), 15);
+		const [entry] = await Array.fromAsync(
+			store.query({ index: 'byScore', where: { title: { equals: 't' }, score: { equals: 15 } } }),
+		);
+		assert.deepEqual((entry as any).value, { id: 'a', title: 't', stock: 1, score: 15 });
+	});
+
+	test('both runtimes reject a bad field or by with the same error and message, before any call', async () => {
+		const cases: [options: any, call: (s: any) => Promise<unknown>][] = [
+			[orders, (s) => s.increment({ id: 'a' }, 'id')],
+			[orders, (s) => s.increment({ id: 'a' }, 'title')],
+			[orders, (s) => s.increment({ id: 'a' }, '_bkv_ttl')],
+			[orders, (s) => s.increment({ id: 'a' }, '__proto__')],
+			[orders, (s) => s.increment({ id: 'a' }, '')],
+			[orders, (s) => s.increment({ id: 'a' }, 7)],
+			[orders, (s) => s.increment({ id: 'a' }, 'stock', { by: 1.5 })],
+			[orders, (s) => s.increment({ id: 'a' }, 'stock', { by: Number.NaN })],
+			[orders, (s) => s.increment({ id: 'a' }, 'stock', { by: Number.POSITIVE_INFINITY })],
+			[orders, (s) => s.increment({ id: 'a' }, 'stock', { by: '1' })],
+			[orders, (s) => s.increment({ id: 'a' }, 'stock', { by: 2 ** 53 })],
+			[orders, (s) => s.increment('a', 'stock')],
+			[undefined, (s) => s.increment({ id: 'a' }, 'count')],
+			[{ ...orders, indexes: { byTitle: { partitionKey: 'title' } } }, (s) => s.increment({ id: 'a' }, 'title')],
+		];
+		for (const [options, call] of cases) {
+			const aws = awsStore('t', options);
+			const messages: string[] = [];
+			for (const s of [mockStore('t', options), aws.store]) {
+				messages.push((await rejects(call(s), KVStoreErrors.InvalidQuery)).message);
+			}
+			assert.equal(messages[0], messages[1]);
+			assert.equal(aws.sent.length, 0, `${messages[0]}: no DynamoDB call`);
+		}
+	});
+
+	test('a null by counts as absent, and an empty key field is a ValidationFailed', async () => {
+		const aws = awsStore('kv', undefined, () => ({ Attributes: { count: 1 } }));
+		await aws.store.increment('views', 'count', { by: null, ifExists: null });
+		assert.equal(aws.input().ExpressionAttributeValues[':by'], 1);
+		assert.equal(await mockStore('kv').increment('views', 'count', { by: null }), 1);
+		for (const s of [mockStore('kv'), awsStore('kv').store]) {
+			await rejects(s.increment('', 'count'), KVStoreErrors.ValidationFailed);
+		}
+	});
+
+	test('an absent item that may not be created is a 409 that is not retriable, on both', async () => {
+		const aws = awsStore('o', orders, () => ddbError('ConditionalCheckFailedException'));
+		for (const [s, call] of [
+			[mockStore('o', orders), (x: any) => x.increment({ id: 'a' }, 'stock')],
+			[aws.store, (x: any) => x.increment({ id: 'a' }, 'stock')],
+			[mockStore('kv'), (x: any) => x.increment('a', 'count', { ifExists: true })],
+		] as const) {
+			const e = await rejects(call(s), KVStoreErrors.ConditionalCheckFailed);
+			assert.ok(e instanceof ApiError);
+			assert.equal(e.status, 409);
+			assert.equal(e.retriable, false);
+		}
+		assert.equal(await mockStore('o', orders).get({ id: 'a' }), null);
+	});
+
+	test('a stored field that is not a number, or a stored value that is not an object, fails the same way on both', async () => {
+		const failWith = (item: Record<string, unknown>) => () => {
+			const e: any = ddbError('ConditionalCheckFailedException');
+			e.Item = item;
+			return e;
+		};
+		const mock = mockStore('kv');
+		await mock.put('text', { count: 'x' });
+		await mock.put('scalar', 'hello');
+		const pairs: [Promise<unknown>, Promise<unknown>][] = [
+			[
+				mock.increment('text', 'count'),
+				awsStore('kv', undefined, failWith({ _bkv_pk: { S: 'text' }, count: { S: 'x' } })).store.increment(
+					'text',
+					'count',
+				),
+			],
+			[
+				mock.increment('scalar', 'count'),
+				awsStore(
+					'kv',
+					undefined,
+					failWith({ _bkv_pk: { S: 'scalar' }, _bkv_value: { S: 'hello' } }),
+				).store.increment('scalar', 'count'),
+			],
+		];
+		for (const [fromMock, fromAws] of pairs) {
+			const a = await rejects(fromMock, KVStoreErrors.ValidationFailed);
+			const b = await rejects(fromAws, KVStoreErrors.ValidationFailed);
+			assert.equal(a.message, b.message);
+		}
+		assert.deepEqual(await mock.get('text'), { count: 'x' });
+		assert.equal(await mock.get('scalar'), 'hello');
+	});
+
+	test("AWS re-maps an UpdateItem's oversized ValidationException to ItemTooLarge", async () => {
+		const { store } = awsStore('kv', undefined, () =>
+			ddbError('ValidationException', 'Item size to update has exceeded the maximum allowed size'),
+		);
+		await rejects(store.increment('a', 'count'), KVStoreErrors.ItemTooLarge);
+	});
+});
