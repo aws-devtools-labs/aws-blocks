@@ -62,12 +62,16 @@ export function getSdkIdentifiers(bb: Auth<any>): {
 	hostedUiClientId?: string;
 };
 // `Database` always registers the cluster it runs on and its schema. The endpoint and region exist
-// only in Lambda: the local build runs on PGlite and has neither.
+// only in Lambda: the local build runs on PGlite and has neither. `roleName` is the PostgreSQL role the
+// block connects as on a cluster it provisions (`blocks_app_{cluster}` on AWS, `blocks_app_local` locally);
+// a block on `DatabaseCluster.fromExisting()` or a `LegacyDatabaseCluster` connects as the role of its
+// connection and has none. A migration names that role with `${app_role}`.
 export function getSdkIdentifiers(bb: Database): {
 	clusterId: string;
 	schemaName: string;
 	clusterEndpoint?: string;
 	region?: string;
+	roleName?: string;
 };
 export function getSdkIdentifiers(bb: DatabaseCluster): { clusterEndpoint: string; region?: string };
 export function getSdkIdentifiers(bb: KnowledgeBase): { kbId: string };

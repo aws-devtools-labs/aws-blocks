@@ -4,6 +4,7 @@
 import { createHash } from 'node:crypto';
 import { blocksError } from '@aws-cdk-blocks/core';
 import { splitStatements } from '../common/split-statements.js';
+import { APP_ROLE_PLACEHOLDER, quoteIdent } from '../constants.js';
 import { type AsyncDdlTarget, asyncDdlTarget } from '../dialect/async-ddl.js';
 import { ASYNC_DDL, findStatementIssues, inspectStatement, stripLiteralsAndComments } from '../dialect/validation.js';
 import { MIGRATION_VALIDATION_ERROR_NAME } from '../errors.js';
@@ -32,6 +33,23 @@ export interface FilePlan {
 	/** SHA-256 (hex) of the file text; the runner stores it with partial progress to detect a later edit. */
 	hash: string;
 	steps: PlanStep[];
+}
+
+// What the checks see in place of the placeholder: a quoted identifier, valid wherever a role name is.
+const APP_ROLE_STAND_IN = '"blocks_app_role"';
+
+/**
+ * `sql` with every {@link APP_ROLE_PLACEHOLDER} replaced by `appRole`, the role's SQL text (a quoted identifier).
+ * The replacement is a function, so a `$` in the role's name is text and not a replacement pattern (`$$`, `$&`).
+ */
+function withAppRole(sql: string, appRole: string): string {
+	return sql.replaceAll(APP_ROLE_PLACEHOLDER, () => appRole);
+}
+
+/** The quoted name of the role the engine's statements run as: the role of an existing database's connection. */
+export async function connectionRole(engine: { query<T>(sql: string): Promise<T[]> }): Promise<string> {
+	const [row] = await engine.query<{ name: string }>('SELECT current_user AS name');
+	return quoteIdent(row.name);
 }
 
 export interface MigrationPlan {
@@ -119,12 +137,13 @@ export function lintMigrationFiles(migrations: Record<string, string>, kind: Clu
 	if (kind === 'external') return;
 	const errors: string[] = [];
 	for (const file of Object.keys(migrations).sort()) {
+		const text = withAppRole(migrations[file], APP_ROLE_STAND_IN);
 		if (kind === 'dsql') {
-			for (const issue of findStatementIssues(migrations[file])) {
+			for (const issue of findStatementIssues(text)) {
 				errors.push(`${file}: ${issue.message} Checked against ${issue.doc}`);
 			}
 		} else {
-			for (const message of auroraIssues(migrations[file])) errors.push(`${file}: ${message}`);
+			for (const message of auroraIssues(text)) errors.push(`${file}: ${message}`);
 		}
 	}
 	if (errors.length > 0) {
@@ -143,15 +162,26 @@ const transactionalStatement = (sql: string): PlanStep[] => [{ kind: 'statement'
 /**
  * The steps of each file for a cluster of `kind`: on `dsql`, DDL alone per transaction with a wait after each
  * `ASYNC` statement; on `aurora`, every statement of a file in one transaction.
+ *
+ * With `appRole` (the role's SQL text, a quoted identifier), every {@link APP_ROLE_PLACEHOLDER} in the steps is
+ * replaced by it. The hash is of the file as written, so it is the same in every place the file runs.
  */
-export function buildMigrationPlan(migrations: Record<string, string>, kind: ClusterKind): MigrationPlan {
+export function buildMigrationPlan(
+	migrations: Record<string, string>,
+	kind: ClusterKind,
+	appRole?: string,
+): MigrationPlan {
 	const sequence = kind === 'dsql' ? sequenceStatement : transactionalStatement;
 	const files: FilePlan[] = Object.keys(migrations)
 		.sort()
 		.map((file) => ({
 			file,
 			hash: createHash('sha256').update(migrations[file]).digest('hex'),
-			steps: splitStatements(migrations[file]).flatMap(sequence),
+			// The file is split first: the splitter does not read quoted identifiers, so a `'` or a `;` in the
+			// role's name must not pass through it.
+			steps: splitStatements(migrations[file])
+				.map((statement) => (appRole === undefined ? statement : withAppRole(statement, appRole)))
+				.flatMap(sequence),
 		}));
 	return { kind, files };
 }

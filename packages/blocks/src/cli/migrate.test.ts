@@ -1144,6 +1144,9 @@ describe('cdk-blocks migrate', () => {
 						new Promise<{ code: number | null; stderr: string }>((resolve) => {
 							const child = spawn(process.execPath, ['--input-type=module', '-e', `import ${JSON.stringify(entry.href)}`, '--', '-C', root, 'migrate', '--output', 'json'], {
 								stdio: ['ignore', 'ignore', 'pipe'],
+								// Telemetry is off so neither run prints the first-run notice: on a runner with no
+								// installation ID yet, both concurrent runs can create one and print it before the error.
+								env: { ...process.env, CDK_DISABLE_CLI_TELEMETRY: '1' },
 							});
 							let stderr = '';
 							child.stderr.on('data', (chunk) => (stderr += chunk));
@@ -1157,7 +1160,7 @@ describe('cdk-blocks migrate', () => {
 				if (run.code !== 0) {
 					assert.match(
 						run.stderr,
-						/^Error: (the git working tree has uncommitted changes|package\.json changed while npm run migrate ran; nothing was written)/,
+						/^Error: (the git working tree has uncommitted changes|package\.json changed while npm run migrate ran; nothing was written)/m,
 						run.stderr,
 					);
 				}

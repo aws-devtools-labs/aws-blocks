@@ -16,6 +16,10 @@ import type { SqlQuery } from './common/sql.js';
  *   configuration: all of PostgreSQL (triggers, PL/pgSQL, extensions, Row Level
  *   Security, transactions of any size), created in seconds, scales to zero,
  *   reached over its public endpoint with IAM authentication. No VPC.
+ *   Locally, PGlite creates the contrib extensions that both it and Aurora
+ *   have (`citext`, `pgcrypto`, `pg_trgm`, `hstore`, `uuid-ossp` and more; the
+ *   README's Local mode section lists them). One it lacks, such as `vector`,
+ *   fails locally.
  *
  * The value names the engine, so every stop and limit can say which database
  * it comes from.

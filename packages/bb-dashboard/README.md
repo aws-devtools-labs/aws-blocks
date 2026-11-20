@@ -143,7 +143,7 @@ Configuration for a single pre-registered CloudWatch metric.
 ## Error Constants
 
 ```typescript
-import { DashboardErrors } from '@aws-cdk-blocks/bb-dashboard';
+import { DashboardErrors } from 'aws-cdk-blocks';
 
 DashboardErrors.InvalidMetricConfig // 'InvalidMetricConfigException'
 ```

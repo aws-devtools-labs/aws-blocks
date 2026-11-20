@@ -2,6 +2,33 @@
 
 <!-- doc-snippet: skip-file — release notes show the API of past releases, including the removed AuthOIDC block -->
 
+## 1.0.0-rc.1
+
+### Minor Changes
+
+- c42ba42: **Breaking: the hidden `.blocks/` folder is now `.cdk-blocks/`, and local data moves from `.bb-data/` to `.cdk-blocks/local/data/`.**
+
+  To upgrade an existing app:
+
+  1. Move the config file: `mkdir -p .cdk-blocks && git mv .blocks/config.json .cdk-blocks/config.json`. Then delete the empty `.blocks/` folder. Do not run `git mv .blocks .cdk-blocks`, because it nests the old folder inside the new one when `.cdk-blocks/` already exists.
+  2. In your tsconfig `include`, change `.blocks/**/*.d.ts` to `.cdk-blocks/**/*.d.ts`. Without this change, `getSecret()` and `getConfig()` lose their key types.
+  3. Run `npm run typegen` and commit `.cdk-blocks/hosting-values.d.ts`.
+
+  Local data, the local database included, is copied to the new location the first time each block opens its store. `.bb-data/` stays in place. `.cdk-blocks/local/` ignores itself, so it needs no `.gitignore` rule.
+
+  An app that still has `.blocks/config.json` deploys and destroys as before. The telemetry first-run notice prints once more after the upgrade. Pull request #1607 has the full notes.
+
+### Patch Changes
+
+- e529b00: docs: the README error examples now import the error constants and `isBlocksError` from `aws-cdk-blocks`, which every scaffolded app depends on. The same import works in backend and client code.
+- 3081521: The deployed Lambda handler now reads the `x-blocks-user-agent` request header in any letter case. Before, a client that sent the header in another casing over HTTP/1.1 lost its `client/<lang>/<version>` attribution. The Swift, Kotlin, and Dart clients were not affected.
+- 23692f1: Every CLI command now sends one usage event. `sandbox deploy` and `sandbox preview` report under their own names instead of `sandbox`. `generate types --watch` now stops cleanly on Ctrl-C or SIGTERM. A telemetry failure never changes a command's exit code or output, and the CDK CLI telemetry opt-out still turns all of it off.
+- Updated dependencies [c42ba42]
+- Updated dependencies [8fbbeca]
+- Updated dependencies [23692f1]
+  - @aws-cdk-blocks/hosting@1.0.0-rc.1
+  - @aws-cdk-blocks/pipeline@1.0.0-rc.1
+
 ## 1.0.0-rc.0
 
 ### Major Changes

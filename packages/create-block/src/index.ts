@@ -504,6 +504,14 @@ async function wireContributor(root: string, names: DerivedNames, dryRun: boolea
 			'packages/blocks/src/index.cdk.ts → re-export',
 		);
 
+		// 3b. Umbrella browser re-export: the error constants only, so client code can match the block's
+		// errors with `import { ${className}Errors } from 'aws-cdk-blocks'` (umbrella-browser-exports.test.ts).
+		await editText(
+			join(root, 'packages/blocks/src/index.browser.ts'),
+			(s) => insertBetweenMarkers(s, `export { ${className}Errors } from '${pkgName}';`),
+			'packages/blocks/src/index.browser.ts → error constants re-export',
+		);
+
 		// 4. Umbrella package.json: dependency + vendorize map entry.
 		await editJson(
 			join(root, 'packages/blocks/package.json'),

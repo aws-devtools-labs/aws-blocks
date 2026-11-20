@@ -224,8 +224,7 @@ throws `EmailSendFailedException`. In `sendBatch()` the message is marked `faile
 ## Error Handling
 
 ```typescript
-import { EmailErrors } from '@aws-cdk-blocks/bb-email-client';
-import { isBlocksError } from '@aws-cdk-blocks/core';
+import { EmailErrors, isBlocksError } from 'aws-cdk-blocks';
 
 try {
   await emailClient.send({ to: 'user@example.com', subject: 'Hi', body: 'Hello' });

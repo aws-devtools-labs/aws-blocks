@@ -136,6 +136,7 @@ import { QueryOptions } from '@aws-cdk-blocks/bb-kv-store';
 import { ReadValidationMode } from '@aws-cdk-blocks/bb-kv-store';
 import { Realtime } from '@aws-cdk-blocks/bb-realtime';
 import { RealtimeChannel } from '@aws-cdk-blocks/bb-realtime';
+import { RealtimeErrors } from '@aws-cdk-blocks/bb-realtime';
 import { RealtimeSubscription } from '@aws-cdk-blocks/bb-realtime';
 import { relayOrigin } from '@aws-cdk-blocks/bb-auth';
 import { Results } from '@aws-cdk-blocks/bb-kv-store';
@@ -382,6 +383,7 @@ export function getSdkIdentifiers(bb: Database): {
     schemaName: string;
     clusterEndpoint?: string;
     region?: string;
+    roleName?: string;
 };
 
 // @public (undocumented)
@@ -522,6 +524,8 @@ export { ReadValidationMode }
 export { Realtime }
 
 export { RealtimeChannel }
+
+export { RealtimeErrors }
 
 export { RealtimeSubscription }
 

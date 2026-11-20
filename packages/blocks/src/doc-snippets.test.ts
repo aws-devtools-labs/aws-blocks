@@ -89,15 +89,15 @@ const FIXTURE: DocInput = {
 		'Auth.noSuchStatic;',
 		'```',
 		'## Browser', // 36
-		'```ts', // 37: a browser file importing a value from the root, which has none under `browser`
+		'```ts', // 37: a browser file importing a server-only value from the root, which lacks it under `browser`
 		'// src/main.ts',
-		"import { isBlocksError, type ScopeParent } from 'aws-cdk-blocks';",
+		"import { isBlocksError, KVStore, type ScopeParent } from 'aws-cdk-blocks';",
 		"import { ApiError } from 'aws-cdk-blocks/client';",
 		"import type { Auth } from 'aws-cdk-blocks';",
 		'```',
 		'```ts', // 44: the same import in a backend file is fine
 		'// cdk-blocks/index.ts',
-		"import { isBlocksError } from 'aws-cdk-blocks';",
+		"import { KVStore } from 'aws-cdk-blocks';",
 		'```',
 		'> **Tip:** a sample inside a blockquote is checked too:', // 47
 		'> ```ts', // 48
@@ -105,7 +105,7 @@ const FIXTURE: DocInput = {
 		'> ```',
 		'```ts', // 51: an annotated file label is still a complete browser file
 		'// src/main.ts — the browser',
-		"import { isBlocksError } from 'aws-cdk-blocks';",
+		"import { KVStore } from 'aws-cdk-blocks';",
 		"export const n: number = 'x';",
 		'```',
 	].join('\n'),
@@ -184,10 +184,11 @@ describe('shipped doc code samples', () => {
 			[true],
 			shown,
 		);
-		// Under the `browser` condition only the root's value import fails; type-only imports and /client pass.
+		// Under the `browser` condition only the root's server-only value import fails; its client-safe values
+		// (isBlocksError), type-only imports and /client pass.
 		const browser = at(37).filter((m) => m.includes('`browser` condition'));
 		assert.deepStrictEqual(
-			browser.map((m) => m.includes("no exported member 'isBlocksError'")),
+			browser.map((m) => m.includes("no exported member 'KVStore'")),
 			[true],
 			shown,
 		);
@@ -198,7 +199,7 @@ describe('shipped doc code samples', () => {
 		);
 		const annotated = at(51);
 		assert.ok(
-			annotated.some((m) => m.includes('`browser` condition') && m.includes("'isBlocksError'")),
+			annotated.some((m) => m.includes('`browser` condition') && m.includes("'KVStore'")),
 			shown,
 		);
 		assert.ok(

@@ -103,7 +103,7 @@ export const UNMATCHED_BADGE_TITLE: Record<UnmatchedReason, string> = {
 	unmatched:
 		'Declared in source but absent from the deployed stack for this stage — usually added since the last deploy.',
 	'no-own-resources':
-		'This block owns no resources of its own — it is served by the shared Blocks API — so it is never matched to a block-specific resource group.',
+		'This block owns no resources of its own — it is served by the shared CDK Blocks API — so it is never matched to a block-specific resource group.',
 	unknown: 'Declared in source. The deployed resources could not be read, so its deployment state is unknown.',
 	'not-applicable':
 		'Declared in source. The local environment has no deployed stack, so its deployment state was never looked up — this is not a claim that nothing is deployed.',
@@ -470,7 +470,7 @@ function unattributedSection(groups: readonly ResourceGroup[], blocksScanned: bo
  */
 export const RESOURCE_CATEGORY_LABEL: Record<ResourceGroup['category'], string> = {
 	app: 'Your blocks',
-	platform: 'Blocks platform',
+	platform: 'CDK Blocks platform',
 	cdk: 'CDK internals',
 };
 
@@ -703,7 +703,7 @@ export function buildInventoryTree({ blocks, resources }: BuildInventoryTreeInpu
 		groups,
 		'platform',
 		RESOURCE_CATEGORY_LABEL.platform,
-		'Created by the Blocks framework itself — the API, the shared handler, the stack internals. Not declared by your app.',
+		'Created by the CDK Blocks framework itself — the API, the shared handler, the stack internals. Not declared by your app.',
 	);
 	if (platform) sections.push(platform);
 

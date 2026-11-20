@@ -13,7 +13,7 @@ The decisions behind this are [D-003](../DECISIONS.md) (the `name` crosses the w
 | `blocksError(name, message)` | `@aws-cdk-blocks/core` | Throw a named Building Block error from inside a block |
 | `brandBlocksError(err)` | `@aws-cdk-blocks/core` | Mark an already-built named `Error` as safe to send to the client |
 | `ApiError(message, status, options)` | `@aws-cdk-blocks/core` | Throw an error with a status code, usually from an API method |
-| `hasAuthError(state, name)` | `@aws-cdk-blocks/core` (client code: `aws-cdk-blocks/client`) | Branch on a failed `AuthState` returned by `setAuthState` or `submitAuthAction` |
+| `hasAuthError(state, name)` | `@aws-cdk-blocks/core` (app code, server and client: `aws-cdk-blocks`) | Branch on a failed `AuthState` returned by `setAuthState` or `submitAuthAction` |
 
 `isWireSafeError` is also exported. It is one of the checks the serializer uses, described under [Sending errors to the client](#sending-errors-to-the-client); the other, `isApiErrorLike`, is internal to core.
 
@@ -161,9 +161,8 @@ Anything a route writes itself through `ctx.response` is sent unchanged. A timeo
 The state is a plain object, not an `Error`, so use `hasAuthError` rather than `isBlocksError`. In browser code, submit the action with `submitAuthAction` from `aws-cdk-blocks/ui`: it returns the same `AuthState` and also notifies `onAuthChange` / `AuthenticatedContent` subscribers. A direct `authApi.setAuthState()` call notifies nothing on the page, so a UI that renders from `onAuthChange` never sees the sign-in.
 
 ```typescript
-import { hasAuthError } from 'aws-cdk-blocks/client';
+import { AuthErrors, hasAuthError } from 'aws-cdk-blocks';
 import { submitAuthAction } from 'aws-cdk-blocks/ui';
-import { AuthErrors } from '@aws-cdk-blocks/bb-auth';
 
 const next = await submitAuthAction(authApi, { action: 'signIn', username, password });
 if (hasAuthError(next, AuthErrors.NotAuthorized)) {
@@ -171,9 +170,9 @@ if (hasAuthError(next, AuthErrors.NotAuthorized)) {
 }
 ```
 
-The constants are `AuthErrors`, exported from `@aws-cdk-blocks/bb-auth` (and re-exported by `aws-cdk-blocks` for backend code). See the [`Auth` README](../../packages/bb-auth/README.md).
+The constants are `AuthErrors`, exported from `@aws-cdk-blocks/bb-auth` (and re-exported by `aws-cdk-blocks`, for backend and browser code). See the [`Auth` README](../../packages/bb-auth/README.md).
 
-To import `AuthErrors` in browser code, list `@aws-cdk-blocks/bb-auth` in your app's own `dependencies`: the browser entry of `aws-cdk-blocks` does not re-export it. The string name, `'NotAuthorizedException'`, works without it.
+Browser code imports `AuthErrors` from `aws-cdk-blocks`, like the backend: the browser entry of `aws-cdk-blocks` re-exports every block's error constants and the error matchers. The string name, `'NotAuthorizedException'`, works too.
 
 ## Related
 

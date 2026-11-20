@@ -135,8 +135,7 @@ Invalid input — a key or `scan()` prefix that breaks the [key rules](#object-k
 | `FileBucketErrors.PresignedUploadUnsupported` | `PresignedUploadUnsupported` | Thrown by `putUrl()` and `createUploadHandle()` on a bucket with `objectLock` — see [Object Lock](./PRODUCTION.md#object-lock). |
 
 ```typescript
-import { isBlocksError } from '@aws-cdk-blocks/core';
-import { FileBucketErrors } from '@aws-cdk-blocks/bb-file-bucket';
+import { FileBucketErrors, isBlocksError } from 'aws-cdk-blocks';
 
 try {
   await bucket.restoreVersion('report.pdf', 'non-existent-version');

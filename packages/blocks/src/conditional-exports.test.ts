@@ -79,7 +79,9 @@ const BB_POLICY: Record<Condition, Policy> = { 'aws-runtime': 'equal', cdk: 'equ
  *   resolves to its aws entry, so the names must still match.
  * - `cdk`: intentionally a superset — it re-exports `@aws-cdk-blocks/core/cdk` (BlocksStack,
  *   BlocksBackend, registerConfig, synthGuard, …) on top of the BB surface.
- * - `browser`: intentionally `export {}` — browser code imports `aws-cdk-blocks/client`.
+ * - `browser`: intentionally narrower — only the client-safe values (every block's `*Errors`, core's
+ *   error matchers, the blocks' pure helpers); the Building Block classes are absent. Not compared here:
+ *   `umbrella-browser-exports.test.ts` checks that surface.
  */
 const UMBRELLA_POLICY: Record<Condition, Policy> = { 'aws-runtime': 'equal', cdk: 'superset', browser: 'skip' };
 
