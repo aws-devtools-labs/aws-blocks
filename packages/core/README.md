@@ -508,6 +508,8 @@ new Hosting(stack, 'Web', {
 
 Core's top-level `buildRetentionDays` maps to the L3 construct's `storage.buildRetentionDays`.
 
+**The Lambda@Edge stack.** An app with Lambda@Edge functions (a Next.js `runtime: 'edge'` route, or middleware built as Lambda@Edge) in a stack outside `us-east-1` gets a second stack in `us-east-1` that holds them. CDK names it `edge-lambda-stack-<hash>`, a name that doesn't say which app it belongs to; with `defaults.appIdentity` set, `Hosting` names it `<id>-edge` (see [Running many apps in one AWS account](#running-many-apps-in-one-aws-account-a-shared-platform)). `NODE_OPTIONS="--conditions=cdk" npx cdk ls` lists it with the app's stacks, and `npm run sandbox:destroy` deletes it with the sandbox. `npm run destroy` doesn't select stacks, so delete a production app's stacks by name, the app stack first; the `@aws-cdk-blocks/hosting` README's "Edge routes" section has the steps.
+
 #### Front door and its settings
 
 `frontDoor` picks the public entry point: omit it for CloudFront (the default), or pass `{ kind: 'alb' }`, `{ kind: 'apiGateway', api?: 'http' | 'rest' }`, `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }`, `{ kind: 'custom', door }` or `'none'` (a public S3 website bucket). The settings the app asks the door for go in `frontDoor.features`, typed per kind, so a setting the chosen door doesn't implement does not compile. `{ features }` with no `kind` is the CloudFront default with settings:
@@ -1697,7 +1699,7 @@ CDK's default bootstrap deploy role may change or delete *any* stack, and CloudF
 
 **Prefer attaching it in a custom bootstrap template** (`cdk bootstrap --show-template`, add `apps-deploy-guard` to the deploy role's managed policies and remove `sts:TagSession` from its trust policy, `cdk bootstrap --template <file>`), so CloudFormation owns both; attaching it to the existing deploy role (`cdk-<id>-deploy-role-<account>-<region>`) works, but it's drift outside CloudFormation that a re-bootstrap won't restore, and leaves `sts:TagSession` in place.
 
-**Lambda@Edge (Hosting outside `us-east-1`).** CDK hoists edge functions into a `us-east-1` stack; with `defaults.appIdentity` set, AWS CDK Blocks names it `<id>-edge`, so the guard and the execution policy treat it as the app's own. Bootstrap the app in `us-east-1` too (same qualifier, same `app` tag, same execution policy) and attach the guard there.
+**Lambda@Edge (Hosting outside `us-east-1`).** CDK hoists edge functions into a `us-east-1` stack; with `defaults.appIdentity` set, AWS CDK Blocks names it `<id>-edge`, so the guard and the execution policy treat it as the app's own. Without `appIdentity` it keeps CDK's name, `edge-lambda-stack-<hash>`, which a guard keyed on the stack name prefix can't attribute to the app (the hosting README's "Edge routes" section shows how to find and delete it). Bootstrap the app in `us-east-1` too (same qualifier, same `app` tag, same execution policy) and attach the guard there.
 
 #### The pipeline
 
