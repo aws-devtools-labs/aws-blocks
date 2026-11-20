@@ -140,11 +140,11 @@ describe('template TypeScript projects', () => {
 
 	it('every tsconfig that type-checks a backend has the library types of Array.fromAsync', () => {
 		// The Building Block docs list items with `Array.fromAsync(store.query(...))`; a backend whose
-		// `lib` stops at ES2022 fails its type-check with TS2550 on it. nextjs checks aws-blocks/ with its
-		// root tsconfig.json, every other template with aws-blocks/tsconfig.json.
+		// `lib` stops at ES2022 fails its type-check with TS2550 on it. nextjs checks cdk-blocks/ with its
+		// root tsconfig.json, every other template with cdk-blocks/tsconfig.json.
 		const configs = templates
 			.map((name) =>
-				name === 'nextjs' ? join(templatesDir, name, 'tsconfig.json') : join(templatesDir, name, 'aws-blocks', 'tsconfig.json'),
+				name === 'nextjs' ? join(templatesDir, name, 'tsconfig.json') : join(templatesDir, name, 'cdk-blocks', 'tsconfig.json'),
 			)
 			.filter((path) => existsSync(path));
 		assert.ok(configs.some((path) => path.includes(`${sep}nextjs${sep}`)), 'the nextjs tsconfig is checked');
