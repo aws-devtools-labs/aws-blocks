@@ -174,7 +174,7 @@ updates:
   # Release notes: unlike the npm entries, nothing writes a changeset for these
   # PRs at release time (scripts/generate-dependency-changeset.ts only reads
   # packages/*/package.json). A maintainer adds one by hand before merging:
-  #   - Kotlin: a patch changeset for aws-blocks-kotlin in native/kotlin/.changeset
+  #   - Kotlin: a patch changeset for aws-cdk-blocks-kotlin in native/kotlin/.changeset
   #     ("Require Kotlin changeset" stays red until it is pushed onto the PR).
   #   - Swift: likewise in native/swift/.changeset, once Package.swift gains
   #     dependencies ("Require Swift changeset").
