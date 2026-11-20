@@ -1,5 +1,34 @@
 # @aws-blocks/bb-agent
 
+## 1.0.0-rc.1
+
+### Patch Changes
+
+- d380931: fix(bb-agent): don't show the previous answer when the chat reconnects at the start of a turn
+
+  If the chat reconnected before a turn had streamed any text, `createChat` and `useChat` could read a history that did not yet include the new message and show the previous turn's answer as the new one, then ignore the real reply.
+
+  On reconnect, when nothing has streamed and the history is missing the new message, a saved answer that repeats the previous turn's answer is no longer taken as the new turn's answer. The client keeps waiting for the turn's own chunks instead. A history that includes the new message is still adopted, even when its answer repeats the previous one.
+
+- e529b00: docs: the README error examples now import the error constants and `isBlocksError` from `aws-cdk-blocks`, which every scaffolded app depends on. The same import works in backend and client code.
+- 6b1086b: docs: corrected and reorganized the `Agent` and `KnowledgeBase` READMEs.
+
+  - `Agent`: the `createChat` example now shows the backend that it calls. The errors section lists every error case. Model presets and Bedrock access moved to `MODELS.md`, which ships in the package.
+  - `KnowledgeBase`: `chunkOverlap` is 1 to 99 on AWS, and the mock also accepts 0. A `maxResults` value outside 1 to 100 is clamped, and a non-integer throws `ValidationError`.
+
+- Updated dependencies [e529b00]
+- Updated dependencies [fbe48c5]
+- Updated dependencies [c42ba42]
+- Updated dependencies [3081521]
+- Updated dependencies [e529b00]
+- Updated dependencies [c9d73a8]
+- Updated dependencies [23692f1]
+  - @aws-cdk-blocks/core@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-file-bucket@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-realtime@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-kv-store@1.0.0-rc.1
+
 ## 1.0.0-rc.0
 
 ### Major Changes

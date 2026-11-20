@@ -2,6 +2,83 @@
 
 <!-- doc-snippet: skip-file — release notes show the API of past releases, including the removed AuthBasic and AuthOIDC blocks -->
 
+## 1.0.0-rc.1
+
+### Minor Changes
+
+- c42ba42: **Breaking: the hidden `.blocks/` folder is now `.cdk-blocks/`, and local data moves from `.bb-data/` to `.cdk-blocks/local/data/`.**
+
+  To upgrade an existing app:
+
+  1. Move the config file: `mkdir -p .cdk-blocks && git mv .blocks/config.json .cdk-blocks/config.json`. Then delete the empty `.blocks/` folder. Do not run `git mv .blocks .cdk-blocks`, because it nests the old folder inside the new one when `.cdk-blocks/` already exists.
+  2. In your tsconfig `include`, change `.blocks/**/*.d.ts` to `.cdk-blocks/**/*.d.ts`. Without this change, `getSecret()` and `getConfig()` lose their key types.
+  3. Run `npm run typegen` and commit `.cdk-blocks/hosting-values.d.ts`.
+
+  Local data, the local database included, is copied to the new location the first time each block opens its store. `.bb-data/` stays in place. `.cdk-blocks/local/` ignores itself, so it needs no `.gitignore` rule.
+
+  An app that still has `.blocks/config.json` deploys and destroys as before. The telemetry first-run notice prints once more after the upgrade. Pull request #1607 has the full notes.
+
+### Patch Changes
+
+- d380931: fix(bb-agent): don't show the previous answer when the chat reconnects at the start of a turn
+
+  If the chat reconnected before a turn had streamed any text, `createChat` and `useChat` could read a history that did not yet include the new message and show the previous turn's answer as the new one, then ignore the real reply.
+
+  On reconnect, when nothing has streamed and the history is missing the new message, a saved answer that repeats the previous turn's answer is no longer taken as the new turn's answer. The client keeps waiting for the turn's own chunks instead. A history that includes the new message is still adopted, even when its answer repeats the previous one.
+
+- 3081521: The deployed Lambda handler now reads the `x-blocks-user-agent` request header in any letter case. Before, a client that sent the header in another casing over HTTP/1.1 lost its `client/<lang>/<version>` attribution. The Swift, Kotlin, and Dart clients were not affected.
+- e529b00: `asRole()` now works after the first deploy of a cluster that `Database` provisions. The app's database role is created before the migration files run, so a migration can grant a role to it. Before, that grant failed with `role … does not exist`, and `asRole()` failed until a second deploy.
+
+  In a migration file, write the app role as `${app_role}`, for example `GRANT authenticated TO ${app_role} WITH INHERIT FALSE, SET TRUE;`. It resolves to the role that the app's statements run as on AWS, in local mode, and on an existing database. `getSdkIdentifiers(db)` now returns that role as `roleName` on a cluster the block provisions.
+
+- e529b00: A migration on a local `aurora` cluster can now run `CREATE EXTENSION` for the contrib extensions that PGlite ships and Aurora PostgreSQL supports, such as `citext`, `pgcrypto`, `pg_trgm`, `hstore`, and `uuid-ossp`. Before, it failed under `npm run dev` with `extension "citext" is not available`. An extension that PGlite does not ship, such as `vector`, still fails locally, and its error now lists the extensions that are available. A `dsql` cluster is unchanged.
+- 6b1086b: docs: corrected and reorganized the `Agent` and `KnowledgeBase` READMEs.
+
+  - `Agent`: the `createChat` example now shows the backend that it calls. The errors section lists every error case. Model presets and Bedrock access moved to `MODELS.md`, which ships in the package.
+  - `KnowledgeBase`: `chunkOverlap` is 1 to 99 on AWS, and the mock also accepts 0. A `maxResults` value outside 1 to 100 is clamped, and a non-integer throws `ValidationError`.
+
+- 6ae587a: Document `Auth` setup, options and error handling. Sessions default to 30 days, users sign in again after migrating from `AuthCognito`, and `rememberDevice` on AWS reports `InvalidParameterException` (501). The `auth-common` README lists the auth error names and shows how browser clients can match them.
+- 8fbbeca: Document hosting front-door compatibility, including how to build a buffered Next.js server for an API Gateway HTTP API. Add hosting options and synth-error references, and ship the custom front-door guide with the package.
+
+  Update the pipeline quick start to use `Pipeline.create()` with the AWS CDK Blocks store prefixes and a separate pipeline entry point. Document the pipeline options and their defaults.
+
+- e529b00: Sandbox: when the index manager recreates the table of a store with indexes, the new table keeps the old table's encryption key, TTL, tags, point-in-time recovery, stream, and table class, and items that DynamoDB returns as unprocessed are written again. A table that an earlier version recreated without its encryption, TTL, or point-in-time recovery is recreated with them on the next deploy. A sandbox table with `protection: 'locked'` is no longer deleted, and its indexes change one at a time. A key from `KVStore.fromKmsKey()` must allow the index manager's role in its key policy. The index manager's log no longer includes CloudFormation's response URL.
+- 23692f1: Every CLI command now sends one usage event. `sandbox deploy` and `sandbox preview` report under their own names instead of `sandbox`. `generate types --watch` now stops cleanly on Ctrl-C or SIGTERM. A telemetry failure never changes a command's exit code or output, and the CDK CLI telemetry opt-out still turns all of it off.
+- e529b00: fix(blocks): client code can now import the block error constants, `isBlocksError`, and `ApiError` from `aws-cdk-blocks`. Before, `import { KVStoreErrors } from 'aws-cdk-blocks'` type-checked and then failed in the browser with `does not provide an export named 'KVStoreErrors'`. The Building Block classes and `sql` are still server-only, so browser code uses `import type` for their types. `aws-cdk-blocks` now also exports `RealtimeErrors`.
+- Updated dependencies [d380931]
+- Updated dependencies [e529b00]
+- Updated dependencies [fbe48c5]
+- Updated dependencies [c42ba42]
+- Updated dependencies [3081521]
+- Updated dependencies [e529b00]
+- Updated dependencies [e529b00]
+- Updated dependencies [6b1086b]
+- Updated dependencies [6ae587a]
+- Updated dependencies [8fbbeca]
+- Updated dependencies [e529b00]
+- Updated dependencies [c9d73a8]
+- Updated dependencies [b47e4c7]
+- Updated dependencies [23692f1]
+  - @aws-cdk-blocks/bb-agent@1.0.0-rc.1
+  - @aws-cdk-blocks/core@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-app-setting@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-async-job@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-auth@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-cron-job@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-dashboard@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-email-client@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-file-bucket@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-knowledge-base@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-metrics@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-realtime@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-secret@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-kv-store@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-tracer@1.0.0-rc.1
+  - @aws-cdk-blocks/hosting@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-database@1.0.0-rc.1
+  - @aws-cdk-blocks/auth-common@1.0.0-rc.1
+
 ## 1.0.0-rc.0
 
 ### Major Changes

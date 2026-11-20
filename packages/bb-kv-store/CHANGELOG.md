@@ -1,5 +1,20 @@
 # @aws-blocks/bb-kv-store
 
+## 1.0.0-rc.1
+
+### Patch Changes
+
+- fbe48c5: Local data moved from `.bb-data/{fullId}/` to `.cdk-blocks/local/data/{fullId}/`. Existing data is copied over on first use. The `@aws-cdk-blocks/core` changelog has the upgrade steps.
+- e529b00: Sandbox: when the index manager recreates the table of a store with indexes, the new table keeps the old table's encryption key, TTL, tags, point-in-time recovery, stream, and table class, and items that DynamoDB returns as unprocessed are written again. A table that an earlier version recreated without its encryption, TTL, or point-in-time recovery is recreated with them on the next deploy. A sandbox table with `protection: 'locked'` is no longer deleted, and its indexes change one at a time. A key from `KVStore.fromKmsKey()` must allow the index manager's role in its key policy. The index manager's log no longer includes CloudFormation's response URL.
+- c9d73a8: docs: the `KVStore` and `Database` README examples now import from `aws-cdk-blocks`, which every scaffolded app depends on, so a copied example compiles. The `/kysely` and `/testing` entry points still come from `@aws-cdk-blocks/bb-database`.
+- Updated dependencies [e529b00]
+- Updated dependencies [fbe48c5]
+- Updated dependencies [c42ba42]
+- Updated dependencies [3081521]
+- Updated dependencies [23692f1]
+  - @aws-cdk-blocks/core@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.1
+
 ## 1.0.0-rc.0
 
 ### Major Changes
