@@ -515,7 +515,79 @@ Migrate refuses, with exit 1 and a `Try:` hint, and writes nothing when:
 
 Two commands behave differently after the migration: `npm run destroy` asks for confirmation (`npm run destroy -- --yes` in CI), and `npm run cleanup` stops only the dev servers this app recorded, instead of killing every process on ports 3000-3003.
 
-Which scripts and wrappers migrate rewrites, keeps and deletes, how it finds what still uses a wrapper, finishing a kept `deploy`/`destroy`, a wrapper that cannot be deleted, every refusal, and the `--output json` shape are in [MIGRATING-FROM-SCRIPTS.md](./MIGRATING-FROM-SCRIPTS.md).
+## Testing
+
+The fastest loop is calling your API through its typed import in `test/e2e.test.ts` — no browser, no mocking:
+
+```typescript
+import { test } from 'node:test';
+import assert from 'node:assert';
+import type { api as ApiType } from 'cdk-blocks';
+
+let api: typeof ApiType;
+test.before(async () => { api = (await import('cdk-blocks')).api; });
+
+test('stores and reads back a value', async () => {
+  await api.setValue('k', 'v');
+  assert.equal(await api.getValue('k'), 'v');
+});
+```
+
+Run with `npm run test:e2e`. Write the test first, iterate against mocks until it passes.
+
+## Best practices
+
+- **Export every API** — the frontend can only import what you `export` from `cdk-blocks/index.ts`.
+- **Validate with schemas** — pass a Zod/Valibot schema to data blocks for compile-time *and* runtime type safety.
+- **Don't block the request** — use `AsyncJob` for anything slow; `submit()` returns a `jobId` immediately.
+- **Guard against races** — use conditional writes (`ifNotExists`, `ifValueEquals`, `ifFieldEquals`) instead of read-modify-write.
+- **Test locally first** — mocks implement the same API as the real service, but not every AWS behavior (limits, TTL expiry, IAM, partial failures); check the mock-vs-AWS differences in a block's `DESIGN.md` where it has one. Deploy to a sandbox once it's green.
+
+## Common mistakes
+
+- **Ungated endpoints** — methods are public unless you call `requireAuth`/`requireRole`. The local mock won't catch this for you.
+- **Forgetting to export** — an `ApiNamespace` you don't export is invisible to the frontend.
+- **`Database` when `KVStore` would do** — `KVStore` has no cluster to manage; reach for SQL only when you need it.
+- **Curling REST-style paths** — there is no `GET /api/getData`. All calls are JSON-RPC `POST`s under `/cdk-blocks/api`; use the typed import instead.
+
+## Security Considerations
+
+- Use `await auth.requireAuth(context)` in every method that shouldn't be public — ApiNamespace methods are **unauthenticated by default**
+- Use `new Secret(scope, id)` for API keys and credentials — `Secret` is the recommended home for production secrets. `new AppSetting(scope, id, { secret: true })` is a free, encrypted fallback only for a low-value secret. Don't hardcode secret values in source, and don't ship real secrets to a deployed app through plaintext environment variables — set them through `Secret`/`AppSetting`
+- Always attach a schema to KVStore/AppSetting that accepts user data — the RPC layer validates structure but not business logic
+- Do not add broad `*` IAM policies — each Building Block already grants least-privilege scoped to its own resources
+- Never change `blockPublicAccess` on FileBucket — serve public files through CloudFront instead
+- Configure `defaults.allowedOrigins` explicitly for production — avoid wildcards. List plain origins such as `'https://app.example.com'` (matched exactly); in a regex entry, escape every dot (`'https://app\\.example\\.com'`) — invalid regex entries fail `cdk synth`
+- `defaults.allowedOrigins` covers the API only — a FileBucket whose presigned URLs or file handles are fetched from the browser needs its own `corsRules` listing your frontend origins (including `http://localhost:3000` for a local frontend against a sandbox), or uploads/downloads fail with a CORS error once deployed
+- For cross-domain deployments, pass `session: { crossDomain: true }` to `Auth` (enables `SameSite=None; Secure; Partitioned`)
+- Enable `frontDoor: { features: { monitoring: { enabled: true, subscriptions: [new subs.EmailSubscription('oncall@example.com')] } } }` on Hosting for production alerts (`subs` = `aws-cdk-lib/aws-sns-subscriptions`; email/URL only; the top-level `monitoring` prop is its deprecated alias)
+- Add WAF and API Gateway throttling via CDK for public-facing apps — not included by default
+- Logger provides serialization safety (circular refs, type coercion) but does NOT redact sensitive content — never pass raw credentials, tokens, or secrets to Logger methods; sanitize context objects before logging
+
+### IAM hardening
+
+Every Blocks compute runs as one shared IAM (Identity and Access Management) execution role, and every Building Block grants its permissions onto it. Set `defaults.permissionsBoundary` to attach a [permissions boundary](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html), a ceiling on effective permissions, to every IAM role AWS CDK Blocks creates. Pass the policy's name, its full ARN (required when the policy has a path), or an `iam.IManagedPolicy`. It's unset in both presets, and unset leaves templates unchanged.
+
+```typescript
+// cdk-blocks/index.cdk.ts
+export const blocksStack = await BlocksStack.create(app, stackName, {
+  backendHandlerPath: join(__dirname, 'index.handler.ts'),
+  backendCDKPath: join(__dirname, 'index.ts'),
+  defaults: { ...BlocksPresets.production, permissionsBoundary: 'my-app-boundary' },
+});
+```
+
+- **Report.** Every synth, with or without a boundary, writes the shared role's composed policy to `cdk.out/<stack>.blocks-iam.json` (`<stack>.<backendId>.blocks-iam.json` for an embedded `BlocksBackend`); it isn't deployed, so CI can diff it to catch permission growth.
+- **Scope.** On a `BlocksStack` the boundary covers every role in the stack; on an embedded `BlocksBackend` it covers the backend's subtree plus the stack-level CDK (Cloud Development Kit) singleton roles its blocks add.
+- **CDK context.** If CDK's `@aws-cdk/core:permissionsBoundary` context is also set, `defaults.permissionsBoundary` wins for the roles Blocks creates and synth warns.
+
+For app-side IAM settings and reports, see the bundled `@aws-cdk-blocks/core` README (`docs/core/README.md`). For the shared-account policies, pipeline, and adoption steps, run `npm run docs core/SHARED-ACCOUNT.md` or open `docs/core/SHARED-ACCOUNT.md` in the installed package.
+
+## VPC Support
+
+AWS CDK Blocks supports running your backend in a VPC for network-level isolation or to connect to VPC-bound resources. You can let Blocks manage endpoint provisioning and security groups automatically, or bring a fully-configured VPC and handle networking yourself.
+
+See [VPC.md](./VPC.md) for usage, configuration options, cost details, and guidance on when a VPC is appropriate.
 
 ## Reference
 
