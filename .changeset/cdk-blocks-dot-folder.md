@@ -5,20 +5,6 @@
 '@aws-cdk-blocks/create-blocks-app': minor
 '@aws-cdk-blocks/admin-ui': minor
 '@aws-cdk-blocks/bb-database': minor
-'@aws-cdk-blocks/bb-app-setting': patch
-'@aws-cdk-blocks/bb-async-job': patch
-'@aws-cdk-blocks/bb-auth': patch
-'@aws-cdk-blocks/bb-dashboard': patch
-'@aws-cdk-blocks/bb-email-client': patch
-'@aws-cdk-blocks/bb-file-bucket': patch
-'@aws-cdk-blocks/bb-knowledge-base': patch
-'@aws-cdk-blocks/bb-kv-store': patch
-'@aws-cdk-blocks/bb-logger': patch
-'@aws-cdk-blocks/bb-metrics': patch
-'@aws-cdk-blocks/bb-realtime': patch
-'@aws-cdk-blocks/bb-secret': patch
-'@aws-cdk-blocks/bb-tracer': patch
-'@aws-cdk-blocks/create-block': patch
 ---
 
 **Breaking: the hidden `.blocks/` folder is renamed to `.cdk-blocks/`, and local Building Block data moves from `.bb-data/` into it.** An existing app renames the first itself. Rename the config file, not the folder: `mkdir -p .cdk-blocks && git mv .blocks/config.json .cdk-blocks/config.json`, then delete the empty `.blocks/`. `git mv .blocks .cdk-blocks` is wrong once `.cdk-blocks/` exists — and it does as soon as you run anything on the new version — because `mv` then moves the folder *into* it and you get `.cdk-blocks/.blocks/config.json`, which neither path reads. The second move is carried across for you.
