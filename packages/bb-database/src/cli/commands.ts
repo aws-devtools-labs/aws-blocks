@@ -22,7 +22,7 @@ import {
 import { externalEngine } from '../external/engine.js';
 import { localConnectionSetting } from '../external/local-store.js';
 import { readSsmConnectionString } from '../external/ssm-store.js';
-import { buildMigrationPlan } from '../migrations/plan.js';
+import { buildMigrationPlan, connectionRole } from '../migrations/plan.js';
 import {
 	ledgerStatus,
 	listMigrationFiles,
@@ -349,7 +349,7 @@ export async function migrate(flags: MigrateFlags): Promise<MigrateResult> {
 				throw usageError('Nothing was applied.');
 			}
 		}
-		const plan = buildMigrationPlan(files, 'external');
+		const plan = buildMigrationPlan(files, 'external', await connectionRole(engine));
 		const { applied } = await runMigrationPlan(engine, plan, { schemaName: flags.schema, log: note });
 		const result: MigrateResult = { ok: true, host: connection.host, applied };
 		if (flags.types !== false)

@@ -1,5 +1,27 @@
 # @aws-blocks/bb-dashboard
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 0b422ee: docs: the README documents the `metrics` source, how dashboard names are normalized, and when trace widgets are available.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+
+## 1.0.0-rc.1
+
+### Patch Changes
+
+- e529b00: docs: the README error examples now import the error constants and `isBlocksError` from `aws-cdk-blocks`, which every scaffolded app depends on. The same import works in backend and client code.
+- fbe48c5: Local data moved from `.bb-data/{fullId}/` to `.cdk-blocks/local/data/{fullId}/`. Existing data is copied over on first use. The `@aws-cdk-blocks/core` changelog has the upgrade steps.
+- b47e4c7: Open the Dashboard block's route during local development to see configured metrics, find local observability output, and launch the Admin UI without deploying. The Admin UI starts new sessions on local data and defers AWS reads until a cloud stage is selected.
+- Updated dependencies [e529b00]
+- Updated dependencies [c42ba42]
+- Updated dependencies [3081521]
+- Updated dependencies [23692f1]
+  - @aws-cdk-blocks/core@1.0.0-rc.1
+
 ## 1.0.0-rc.0
 
 ### Major Changes

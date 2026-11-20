@@ -751,6 +751,8 @@ Hashable` instead of a `String` raw type; `.rawValue` still returns the wire str
 
 - [#565](https://github.com/aws/cdk-blocks/pull/565) [`7807607`](https://github.com/aws/cdk-blocks/commit/780760776108bf2dc4a748ef03469bdcb289c1a0) Thanks [@VarshithaPamisetty](https://github.com/VarshithaPamisetty)! - feat(swift): add committed version constant and user-agent token
 
+- [#1642](https://github.com/aws/cdk-blocks/pull/1642) [`08182b5`](https://github.com/aws/cdk-blocks/commit/08182b5fb421e5550d93e3506922b5a3957565eb) Thanks [@xyos](https://github.com/xyos)! - Document the generated `Blocks` initializer, client lifetime, OIDC launcher options and sign-in errors. Update the demo to build against the framework checkout and distinguish CLI code generation from the two Xcode plugins.
+
 ## 0.1.1
 
 ### Patch Changes

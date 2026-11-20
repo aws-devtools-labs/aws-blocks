@@ -403,7 +403,7 @@ export type {
  * Package: `@aws-cdk-blocks/bb-realtime`
  * Full docs: `npm run docs bb-realtime`.
  */
-export { Realtime } from '@aws-cdk-blocks/bb-realtime';
+export { Realtime, RealtimeErrors } from '@aws-cdk-blocks/bb-realtime';
 export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from '@aws-cdk-blocks/bb-secret';
 /**
  * **Single application secret backed by AWS Secrets Manager.**

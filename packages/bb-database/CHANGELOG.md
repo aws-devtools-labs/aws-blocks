@@ -1,5 +1,51 @@
 # @aws-cdk-blocks/bb-database
 
+## 1.0.0-rc.2
+
+### Patch Changes
+
+- 0b422ee: docs: the errors table gives the `error.name` a caller sees (`QueryFailedException`, not `QueryFailed`), and the README has a table of the `transaction()` options.
+- Updated dependencies [cad7bb8]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+- Updated dependencies [0b422ee]
+  - @aws-cdk-blocks/core@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-app-setting@1.0.0-rc.2
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.2
+
+## 1.0.0-rc.1
+
+### Minor Changes
+
+- c42ba42: **Breaking: the hidden `.blocks/` folder is now `.cdk-blocks/`, and local data moves from `.bb-data/` to `.cdk-blocks/local/data/`.**
+
+  To upgrade an existing app:
+
+  1. Move the config file: `mkdir -p .cdk-blocks && git mv .blocks/config.json .cdk-blocks/config.json`. Then delete the empty `.blocks/` folder. Do not run `git mv .blocks .cdk-blocks`, because it nests the old folder inside the new one when `.cdk-blocks/` already exists.
+  2. In your tsconfig `include`, change `.blocks/**/*.d.ts` to `.cdk-blocks/**/*.d.ts`. Without this change, `getSecret()` and `getConfig()` lose their key types.
+  3. Run `npm run typegen` and commit `.cdk-blocks/hosting-values.d.ts`.
+
+  Local data, the local database included, is copied to the new location the first time each block opens its store. `.bb-data/` stays in place. `.cdk-blocks/local/` ignores itself, so it needs no `.gitignore` rule.
+
+  An app that still has `.blocks/config.json` deploys and destroys as before. The telemetry first-run notice prints once more after the upgrade. Pull request #1607 has the full notes.
+
+### Patch Changes
+
+- e529b00: `asRole()` now works after the first deploy of a cluster that `Database` provisions. The app's database role is created before the migration files run, so a migration can grant a role to it. Before, that grant failed with `role … does not exist`, and `asRole()` failed until a second deploy.
+
+  In a migration file, write the app role as `${app_role}`, for example `GRANT authenticated TO ${app_role} WITH INHERIT FALSE, SET TRUE;`. It resolves to the role that the app's statements run as on AWS, in local mode, and on an existing database. `getSdkIdentifiers(db)` now returns that role as `roleName` on a cluster the block provisions.
+
+- e529b00: A migration on a local `aurora` cluster can now run `CREATE EXTENSION` for the contrib extensions that PGlite ships and Aurora PostgreSQL supports, such as `citext`, `pgcrypto`, `pg_trgm`, `hstore`, and `uuid-ossp`. Before, it failed under `npm run dev` with `extension "citext" is not available`. An extension that PGlite does not ship, such as `vector`, still fails locally, and its error now lists the extensions that are available. A `dsql` cluster is unchanged.
+- c9d73a8: docs: the `KVStore` and `Database` README examples now import from `aws-cdk-blocks`, which every scaffolded app depends on, so a copied example compiles. The `/kysely` and `/testing` entry points still come from `@aws-cdk-blocks/bb-database`.
+- Updated dependencies [e529b00]
+- Updated dependencies [fbe48c5]
+- Updated dependencies [c42ba42]
+- Updated dependencies [3081521]
+- Updated dependencies [23692f1]
+  - @aws-cdk-blocks/core@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-app-setting@1.0.0-rc.1
+  - @aws-cdk-blocks/bb-logger@1.0.0-rc.1
+
 ## 1.0.0-rc.0
 
 ### Major Changes
