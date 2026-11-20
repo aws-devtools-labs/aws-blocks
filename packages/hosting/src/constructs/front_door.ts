@@ -124,6 +124,39 @@ export type ApiOrigin = {
   readonly paths: readonly string[];
 };
 
+/**
+ * The app's single entry point, present only when the door routes at the app
+ * (`routing: 'app'`, see {@link FrontDoor.routing}). It runs the app's whole
+ * route table itself — redirects, the same-origin API, static files from the
+ * assets bucket, image optimization and server rendering — so the door maps
+ * the app's hostname to this one function (e.g. one ALB listener rule and one
+ * Lambda target group) and nothing else.
+ *
+ * It is the app's server function when the app has a regional one (its
+ * handler is wrapped by the router: no new function), else one router
+ * function AWS Blocks creates for the app. It answers buffered (not
+ * streamed) and accepts the events of an ALB Lambda target, an API Gateway
+ * REST or HTTP API, and a Lambda Function URL.
+ *
+ * It is the door's build cutover: AWS Blocks updates it only after the new
+ * build's files are uploaded, so the door needs no cutover of its own for it.
+ */
+export type EntryOrigin = {
+  /** Discriminant. */
+  readonly kind: 'entry';
+  /** The entry Lambda function. */
+  readonly fn: IFunction;
+  /**
+   * A Function URL for {@link fn} (IAM auth, `BUFFERED`). Created on first
+   * read, so a door that reaches the function another way never provisions
+   * one. When the entry is the server function, this is the same URL as
+   * `origins.server.url`.
+   */
+  readonly url: IFunctionUrl;
+  /** Whether the entry streams its responses: always `false` (the router answers buffered). */
+  readonly streaming: boolean;
+};
+
 /** An origin a route can point at. */
 export type DoorOrigin = AssetsOrigin | ServerOrigin | ImageOrigin;
 
@@ -137,6 +170,11 @@ export type DoorOrigins = {
   readonly image?: ImageOrigin;
   /** The backend API, when `Hosting` was given one. */
   readonly api?: ApiOrigin;
+  /**
+   * The app's single entry point — present only when the door routes at the
+   * app (`routing: 'app'`), where it is always present (see {@link AppRoutingDoorInput}).
+   */
+  readonly entry?: EntryOrigin;
 };
 
 // ── App facts ───────────────────────────────────────────────────────────────
@@ -263,6 +301,26 @@ export type DoorInput = {
   readonly features: DoorFeatures;
 };
 
+/**
+ * The input of a door that routes at the app (`routing: 'app'`): `TInput`
+ * with `origins.entry` always present.
+ */
+export type AppRoutingDoorInput<TInput extends DoorInput = DoorInput> = TInput & {
+  readonly origins: { readonly entry: EntryOrigin };
+};
+
+/**
+ * Where the app's route table runs (see {@link FrontDoor.routing}):
+ * `'door'` renders it onto the door's own primitives, `'app'` runs it in the
+ * app's entry function.
+ */
+export type DoorRouting = 'door' | 'app';
+
+/** The input `build` receives for a door's routing mode: {@link AppRoutingDoorInput} under `'app'`, else `TInput`. */
+export type DoorInputFor<TInput extends DoorInput, TRouting extends DoorRouting> = [TRouting] extends ['app']
+  ? AppRoutingDoorInput<TInput>
+  : TInput;
+
 // ── What the door hands back ────────────────────────────────────────────────
 
 /** What AWS Blocks passes to {@link FrontDoorResult.onUpload}. */
@@ -330,10 +388,41 @@ export type FrontDoorResult = {
  * `TInput` is the input the door reads — {@link DoorInput} for a
  * bring-your-own door; a built-in door may extend it with internal-only
  * extras. `TResult` lets a built-in door hand back its construct too.
+ * `TRouting` is the door's {@link FrontDoor.routing} mode, inferred from the
+ * literal by {@link defineFrontDoor}: under `'app'`, `build` receives
+ * {@link AppRoutingDoorInput} (`origins.entry` always present).
  */
-export interface FrontDoor<TInput extends DoorInput = DoorInput, TResult extends FrontDoorResult = FrontDoorResult> {
+export interface FrontDoor<
+  TInput extends DoorInput = DoorInput,
+  TResult extends FrontDoorResult = FrontDoorResult,
+  TRouting extends DoorRouting = DoorRouting,
+> {
   /** Stable id used in error messages and diagnostics (e.g. `cloudfront`, `alb`, `my-cdn`). */
   readonly service: string;
+  /**
+   * Where the app's route table runs.
+   *
+   * - `'door'` (default): the door renders the route table onto its own
+   *   primitives — behaviors and functions, listener rules, API routes — from
+   *   `input.app.routes` and `input.origins`. Every built-in door works this way.
+   * - `'app'`: the app routes itself. AWS Blocks gives the door one entry
+   *   function (`input.origins.entry`) that runs the whole route table —
+   *   redirects, the same-origin API, static files, image optimization, server
+   *   rendering, header rules and error pages — and the door maps the app's
+   *   hostname to it and nothing else (e.g. one listener rule on a shared ALB).
+   *   The entry is the app's server function, wrapped, or for an app without
+   *   one a single router function; it answers buffered, so `serverResponse`
+   *   is `'buffered'` (setting it to `'streaming'` fails synth). The routes
+   *   and API wiring check does not apply.
+   *
+   * Trade-offs of `'app'`: every request runs in Lambda (static files too,
+   * billed as Lambda time), the door's response-size limit applies to every
+   * file (1 MB behind an ALB; larger files fail), and nothing is cached at an
+   * edge unless the door puts one in front.
+   *
+   * @default 'door'
+   */
+  readonly routing?: TRouting;
   /**
    * How the door invokes the server-rendering compute, so AWS Blocks builds
    * the server to answer in a form the door can carry. Read before the compute
@@ -361,10 +450,11 @@ export interface FrontDoor<TInput extends DoorInput = DoorInput, TResult extends
    * asset uploads.
    *
    * @param scope the construct scope to create the door's resources under.
-   * @param input everything AWS Blocks knows about the app (see {@link DoorInput}).
+   * @param input everything AWS Blocks knows about the app (see {@link DoorInput});
+   *   with `routing: 'app'`, `input.origins.entry` too (see {@link AppRoutingDoorInput}).
    * @returns the door's public `url` (required) and optional extras (see {@link FrontDoorResult}).
    */
-  build(scope: Construct, input: TInput): TResult;
+  build(scope: Construct, input: DoorInputFor<TInput, TRouting>): TResult;
 }
 
 /**
@@ -388,9 +478,32 @@ export interface FrontDoor<TInput extends DoorInput = DoorInput, TResult extends
  *   serverResponse: 'buffered',
  *   build: buildMyAlb, // your build: an ALB whose default target is origins.server.fn
  * });
+ *
+ * @example
+ * // A door that routes at the app: one listener rule on a shared ALB per app.
+ * export const sharedAlbDoor = defineFrontDoor({
+ *   service: 'shared-alb',
+ *   routing: 'app',
+ *   build(scope, { origins }) {
+ *     const target = new ApplicationTargetGroup(scope, 'Tg', {
+ *       targetType: TargetType.LAMBDA,
+ *       targets: [new LambdaTarget(origins.entry.fn)],
+ *       multiValueHeadersEnabled: true,
+ *     });
+ *     new ApplicationListenerRule(scope, 'Rule', {
+ *       listener: sharedListener, // your ALB's HTTPS listener
+ *       priority: 10,
+ *       conditions: [ListenerCondition.hostHeaders(['app.example.com'])],
+ *       action: ListenerAction.forward([target]),
+ *     });
+ *     return { url: 'https://app.example.com' };
+ *   },
+ * });
  */
-export function defineFrontDoor<TInput extends DoorInput = DoorInput, TResult extends FrontDoorResult = FrontDoorResult>(
-  door: FrontDoor<TInput, TResult>,
-): FrontDoor<TInput, TResult> {
+export function defineFrontDoor<
+  TInput extends DoorInput = DoorInput,
+  TResult extends FrontDoorResult = FrontDoorResult,
+  TRouting extends DoorRouting = 'door',
+>(door: FrontDoor<TInput, TResult, TRouting>): FrontDoor<TInput, TResult, TRouting> {
   return door;
 }

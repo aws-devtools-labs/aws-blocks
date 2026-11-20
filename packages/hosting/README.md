@@ -555,7 +555,10 @@ A door is one function, typed by `defineFrontDoor` from
 [CUSTOM-FRONT-DOOR.md](./CUSTOM-FRONT-DOOR.md) shows a complete CloudFront
 door and its limits, and covers what the door receives (`DoorInput`) and
 returns, the `cf.*` helpers, testing a door with `assertDoorConformance`, and
-a door that stacks CloudFront over its own ALB.
+a door that stacks CloudFront over its own ALB. A door that sets
+`routing: 'app'` maps a hostname to one entry function that runs the app's
+whole route table, for a door shared by many apps (see "Routing in the app" in
+the same file).
 
 What AWS CDK Blocks checks for a bring-your-own door:
 
