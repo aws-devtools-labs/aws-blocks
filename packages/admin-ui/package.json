@@ -1,7 +1,7 @@
 {
   "name": "@aws-cdk-blocks/admin-ui",
   "version": "1.0.0-rc.1",
-  "description": "Blocks Admin UI — local dashboard for Blocks applications: deployments, logs, resources, environments, and cost.",
+  "description": "CDK Blocks Admin UI — local dashboard for CDK Blocks applications: deployments, logs, resources, and environments.",
   "keywords": [
     "aws-blocks",
     "dashboard",

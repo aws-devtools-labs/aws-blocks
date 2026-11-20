@@ -275,7 +275,7 @@ export default function BlockDetailPage({ params }: { params: Promise<{ fullId: 
 		<div className="space-y-6">
 			<div className="flex items-center gap-3">
 				<Link href="/blocks" className="text-sm text-fg-soft hover:text-fg">
-					← Blocks
+					← CDK Blocks
 				</Link>
 			</div>
 
