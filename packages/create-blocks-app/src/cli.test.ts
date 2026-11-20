@@ -546,7 +546,7 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('detects Amplify Gen 2 project over plain project, and keeps its Blocks dev server backend-only', async () => {
+  it('detects Amplify Gen 2 project over plain project, and keeps its AWS CDK Blocks dev server backend-only', async () => {
     const tmpDir = join(__dirname, '../.test-autodetect-amplify');
     mkdirSync(join(tmpDir, 'amplify'), { recursive: true });
     // An Amplify app usually has its own frontend dependency, which the dev task would otherwise start.
@@ -574,7 +574,7 @@ describe('create-blocks-app auto-detection', () => {
         // In particular, an alias or prebuild must not replace the Cognito-aware client.
         assert.doesNotMatch(command, /aws-cdk-blocks\/run.* -- (?:sandbox|deploy|destroy|generate client)(?: |$)/);
       }
-      // The Blocks dev server stays backend-only on :3001, as the removed server.ts set it,
+      // The AWS CDK Blocks dev server stays backend-only on :3001, as the removed server.ts set it,
       // even with vite and next installed: the Amplify app runs its own frontend.
       // generateClient: false keeps the overlay's own cdk-blocks/client.js (Cognito token,
       // amplify_outputs.json API URL) instead of the dev server's generic one.
@@ -674,7 +674,7 @@ describe('create-blocks-app auto-detection', () => {
     try {
       const result = run([tmpDir, '-y', '--skip-install']);
       assert.strictEqual(result.exitCode, 0);
-      // A fresh Blocks app was scaffolded into the directory.
+      // A fresh AWS CDK Blocks app was scaffolded into the directory.
       assert.ok(existsSync(join(tmpDir, 'cdk-blocks')), 'expected cdk-blocks/ to be scaffolded');
       assert.ok(existsSync(join(tmpDir, 'package.json')), 'expected root package.json to be created');
       // The original seed file is preserved.
@@ -839,7 +839,7 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
-  it('routes scaffolded docs tasks through a hoisted Blocks package and returns JSON', () => {
+  it('routes scaffolded docs tasks through a hoisted AWS CDK Blocks package and returns JSON', () => {
     const root = mkdtempSync(join(tmpdir(), 'blocks-hoisted-docs-'));
     const app = join(root, 'apps', 'web');
     try {

@@ -34,8 +34,8 @@ A new dispatch for the same PR cancels the running one.
    saves a [phase snapshot](#phase-snapshots), checks package provenance, runs `npm run build`,
    starts `npm run dev` as `node` and drives Chromium (`ui.mjs`) through every behavior added so
    far. Contract controls are located by accessible name among form fields only. It then checks
-   that the records it created appear under the app's Blocks mock data directory (`.cdk-blocks/local/data`), a
-   heuristic that catches storage outside Blocks but not a backend writing its own files there.
+   that the records it created appear under the app's AWS CDK Blocks mock data directory (`.cdk-blocks/local/data`), a
+   heuristic that catches storage outside AWS CDK Blocks but not a backend writing its own files there.
    Finally it restarts the server and checks the records again in a fresh browser context.
 6. Each trial uploads its allowlisted result as artifact `harbor-result-<arm>-<trial>` and, when
    configured, its redacted raw trace to a [private bucket](#private-traces).

@@ -192,7 +192,7 @@ function appOwnedTrustWarning(role: cdk.CfnResource, { service, statement }: Unc
 }
 
 /**
- * Fail synth when an IAM role AWS Blocks creates for `root` (the set
+ * Fail synth when an IAM role AWS CDK Blocks creates for `root` (the set
  * {@link forEachBlocksRole} visits) trusts a service principal without an
  * `aws:SourceAccount` or `aws:SourceArn` condition. Lambda execution roles are
  * accepted as they are ({@link UNCONDITIONED_SERVICES}).
@@ -203,7 +203,7 @@ function appOwnedTrustWarning(role: cdk.CfnResource, { service, statement }: Unc
  * it adds after `create()`): those get a synth warning instead (id
  * {@link SERVICE_PRINCIPAL_TRUST_WARNING_ID}, which the app can acknowledge),
  * naming the property override that sets the condition. Roles under an AWS
- * Blocks Building Block or a compute, or created by the framework at stack
+ * CDK Blocks Building Block or a compute, or created by the framework at stack
  * scope, still fail synth.
  *
  * Also registers {@link addKmsKeyPolicyCheck}, the same check for the key
@@ -303,7 +303,7 @@ export function scopeProviderWaiterTrust(provider: Construct): void {
 }
 
 /**
- * Service principals that may use an AWS Blocks KMS key without any of the
+ * Service principals that may use an AWS CDK Blocks KMS key without any of the
  * {@link KEY_POLICY_SCOPES}, each with the only actions (lowercased) a statement
  * may grant it to be exempt. Add a principal only with a code comment citing the
  * AWS documentation that says the service sends none of those keys.
@@ -543,7 +543,7 @@ function appOwnedKeyPolicyWarning(key: cdk.CfnResource, grant: UnscopedKeyPolicy
 }
 
 /**
- * Fail synth when a KMS key AWS Blocks creates for `root` (the keys in the
+ * Fail synth when a KMS key AWS CDK Blocks creates for `root` (the keys in the
  * scopes {@link forEachBlocksKmsKey} covers, the same scopes as the role check)
  * lets a service principal use it in an `Allow` key-policy statement scoped by
  * none of the {@link KEY_POLICY_SCOPES}. A key the app creates

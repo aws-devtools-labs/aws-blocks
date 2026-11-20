@@ -23,7 +23,7 @@ import { runCli } from './test-helpers.js';
 
 const FILES: Record<string, string> = {
 	'README.md': [
-		'# AWS Blocks',
+		'# AWS CDK Blocks',
 		'<!-- BEGIN:block-catalog -->',
 		'| Block | What it does | Keywords |',
 		'|-------|--------------|----------|',

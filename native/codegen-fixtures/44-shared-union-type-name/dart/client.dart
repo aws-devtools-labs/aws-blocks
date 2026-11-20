@@ -1450,7 +1450,7 @@ class ZetaAuthApi {
 }
 
 
-// --- Blocks Client ---
+// --- AWS CDK Blocks Client ---
 
 class Blocks {
   late final AlphaAuthApi alphaAuthApi;

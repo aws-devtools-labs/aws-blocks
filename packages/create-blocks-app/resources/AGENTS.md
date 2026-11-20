@@ -11,7 +11,7 @@
 
 ## Framework model
 
-These are the load-bearing facts about how a Blocks app fits together. Knowing them up front means you do **not** have to reverse-engineer the wiring or read every block doc before you can build.
+These are the load-bearing facts about how an AWS CDK Blocks app fits together. Knowing them up front means you do **not** have to reverse-engineer the wiring or read every block doc before you can build.
 
 ### Backend defines APIs; the frontend imports the same names as a typed client
 
@@ -105,7 +105,7 @@ When the app is complete, a signed-out user reaches the sign-in form from the fi
 
 ### The deployed frontend finds the backend on its own
 
-You do **not** wire an API URL into the frontend. The imported client resolves the API endpoint itself at runtime: locally, the dev server serves the backend and its config together (`npm run dev` in a fresh app, or `npm run dev:server` when Blocks was added to an existing project; it exposes `/.blocks-sandbox/config.json`); once deployed, the client reads the config served from the hosting origin, where the frontend and API sit same-origin. So build against the imported client and let the framework resolve the URL — don't hardcode one or curl-hunt for the API base.
+You do **not** wire an API URL into the frontend. The imported client resolves the API endpoint itself at runtime: locally, the dev server serves the backend and its config together (`npm run dev` in a fresh app, or `npm run dev:server` when AWS CDK Blocks was added to an existing project; it exposes `/.blocks-sandbox/config.json`); once deployed, the client reads the config served from the hosting origin, where the frontend and API sit same-origin. So build against the imported client and let the framework resolve the URL — don't hardcode one or curl-hunt for the API base.
 
 ### Minimal end-to-end example
 
@@ -256,7 +256,7 @@ If you will immediately self-test the frontend, add `npm run deploy -- --wait-li
 
 **Stack naming.** The deploy scripts name stacks from `stackId` in `.cdk-blocks/config.json` (generated at scaffold time, e.g. `my-app-a3x9kf`): production is `<stackId>-prod`, sandbox is `<stackId>-<username>-<random>`. Use these names when inspecting stacks (e.g. `aws cloudformation describe-stacks --stack-name <stackId>-prod`). To rename, edit `stackId`; for computed names, edit `cdk-blocks/index.cdk.ts`. A stack name must not start with `aws` in any letter case: the deploy stops at synth with an error that names the fix.
 
-## Blocks CLI
+## AWS CDK Blocks CLI
 
 Run the npm scripts from the app root. They load the installed `aws-cdk-blocks/run` entry without downloading a CLI. Pass positional arguments directly (`npm run docs KVStore`) and put flags after `--` (`npm run dev -- --port 4000`).
 

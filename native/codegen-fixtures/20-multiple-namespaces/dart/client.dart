@@ -268,7 +268,7 @@ class PostsApi {
 }
 
 
-// --- Blocks Client ---
+// --- AWS CDK Blocks Client ---
 
 class Blocks {
   late final UsersApi users;

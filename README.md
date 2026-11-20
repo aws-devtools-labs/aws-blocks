@@ -55,11 +55,11 @@ Each Block is published as an npm package, and the umbrella package [`aws-cdk-bl
 
 Clients are typed from your backend: web frameworks (Next.js, Nuxt, Astro, React, Vue, Svelte, Angular), native mobile (Swift, Kotlin, Dart/Flutter), and desktop applications.
 
-Native clients are build-time code generators that produce type-safe client code from a Blocks spec (`blocks.spec.json`), paired with a runtime library that calls your backend over JSON-RPC:
+Native clients are build-time code generators that produce type-safe client code from your app’s specification (`blocks.spec.json`), paired with a runtime library that calls your backend over JSON-RPC:
 
 - **[kotlin](./native/kotlin/README.md)** — Kotlin Multiplatform (Android, iOS, JVM). Gradle plugin + KMP runtime.
 - **[swift](./native/swift/README.md)** — Swift Package (iOS, macOS). SwiftPM build plugin + Foundation-based runtime.
-- **[dart](./native/dart/README.md)** — Dart / Flutter client. Generates a typed Dart client from your Blocks spec.
+- **[dart](./native/dart/README.md)** — Dart / Flutter client. Generates a typed Dart client from that specification.
 
 ## Repository layout
 

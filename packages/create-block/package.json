@@ -4,7 +4,7 @@
   "keywords": [
     "aws-blocks"
   ],
-  "description": "Scaffold a new AWS Blocks Building Block (bb-*) — inside the monorepo (contributor mode) or in your own project (external mode).",
+  "description": "Scaffold a new AWS CDK Blocks Building Block (bb-*) — inside the monorepo (contributor mode) or in your own project (external mode).",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/aws/cdk-blocks.git",

@@ -125,7 +125,7 @@ const PDF_OPTIONS = {
 	headerTemplate: `<span></span>`,
 	footerTemplate: `
 		<div style="width:100%;text-align:center;font-size:7px;color:#aaa;padding:0 12mm;">
-			AWS Blocks – Technical Design
+			AWS CDK Blocks – Technical Design
 			<span style="float:right"><span class="pageNumber"></span>/<span class="totalPages"></span></span>
 		</div>`,
 };

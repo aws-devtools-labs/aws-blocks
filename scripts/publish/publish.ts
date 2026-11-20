@@ -441,7 +441,7 @@ if (bucket && cfDomain && cfDistId) {
 	mode = "local";
 }
 
-console.log(`AWS Blocks Publish — ${mode === "s3" ? "S3" : "dry-run (local)"} (dist-tag: ${distTag})\n`);
+console.log(`AWS CDK Blocks Publish — ${mode === "s3" ? "S3" : "dry-run (local)"} (dist-tag: ${distTag})\n`);
 
 const manifest = await publish(publisher, distTag, canaryVersion);
 

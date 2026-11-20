@@ -1,6 +1,6 @@
 # Gradle plugin reference
 
-The `com.aws.blocks.kotlin` plugin parses your AWS Blocks spec at build time and generates the
+The `com.aws.blocks.kotlin` plugin parses your AWS CDK Blocks spec at build time and generates the
 client. This is the full `cdkBlocks { }` surface; the [README](../README.md) covers the two
 properties most projects set.
 

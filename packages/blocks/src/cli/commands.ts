@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Command handlers of the CDK Blocks task runner. Each lifecycle command runs the same
+ * Command handlers of the AWS CDK Blocks task runner. Each lifecycle command runs the same
  * core function, under the same runtime, as the generated npm-script wrapper
  * it replaces; see `runners/launch.ts`.
  */

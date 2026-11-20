@@ -93,7 +93,7 @@ try:
     stop()
     if server_log:
         server_log.close()
-    # Heuristic: Blocks mocks persist under .cdk-blocks/local/data, so verifier records stored anywhere
+    # Heuristic: AWS CDK Blocks mocks persist under .cdk-blocks/local/data, so verifier records stored anywhere
     # else (own files, browser storage) fail here. A backend writing its own files inside
     # .cdk-blocks/local/data would still pass; the ApiNamespace import check and the prompt cover the
     # rest.

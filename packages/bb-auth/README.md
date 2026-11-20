@@ -1124,7 +1124,7 @@ final user = await oidc.signInRelay(OidcAuthApiApiGetClientProvider.okta, launch
 
   A `clientIds` entry can be a literal id or a CDK token: the block forwards the list through its deployed config, so a token resolves at deploy time.
 
-  **A pool Amplify Gen 2 created** (or any pool created elsewhere in the same CDK app): wrap it with `Auth.fromExisting` and pass the ids as tokens. The backend module is loaded while the CDK app synthesizes, so hand them over before creating the Blocks backend:
+  **A pool Amplify Gen 2 created** (or any pool created elsewhere in the same CDK app): wrap it with `Auth.fromExisting` and pass the ids as tokens. The backend module is loaded while the CDK app synthesizes, so hand them over before creating the AWS CDK Blocks backend:
 
   ```typescript
   // amplify/blocks.ts

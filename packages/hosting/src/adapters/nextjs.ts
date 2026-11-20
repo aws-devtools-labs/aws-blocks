@@ -1209,14 +1209,16 @@ const isEsmProject = (projectDir: string): boolean => {
  * @returns a function that restores the original config, or `undefined` when nothing was wrapped.
  */
 /** The first-line marker of the wrapper {@link pinNextBuildId} writes. */
-const PINNED_CONFIG_MARKER = '// AWS Blocks: deterministic build ID (restored after the build).';
+const PINNED_CONFIG_MARKER = '// AWS CDK Blocks: deterministic build ID (restored after the build).';
+// Interrupted builds can leave a wrapper from before the product rename.
+const LEGACY_PINNED_CONFIG_MARKER = '// AWS Blocks: deterministic build ID (restored after the build).';
 
 /** The wrapper's owner line: the pid of the build that wrote it. */
-const pinnedOwnerLine = (pid: number) => `// AWS Blocks: pinned by pid ${pid}.`;
+const pinnedOwnerLine = (pid: number) => `// AWS CDK Blocks: pinned by pid ${pid}.`;
 
 /** The pid that wrote a wrapper, or `undefined` for a wrapper without one. */
 const pinnedOwnerOf = (config: string): number | undefined => {
-  const match = /^\/\/ AWS Blocks: pinned by pid (\d+)\.$/m.exec(config);
+  const match = /^\/\/ AWS (?:CDK )?Blocks: pinned by pid (\d+)\.$/m.exec(config);
   return match ? Number(match[1]) : undefined;
 };
 
@@ -1253,7 +1255,7 @@ export const restorePinnedNextConfig = (projectDir: string): boolean => {
     const baseFile = path.join(projectDir, `next.config.blocks-base.${ext}`);
     if (!fs.existsSync(baseFile) || !fs.existsSync(configFile)) continue;
     const config = fs.readFileSync(configFile, 'utf8');
-    if (!config.includes(PINNED_CONFIG_MARKER)) continue;
+    if (!config.includes(PINNED_CONFIG_MARKER) && !config.includes(LEGACY_PINNED_CONFIG_MARKER)) continue;
     const owner = pinnedOwnerOf(config);
     if (owner !== undefined && isOtherLiveProcess(owner)) continue;
     fs.rmSync(configFile, { force: true });
@@ -1369,7 +1371,7 @@ const installGeneratedOpenNextConfig = (
   // `npm install`.)
   const imageBlock = profile.skipImageOptimization ? `\n  imageOptimization: {\n    install: false,\n  },` : '';
   // `minify: true` shrinks the SSR Lambda bundle ~30-50% (esbuild flags
-  // unminified bundles >5MB with a scary "⚠️" — the AWS Blocks bug-bash
+  // unminified bundles >5MB with a scary "⚠️" — the AWS CDK Blocks bug-bash
   // saw 34-35 MB and 19/20 testers thought the build was failing). The
   // semantically-equivalent fix would be externalizing `@aws-sdk/*`
   // (Lambda runtime ships AWS SDK v3), but OpenNext does not yet expose

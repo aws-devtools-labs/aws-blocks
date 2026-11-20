@@ -10,6 +10,6 @@ export const backend = defineBackend({
   data,
 });
 
-// Blocks integration — adds Building Blocks to your Amplify backend
+// AWS CDK Blocks integration — adds Building Blocks to your Amplify backend
 import { initBlocks } from './blocks.js';
 await initBlocks(backend);

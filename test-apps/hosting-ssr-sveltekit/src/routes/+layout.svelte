@@ -6,7 +6,7 @@
 <div style="font-family: system-ui, sans-serif; padding: 2rem; max-width: 860px; margin: 0 auto; color: #333;">
   <header style="margin-bottom: 2rem; border-bottom: 1px solid #eee; padding-bottom: 1rem;">
     <h1 style="margin: 0;">
-      <a href="{base}/" style="text-decoration: none; color: inherit;">🧡 Blocks SvelteKit</a>
+      <a href="{base}/" style="text-decoration: none; color: inherit;">🧡 AWS CDK Blocks SvelteKit</a>
       <span style="margin-left: 0.5rem; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; background: #ff3e00; color: #fff; vertical-align: middle;">SvelteKit</span>
     </h1>
     <p style="color: #666; margin: 0.25rem 0 0;">SvelteKit (adapter-node) · SSR Hosting E2E Test</p>
