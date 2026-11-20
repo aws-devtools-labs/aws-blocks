@@ -335,7 +335,7 @@ export async function generateSpec(
 	// (string, number, boolean, object shapes) instead of "unknown".
 	// Loaded here, not imported at the top: it imports the `typescript` package, which
 	// an app may not have installed (`typescript` is a peer dependency of core). Every
-	// other script in `@aws-blocks/core/scripts` loads without it.
+	// other script in `@aws-cdk-blocks/core/scripts` loads without it.
 	const tsExtractor = await loadTsTypeExtractor();
 	let tsTypes = new Map<string, MethodTypeInfo>();
 	try {

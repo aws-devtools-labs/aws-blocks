@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `@aws-blocks/core/scripts` in an app that has no `typescript` package (a Nuxt or
- * Astro project that AWS Blocks was added to): every script loads, and spec
+ * `@aws-cdk-blocks/core/scripts` in an app that has no `typescript` package (a Nuxt or
+ * Astro project that AWS CDK Blocks was added to): every script loads, and spec
  * generation falls back to `unknown` types with a warning that says what to install.
  */
 
@@ -52,7 +52,7 @@ const scriptsIndex = pathToFileURL(join(import.meta.dirname, 'index.js')).href;
 const generateSpecModule = pathToFileURL(join(import.meta.dirname, 'generate-spec.js')).href;
 const apiModule = pathToFileURL(join(import.meta.dirname, '..', 'api.js')).href;
 
-describe('@aws-blocks/core/scripts without the typescript package', () => {
+describe('@aws-cdk-blocks/core/scripts without the typescript package', () => {
 	const dir = mkdtempSync(join(tmpdir(), 'blocks-no-typescript-'));
 	after(() => rmSync(dir, { recursive: true, force: true }));
 
