@@ -142,3 +142,59 @@ export const warnRulesNotApplied = (scope: IConstruct, what: UnreachedByProxies)
     `${what.door} front door: ${notes.join('; ')}. The CloudFront door (or the stacked door's edge) applies them to every response.`,
   );
 };
+
+/** At most this many routes are named in the {@link warnNoEdgeCache} message. */
+const NO_EDGE_CACHE_ROUTES_NAMED = 5;
+
+/** A shared-cache directive: it asks a CDN (not the browser) to store the response. */
+const SHARED_CACHE_DIRECTIVE = /(?:^|,)\s*(?:s-maxage|stale-while-revalidate|stale-if-error)\s*=/i;
+
+/**
+ * The patterns of the app's header rules whose `Cache-Control` asks a shared
+ * cache to store the response (`s-maxage`, `stale-while-revalidate`,
+ * `stale-if-error`): the edge-cache intent a door without an edge cache drops.
+ * The Nitro adapter turns `routeRules` `swr` and `cache.maxAge` into such rules;
+ * the Next.js adapter lifts `next.config` `headers()`.
+ *
+ * @param headers the app's header rules.
+ * @returns the matching patterns, in rule order, without duplicates.
+ */
+export const edgeCacheRoutes = (headers: readonly DoorHeaderRule[]): string[] => {
+  const routes = headers
+    .filter((rule) =>
+      Object.entries(rule.headers).some(
+        ([name, value]) => name.toLowerCase() === 'cache-control' && SHARED_CACHE_DIRECTIVE.test(value),
+      ),
+    )
+    .map((rule) => rule.pattern);
+  return [...new Set(routes)];
+};
+
+/**
+ * Warn at synth (`@aws-cdk-blocks/hosting:NoEdgeCache`), once per app, when
+ * the app asks for edge caching (see {@link edgeCacheRoutes}) behind a door
+ * that has no edge cache (the ALB and API Gateway doors). Nothing between the
+ * browser and the server stores responses there, so every request for those
+ * routes reaches the server (only a server-side cache, such as Nitro's or
+ * OpenNext's, spares a render) and the `Cache-Control` reaches the browser
+ * unchanged. No warning for an app without such a rule.
+ *
+ * @param scope the door construct.
+ * @param door the door's name in the message (e.g. `ALB`).
+ * @param headers the app's header rules.
+ */
+export const warnNoEdgeCache = (scope: IConstruct, door: string, headers: readonly DoorHeaderRule[]): void => {
+  const routes = edgeCacheRoutes(headers);
+  if (routes.length === 0) return;
+  const named = routes.slice(0, NO_EDGE_CACHE_ROUTES_NAMED).join(', ');
+  const more = routes.length > NO_EDGE_CACHE_ROUTES_NAMED ? ` and ${routes.length - NO_EDGE_CACHE_ROUTES_NAMED} more` : '';
+  Annotations.of(scope).addWarningV2(
+    '@aws-cdk-blocks/hosting:NoEdgeCache',
+    `${door} front door has no edge cache: ${named}${more} set a shared-cache Cache-Control ` +
+      '(s-maxage, stale-while-revalidate or stale-if-error), but nothing between the browser and the server stores ' +
+      'responses, so every request for these routes reaches the server and the header reaches the browser unchanged. ' +
+      "Only server-side caches apply: Nitro's `swr` and `cache` route rules and `defineCachedEventHandler` " +
+      "(Hosting's S3 cache) and Next.js ISR (OpenNext's incremental cache); other servers render every request. " +
+      'For an edge cache, use the CloudFront door or the stacked door.',
+  );
+};

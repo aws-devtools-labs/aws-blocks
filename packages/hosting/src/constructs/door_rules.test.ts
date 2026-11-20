@@ -205,7 +205,59 @@ describe("regional doors apply the app's redirects, header rules and error pages
       const label = JSON.stringify(frontDoor ?? 'cloudfront');
       assert.equal(warned(innerWildcard(), frontDoor, 'RouteNotExpressible', extra), caps.wildcardRoutes === false, `${label} wildcardRoutes`);
       assert.equal(warned(ssr(), frontDoor, 'DoorRulesNotApplied', extra), caps.appliesRules === false, `${label} appliesRules`);
+      assert.equal(warned(cacheable(), frontDoor, 'NoEdgeCache', extra), caps.edgeCache === false, `${label} edgeCache`);
     }
+  });
+
+  // An SSR app whose header rules ask the edge to cache two routes (what the
+  // Nitro adapter emits for `routeRules` `swr` and `cache.maxAge`).
+  const cacheable = (): DeployManifest => ({
+    ...ssr(),
+    headers: [
+      ...rules.headers,
+      { source: '/swr', headers: { 'Cache-Control': 'public, s-maxage=20, stale-while-revalidate=31536000' } },
+      { source: '/cached/*', headers: { 'cache-control': 'public, max-age=60, s-maxage=60' } },
+      { source: '/browser-only', headers: { 'Cache-Control': 'public, max-age=60' } },
+    ],
+  });
+  const noEdgeCacheWarnings = (manifest: DeployManifest, frontDoor: HostingConstructProps['frontDoor'], extra = {}) => {
+    // A sandbox deploy: a plain-HTTP ALB door with an API fails synth in production (PlainHttpFrontDoorError).
+    const stack = new Stack(new App({ context: { sandboxMode: 'true' } }), 'C', { env: { account: '111111111111', region: 'us-west-2' } });
+    new HostingConstruct(stack, 'Hosting', { manifest, frontDoor, backendApi: { url: API_URL }, ...extra });
+    return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('NoEdgeCache'));
+  };
+
+  it('ALB and API Gateway (HTTP and REST): one NoEdgeCache warning naming the shared-cache routes and the doors that cache', () => {
+    const domain = { domainName: 'app.example.com', hostedZoneId: 'Z1234567890ABC', hostedZone: 'example.com' };
+    for (const [frontDoor, extra, name] of [
+      [{ kind: 'alb' }, {}, 'ALB'],
+      [{ kind: 'apiGateway' }, {}, 'API Gateway'],
+      [{ kind: 'apiGateway', api: 'rest' }, { domain }, 'API Gateway \\(REST\\)'],
+    ] as const) {
+      const warnings = noEdgeCacheWarnings(cacheable(), frontDoor, extra);
+      assert.equal(warnings.length, 1, JSON.stringify(frontDoor));
+      const text = warningText(warnings);
+      assert.match(text, new RegExp(`^${name} front door has no edge cache: /swr, /cached/\\* set a shared-cache`));
+      assert.doesNotMatch(text, /\/browser-only|\/assets/, 'a rule without a shared-cache directive is not named');
+      assert.match(text, /every request for these routes reaches the server/);
+      assert.match(text, /use the CloudFront door or the stacked door/);
+    }
+  });
+
+  it('NoEdgeCache: no warning without a shared-cache rule, nor behind a door with an edge cache', () => {
+    assert.deepEqual(noEdgeCacheWarnings(ssr(), { kind: 'alb' }), []);
+    assert.deepEqual(noEdgeCacheWarnings(ssr(), { kind: 'apiGateway' }), []);
+    assert.deepEqual(noEdgeCacheWarnings(cacheable(), undefined), []);
+    assert.deepEqual(noEdgeCacheWarnings(cacheable(), { kind: 'stackedRouter' }), []);
+  });
+
+  it('NoEdgeCache: names at most five routes, then how many more', () => {
+    const many: DeployManifest = {
+      ...ssr(),
+      headers: Array.from({ length: 8 }, (_, i) => ({ source: `/p${i}`, headers: { 'Cache-Control': 's-maxage=10' } })),
+    };
+    const text = warningText(noEdgeCacheWarnings(many, { kind: 'apiGateway' }));
+    assert.match(text, /: \/p0, \/p1, \/p2, \/p3, \/p4 and 3 more set a shared-cache/);
   });
 });
 

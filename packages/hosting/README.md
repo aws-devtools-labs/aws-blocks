@@ -82,8 +82,8 @@ prop (on `HostingConstruct`, or on `Hosting` from `@aws-cdk-blocks/core`):
 | `frontDoor` | What serves the app |
 |---|---|
 | omitted / `'cloudfront'` / `{ features }` | The global CloudFront CDN (default): edge cache, WAF, custom domain, streaming, skew protection. |
-| `{ kind: 'alb' }` | A regional Application Load Balancer (no CDN): asset-proxy Lambda, SSR/image Lambda targets, same-origin API forwarder; regional WAF, access logs and alarms; HTTPS at your domain with `certificate` + `features.domain`. SSR responses are buffered. |
-| `{ kind: 'apiGateway', api?: 'http' \| 'rest' }` | Amazon API Gateway (no CDN, no VPC, scale-to-zero). `'http'` (default) buffers SSR responses. `'rest'` streams them, but needs a custom `domain`: its own URL carries the `/prod` stage, which the app's root-relative links miss, so synth fails without one (`RestFrontDoorNeedsDomainError`). |
+| `{ kind: 'alb' }` | A regional Application Load Balancer (no CDN): asset-proxy Lambda, SSR/image Lambda targets, same-origin API forwarder; regional WAF, access logs and alarms; HTTPS at your domain with `certificate` + `features.domain`. SSR responses are buffered. No edge cache: `s-maxage` and `stale-while-revalidate` store nothing (see [Caching](#the-alb-and-api-gateway-doors-rules-and-limits)). |
+| `{ kind: 'apiGateway', api?: 'http' \| 'rest' }` | Amazon API Gateway (no CDN, no VPC, scale-to-zero). `'http'` (default) buffers SSR responses. `'rest'` streams them, but needs a custom `domain`: its own URL carries the `/prod` stage, which the app's root-relative links miss, so synth fails without one (`RestFrontDoorNeedsDomainError`). No edge cache: `s-maxage` and `stale-while-revalidate` store nothing (see [Caching](#the-alb-and-api-gateway-doors-rules-and-limits)). |
 | `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }` | A CloudFront edge in front of a full ALB router (`Hosting` from `@aws-cdk-blocks/core` only): static routes come straight from S3 at the edge, the API and dynamic routes go through the ALB, which admits only the edge. |
 | `'none'` | No front door: a public S3 website bucket (HTTP only, static sites only; the client calls the API cross-origin). |
 | `{ kind: 'custom', door }` | Your own door (see [Bring your own front door](#bring-your-own-front-door)). |
@@ -359,6 +359,28 @@ and on API Gateway the API (proxied natively). Synth names exactly what is not
 applied (`@aws-cdk-blocks/hosting:DoorRulesNotApplied`). The CloudFront door and
 the stacked door's edge apply the rules to every response.
 
+**Caching.** These doors have no edge cache: nothing between the browser and
+the server stores a response. A route that sets `s-maxage` or
+`stale-while-revalidate` (from app code, a header rule, or Nitro
+`routeRules`) reaches the server on every request, and its `Cache-Control`
+reaches the browser unchanged, where `s-maxage` means nothing. Only a
+server-side cache spares the render. There is no
+stale copy to serve on an error either (`stale-if-error`), and the SSR cache
+guard has no shared cache to protect. Per framework:
+
+| Framework | Behind the ALB and API Gateway doors |
+|---|---|
+| Nuxt / Nitro | `routeRules` `swr` and `cache`, and `defineCachedEventHandler`, still cache server-side in Hosting's S3 cache, so a cached route is served from the server function without re-rendering. No edge copy. |
+| Next.js | ISR (`revalidate`) still regenerates through OpenNext's incremental cache (unless `incrementalRegeneration: false`), but every request reaches the server function. No edge copy. |
+| Astro, SvelteKit | No server cache: every request renders. |
+
+Synth warns once per app when its header rules ask a shared cache to store a
+route (`s-maxage`, `stale-while-revalidate` or `stale-if-error`, which the
+Nitro adapter emits for `swr` and `cache.maxAge` route rules), naming the
+routes (`@aws-cdk-blocks/hosting:NoEdgeCache`). It can't see a `Cache-Control`
+the server sets at run time. For edge caching, use the CloudFront door or the
+stacked door.
+
 **Size and time limits.** The asset proxy returns each file base64-encoded (a
 third larger; gzipped first when compressible) in its Lambda response, so a
 file is capped by that response's limit:
@@ -537,6 +559,12 @@ it is not an in-place update.
 - **The address changes.** The new door has a new URL (`HostingUrl`,
   `BLOCKS_PUBLIC_ORIGIN`, the CORS origin), so existing sessions (cookies are
   scoped to the old host) and bookmarks to the old address stop working.
+- **CloudFront → ALB or API Gateway loses the edge cache.** Routes the
+  CloudFront door served from its cache (`s-maxage`, `stale-while-revalidate`,
+  Next.js ISR pages, Nuxt `swr` routes) reach the server on every request
+  (see [Caching](#the-alb-and-api-gateway-doors-rules-and-limits)), so plan
+  for the extra server load. `HostingPresets.preview` uses the API Gateway
+  door, so a preview stack doesn't show how the CloudFront door caches.
 - **CloudFront → ALB or stacked** deletes the default distribution and its
   alarms; the ALB door's (and the router's) own alarms are on unless
   `monitoring: { enabled: false }`, and its access logs are off unless you set
