@@ -81,6 +81,7 @@ import {
   withSsrCacheGuardNodeOption,
 } from './ssr_cache_guard.js';
 import { resolveHandlerModule } from './handler_module.js';
+import { forwardedHeadersTrustFor } from './forwarded_headers.js';
 import { apiGatewayDoor } from './apigw_door.js';
 import { registerUploads } from './cf_helpers.js';
 import { ALB_LAMBDA_RESPONSE_LIMIT, LAMBDA_SYNC_RESPONSE_LIMIT, warnOversizedProxyAssets } from './proxy_limits.js';
@@ -935,6 +936,16 @@ export class HostingConstruct extends Construct {
       cacheKeyHeaders: f.cacheKeyHeaders,
       defaultTtlPositive: isDefaultTtlPositive(f.ssrDefaultTtl),
       allCookiesKeyed: stackedRouter,
+      // The forwarded headers the door sets (see forwarded_headers.ts): the
+      // server sees the public host, scheme and client address. A
+      // bring-your-own door and 'none' leave requests as they arrive.
+      forwarded: forwardedHeadersTrustFor(
+        typeof props.frontDoor === 'object' && props.frontDoor !== null
+          ? props.frontDoor.kind
+          : props.frontDoor === 'none'
+            ? 'none'
+            : undefined,
+      ),
     };
     // The computes the manifest routes requests to, other than the image
     // function: they render server responses (e.g. a Next.js split function

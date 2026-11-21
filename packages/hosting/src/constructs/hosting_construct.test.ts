@@ -315,6 +315,30 @@ void describe('HostingConstruct — SSR mode', () => {
     assert.match(guardFor({ kind: 'alb' }), /^const ALL_COOKIES_KEYED = false;$/m);
   });
 
+  void it('bakes the forwarded headers each door sets into the server bundle', () => {
+    const forwardedFor = (frontDoor: ConstructorParameters<typeof HostingConstruct>[2]['frontDoor']): unknown => {
+      const staticDir = createStaticDir();
+      const bundleDir = createBundleDir();
+      const manifest = ssrManifest(staticDir, bundleDir);
+      manifest.compute.default = { ...manifest.compute.default, streaming: false };
+      new HostingConstruct(createStack(), 'Hosting', { manifest, frontDoor, skipRegionValidation: true });
+      const guard = fs.readFileSync(path.join(bundleDir, SSR_CACHE_GUARD_FILE), 'utf-8');
+      const line = /^const FORWARDED = (.*);$/m.exec(guard);
+      assert.ok(line?.[1], 'the guard module carries the forwarded-headers trust');
+      return JSON.parse(line[1]);
+    };
+    const cloudFront = { clientHop: 2, hostHeader: 'x-forwarded-host' };
+    assert.deepStrictEqual(forwardedFor(undefined), cloudFront);
+    assert.deepStrictEqual(forwardedFor('cloudfront'), cloudFront);
+    assert.deepStrictEqual(forwardedFor({ kind: 'stackedRouter' }), {
+      clientHop: 2,
+      hostHeader: 'x-forwarded-host',
+      protoHeader: 'cloudfront-forwarded-proto',
+    });
+    assert.deepStrictEqual(forwardedFor({ kind: 'alb' }), { clientHop: 1, hostHeader: 'host' });
+    assert.deepStrictEqual(forwardedFor({ kind: 'apiGateway' }), { clientHop: 1, hostHeader: 'host' });
+  });
+
   void it('bakes cdn.cacheGuardIgnoredCookies into the SSR cache guard, and keeps them out of the cache key', () => {
     const staticDir = createStaticDir();
     const bundleDir = createBundleDir();
