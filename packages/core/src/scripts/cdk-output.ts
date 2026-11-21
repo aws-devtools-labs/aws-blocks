@@ -11,7 +11,8 @@
  *   keeps its existing relay.
  * - `normal`: the raw stream becomes a few milestones and a progress count
  *   ({@link createCdkProgressReporter}). Failure, rollback and error-shaped
- *   lines pass through verbatim, on the stream they arrived on.
+ *   lines pass through verbatim, on the stream they arrived on, and so does
+ *   each synth warning (a CDK warning annotation), once.
  * - `quiet`: no child output is shown while the operation runs.
  *
  * At `quiet` and `normal` every raw child line is kept in a bounded ring
@@ -22,6 +23,7 @@
  */
 
 import type { ChildProcess } from 'node:child_process';
+import { stripVTControlCharacters } from 'node:util';
 import {
   type CuratedStreams,
   createLineAssembler,
@@ -106,6 +108,21 @@ const NOISE_LINE =
   /NodeVersionSupportWarning|trace-warnings|^\(node:\d+\)|AWS SDK for JavaScript|^\s*More information can be found|require node >=|security updates please upgrade|versions published after/;
 
 /**
+ * OpenNext's build validation reports the wrapper/converter pair the Next.js
+ * adapter configures on purpose (`aws-lambda-streaming` with `aws-apigw-v1`, for
+ * the streaming REST API integration behind the CloudFront door) as an `ERROR`,
+ * on every healthy build; the adapter patches the bundle afterwards (see
+ * `patchStreamingWrapperForApiGateway` in `@aws-cdk-blocks/hosting`). At `normal` the
+ * adapter's own line explaining it is condensed away, so the `ERROR` would stand
+ * alone: it is dropped too. Any other OpenNext error still prints.
+ */
+const EXPECTED_OPENNEXT_LINE =
+  /Wrapper aws-lambda-streaming and converter aws-apigw-v1 are not compatible|^For the wrapper aws-lambda-streaming you should only use the following converters: aws-apigw-v2\s*$/;
+
+/** `line` without ANSI color codes (OpenNext colors its `ERROR` label). */
+const withoutAnsi = (line: string): string => stripVTControlCharacters(line);
+
+/**
  * A line that reports a failure or rollback. Shown verbatim at `normal`:
  * hiding a failure reason would be worse than any amount of noise.
  */
@@ -117,6 +134,99 @@ export function isCdkFailureLine(line: string): boolean {
     /\b[A-Z]\w*(Error|Exception)\b/.test(line) ||
     /^\s*❌/.test(line)
   );
+}
+
+/**
+ * The first line of a synth warning, as the CDK CLI prints a warning annotation
+ * (`Annotations.of(c).addWarningV2(id, message)`): `WARNING <message>` in current
+ * versions, `[Warning at /Stack/Path] <message>` in older ones.
+ */
+const WARNING_START_LINE = /^(?:WARNING\s|\[Warning at \/)/;
+
+/**
+ * A source location the CDK CLI prints in the run of lines before a warning: up
+ * to five of them, the first bare (`cdk-blocks/index.cdk.ts:33:3`), the next ones
+ * as `or <path>:<line>:<col>`, then `(and N more...)` when there are more.
+ */
+const WARNING_LOCATION_LINE = /^(?:(?:or )?\S+:\d+:\d+|\(and \d+ more\.\.\.\))$/;
+
+/** A continuation of a warning: its construct path and `Acknowledge with '…'` line, indented. */
+const WARNING_CONTINUATION_LINE = /^\s+\S/;
+
+/**
+ * CDK's indented stack failure line (` ❌  <stack> failed: …`). It ends a
+ * warning, so it reaches the failure handling instead of joining the block.
+ * Only the `❌` marker counts, not every {@link isCdkFailureLine} match: a
+ * construct path such as `app/error-pages/Hosting` must stay in its warning.
+ */
+const CDK_STACK_FAILURE_LINE = /^\s*❌/;
+
+/** Collects synth warning blocks out of a CDK child's lines; see {@link createSynthWarningCollector}. */
+interface SynthWarningCollector {
+  /**
+   * Feed one line (no trailing newline). True when the line belongs to a warning
+   * block (its first line or a continuation): the caller must not handle it
+   * further. A location line returns false: it is only kept, in case a warning follows.
+   */
+  line(line: string, from: 'stdout' | 'stderr'): boolean;
+  /** Print the warnings still being collected (at the end of the output). */
+  flush(): void;
+}
+
+/**
+ * Track the synth warnings in a CDK child's output and hand each complete
+ * block (source locations, the `WARNING …` line, its indented construct path and
+ * `Acknowledge with …` lines) to `print`, once per text in `printed`. Each
+ * stream has its own state, because stdout and stderr are relayed
+ * independently: a line on one stream never ends, extends or splits a warning
+ * on the other.
+ */
+function createSynthWarningCollector(
+  print: (text: string, from: 'stdout' | 'stderr') => void,
+  printed: Set<string>,
+): SynthWarningCollector {
+  const streams = {
+    stdout: { locations: [] as string[], warning: undefined as string[] | undefined },
+    stderr: { locations: [] as string[], warning: undefined as string[] | undefined },
+  };
+  const flushStream = (from: 'stdout' | 'stderr'): void => {
+    const state = streams[from];
+    if (!state.warning) return;
+    const text = state.warning.join('\n');
+    state.warning = undefined;
+    if (printed.has(text)) return;
+    printed.add(text);
+    print(text, from);
+  };
+  return {
+    line(raw: string, from: 'stdout' | 'stderr'): boolean {
+      const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
+      const state = streams[from];
+      if (
+        state.warning &&
+        WARNING_CONTINUATION_LINE.test(line) &&
+        !parseCdkEventLine(line) &&
+        !CDK_STACK_FAILURE_LINE.test(line)
+      ) {
+        state.warning.push(line.trimEnd());
+        return true;
+      }
+      flushStream(from);
+      if (WARNING_START_LINE.test(line)) {
+        state.warning = [...state.locations, line.trimEnd()];
+        state.locations = [];
+        return true;
+      }
+      const trimmed = line.trim();
+      if (WARNING_LOCATION_LINE.test(trimmed)) state.locations.push(trimmed);
+      else state.locations = [];
+      return false;
+    },
+    flush(): void {
+      flushStream('stdout');
+      flushStream('stderr');
+    },
+  };
 }
 
 /** A pre-CloudFormation synth/bundling marker. */
@@ -136,6 +246,12 @@ export interface CdkProgressReporterOptions {
   verb?: 'deploy' | 'destroy';
   /** Minimum gap between piped progress lines. Default {@link PIPED_PROGRESS_INTERVAL_MS}. */
   pipedIntervalMs?: number;
+  /**
+   * The synth warnings already printed, by text. Pass the same set to the
+   * reporters (and {@link attachCdkWatchOutput}) of one command so a warning
+   * prints once per command. Default: a new set.
+   */
+  printedWarnings?: Set<string>;
 }
 
 /** Curated `normal`-level rendering of a CDK child's output. */
@@ -159,8 +275,10 @@ export interface CdkProgressReporter {
  * Every resource event is counted (a `*_COMPLETE` per logical id, or CDK's own
  * `N/M` counter when the stream has one), so it works for the production
  * `--progress events --ci` stream and the sandbox/destroy default stream.
- * Failure lines are written verbatim to the stream they came from; everything
- * else is dropped (the caller retains it for the failure dump).
+ * Failure lines are written verbatim to the stream they came from, and so is
+ * each synth warning (with the source location before it and its indented
+ * construct path and acknowledgement lines), once however many synths print it;
+ * everything else is dropped (the caller retains it for the failure dump).
  *
  * Adapted from the original CLI prototype's deploy-progress reporter.
  */
@@ -179,6 +297,14 @@ export function createCdkProgressReporter(
   let liveLine = false;
   let lastPiped = '';
   let lastPipedAt = Number.NEGATIVE_INFINITY;
+  // Synth warnings print, unlike the rest of the synth output: a security
+  // warning (a plain-HTTP door, a stub identity provider) must not need
+  // `--verbose` to be seen. CDK prints each warning at every synth, and a
+  // sandbox or a deploy can synthesize more than once, so each prints once.
+  const warnings = createSynthWarningCollector(
+    (text, from) => milestone(from === 'stderr' ? stderr : stdout, text),
+    options.printedWarnings ?? new Set<string>(),
+  );
 
   const clearLive = (): void => {
     if (!liveLine) return;
@@ -213,7 +339,8 @@ export function createCdkProgressReporter(
   return {
     line(raw: string, from: 'stdout' | 'stderr'): void {
       const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
-      if (line.trim() === '' || NOISE_LINE.test(line)) return;
+      if (warnings.line(line, from)) return;
+      if (line.trim() === '' || NOISE_LINE.test(line) || EXPECTED_OPENNEXT_LINE.test(withoutAnsi(line).trim())) return;
       const event = parseCdkEventLine(line);
       if (isCdkFailureLine(line) || (event && isRollbackStatus(event.status))) {
         milestone(from === 'stderr' ? stderr : stdout, line.trim());
@@ -247,6 +374,7 @@ export function createCdkProgressReporter(
       milestone(stdout, text);
     },
     finish(ok: boolean): void {
+      warnings.flush();
       clearLive();
       if (!ok || !announcedEvents) return;
       const n = total ?? done();
@@ -270,6 +398,8 @@ export interface CdkOutputOptions {
   now?: () => number;
   /** Default {@link DEFAULT_RETAINED_LINES}. */
   retainLines?: number;
+  /** See {@link CdkProgressReporterOptions.printedWarnings}. Default: a new set. */
+  printedWarnings?: Set<string>;
 }
 
 /** Options for {@link CdkOutput.run}. */
@@ -332,7 +462,12 @@ export function createCdkOutput(options: CdkOutputOptions): CdkOutput {
   let runStart = 0;
   const reporter =
     level === 'normal'
-      ? createCdkProgressReporter(stdout, stderr, { isTty, now: options.now, verb: options.verb })
+      ? createCdkProgressReporter(stdout, stderr, {
+          isTty,
+          now: options.now,
+          verb: options.verb,
+          printedWarnings: options.printedWarnings,
+        })
       : undefined;
 
   const feed = (from: 'stdout' | 'stderr'): OutputSink => ({
@@ -498,6 +633,8 @@ export interface CdkWatchOutputOptions {
   retainLines?: number;
   /** Default {@link WATCH_FAILURE_IDLE_MS}. */
   failureIdleMs?: number;
+  /** See {@link CdkProgressReporterOptions.printedWarnings}. Default: a new set. */
+  printedWarnings?: Set<string>;
 }
 
 /**
@@ -508,7 +645,8 @@ export interface CdkWatchOutputOptions {
  * dropped), and each stderr chunk likewise via `console.error`.
  *
  * Curated: output is split into whole lines and retained. At `normal`, only
- * {@link WATCH_PROGRESS_LINE} and failure lines print (same `[CDK Watch]` prefix and stream).
+ * {@link WATCH_PROGRESS_LINE} and failure lines print (same `[CDK Watch]` prefix and stream),
+ * and each synth warning a watch deploy raises, once (each of its lines prefixed).
  * When a watch deploy fails (a `❌` line) or `cdk watch` itself exits non-zero,
  * the retained lines since the last failure are printed to stderr, so a failed
  * hotswap is diagnosable without re-running with a higher level.
@@ -552,10 +690,31 @@ export function attachCdkWatchOutput(child: ChildProcess, options: CdkWatchOutpu
     if (text) stderr.write(text);
     ring.clear();
   };
+  const printWatchLine = (text: string, from: 'stdout' | 'stderr'): void => {
+    if (from === 'stderr') console.error(`[CDK Watch] ${text}`);
+    else (progressToStderr() ? console.error : console.log)(`[CDK Watch] ${text}`);
+  };
+  // A warning introduced while the sandbox runs (a front door switched to plain
+  // HTTP) must not need `--verbose` either.
+  const warnings =
+    level === 'normal'
+      ? createSynthWarningCollector(
+          (text, from) => {
+            for (const warningLine of text.split('\n')) printWatchLine(warningLine, from);
+          },
+          options.printedWarnings ?? new Set<string>(),
+        )
+      : undefined;
+  let openStreams = 0;
   const relay = (stream: NodeJS.ReadableStream | null | undefined, from: 'stdout' | 'stderr'): void => {
     if (!stream) return;
+    openStreams++;
     const assembler = createLineAssembler();
     const handle = (line: string): void => {
+      if (warnings?.line(line, from)) {
+        ring.push(line);
+        return;
+      }
       if (line.trim() === '' || LAMBDA_PLATFORM_LINE.test(line) || NOISE_LINE.test(line)) return;
       const ownLine = WATCH_OWN_LINE.test(line);
       if (WATCH_CYCLE_START_LINE.test(line)) {
@@ -564,8 +723,7 @@ export function attachCdkWatchOutput(child: ChildProcess, options: CdkWatchOutpu
       }
       ring.push(line);
       if (level === 'normal' && (WATCH_PROGRESS_LINE.test(line) || (!ownLine && isCdkFailureLine(line)))) {
-        if (from === 'stderr') console.error(`[CDK Watch] ${line.trim()}`);
-        else (progressToStderr() ? console.error : console.log)(`[CDK Watch] ${line.trim()}`);
+        printWatchLine(line.trim(), from);
       }
       if (/^\s*❌/.test(line)) {
         dump();
@@ -590,6 +748,7 @@ export function attachCdkWatchOutput(child: ChildProcess, options: CdkWatchOutpu
     });
     stream.on('end', () => {
       for (const line of assembler.flush()) handle(line);
+      if (--openStreams === 0) warnings?.flush();
     });
   };
   relay(child.stdout, 'stdout');
