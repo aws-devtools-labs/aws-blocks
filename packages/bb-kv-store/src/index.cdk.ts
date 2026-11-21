@@ -288,6 +288,9 @@ export class KVStore<
 	delete(..._args: unknown[]): never {
 		return synthGuard('KVStore', 'delete');
 	}
+	appendToList(..._args: unknown[]): never {
+		return synthGuard('KVStore', 'appendToList');
+	}
 	query(..._args: unknown[]): never {
 		return synthGuard('KVStore', 'query');
 	}

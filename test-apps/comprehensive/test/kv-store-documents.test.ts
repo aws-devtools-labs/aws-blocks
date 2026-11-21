@@ -88,6 +88,41 @@ export function kvStoreDocumentsTests(getApi: () => typeof apiType) {
       });
     });
 
+    describe('appendToList', () => {
+      test('appends to a list field atomically and returns the new list', async () => {
+        const api = getApi();
+        const pk = uid();
+        const key = { pk, sk: 'sk1' };
+        await api.tablePut(key, { data: 'hello', timestamp: 1000 });
+        const first: string[] = await api.tableAppendTags(key, ['a']);
+        assert.deepStrictEqual(first, ['a']);
+        await Promise.all(['b', 'c', 'd'].map((tag) => api.tableAppendTags(key, [tag])));
+        const record = await api.tableGet(key);
+        assert.deepStrictEqual([...(record?.tags ?? [])].sort(), ['a', 'b', 'c', 'd']);
+        assert.strictEqual(record?.data, 'hello');
+        await api.tableDelete(key);
+      });
+
+      test('a key with no value is a 409 that is not retriable, and creates nothing', async () => {
+        const api = getApi();
+        const key = { pk: uid(), sk: 'sk1' };
+        const e = await expectError(api.tableAppendTags(key, ['a']), ConditionalCheckFailed);
+        assert.ok(e instanceof ApiError);
+        assert.strictEqual(e.status, 409);
+        assert.strictEqual(e.retriable, false);
+        assert.strictEqual(await api.tableGet(key), null);
+      });
+
+      test('items that fail the schema of the field are rejected and nothing changes', async () => {
+        const api = getApi();
+        const key = { pk: uid(), sk: 'sk1' };
+        await api.tablePut(key, { data: 'hello', timestamp: 1000, tags: ['a'] });
+        await expectError(api.tableAppendTags(key, ['']), ValidationFailed);
+        assert.deepStrictEqual((await api.tableGet(key))?.tags, ['a']);
+        await api.tableDelete(key);
+      });
+    });
+
     describe('conditional put', () => {
       test('ifNotExists succeeds on new item and fails on existing item', async () => {
         const api = getApi();

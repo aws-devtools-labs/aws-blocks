@@ -56,7 +56,7 @@ const MAX_SORT_KEY_BYTES = 1024;
  * levels counting the top-level attribute itself, so an attribute holding 32
  * nested maps is rejected.
  */
-const MAX_NESTING_DEPTH = 31;
+export const MAX_NESTING_DEPTH = 31;
 
 /**
  * Most keys one `BatchGetItem` request takes, and most writes one
@@ -305,14 +305,14 @@ const UNSTORABLE_FIELD = '__proto__';
  * mock. An object that `JSON.parse` built can have a field of that name. An
  * object literal `{ __proto__: x }` sets the prototype and has no such field.
  */
-function hasUnstorableField(value: unknown): boolean {
+export function hasUnstorableField(value: unknown): boolean {
 	if (Array.isArray(value)) return value.some(hasUnstorableField);
 	if (!isPlainObject(value)) return false;
 	return Object.keys(value).some((field) => field === UNSTORABLE_FIELD || hasUnstorableField(value[field]));
 }
 
-/** Whether a list or map nests deeper than {@link MAX_NESTING_DEPTH}, where `depth` 1 is a top-level attribute. */
-function nestsTooDeep(value: unknown, depth: number): boolean {
+/** @internal Whether a list or map nests deeper than {@link MAX_NESTING_DEPTH}, where `depth` 1 is a top-level attribute. */
+export function nestsTooDeep(value: unknown, depth: number): boolean {
 	let children: unknown[];
 	if (Array.isArray(value)) children = value;
 	else if (value instanceof Map) children = [...value.values()];

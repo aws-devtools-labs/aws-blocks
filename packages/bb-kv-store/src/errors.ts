@@ -29,7 +29,10 @@ import type { ReadValidationMode } from './types.js';
  * ```
  */
 export const KVStoreErrors = {
-	/** A condition on `put` or `delete` failed. Serializes to HTTP 409 (Conflict). */
+	/**
+	 * A condition on `put` or `delete` failed. Serializes to HTTP 409 (Conflict).
+	 * Also thrown, not retriable, when `appendToList` finds no value at the key.
+	 */
 	ConditionalCheckFailed: 'ConditionalCheckFailedException',
 	/**
 	 * A value fails the schema, disagrees with its key, has a top-level field
@@ -39,7 +42,8 @@ export const KVStoreErrors = {
 	 * indexed field over DynamoDB's size limit (2,048 bytes for a partition key,
 	 * 1,024 bytes for a sort key), lists or maps nested more than 32 levels deep,
 	 * and a bad expiry (`ttlSeconds` together with `expiresAt`, or a time that is
-	 * not usable).
+	 * not usable). Also an `appendToList` to a field that holds a value that is not
+	 * a list, or to a stored value that is not an object.
 	 */
 	ValidationFailed: 'ValidationFailedException',
 	/**
@@ -61,6 +65,8 @@ export const KVStoreErrors = {
 	 *   reads)
 	 * - an empty `ifFieldEquals`
 	 * - `ifValueEquals` with an object value
+	 * - an `appendToList` field that is not a non-empty string, or that is a key
+	 *   field, an indexed field, or the `ttl` field, and items that are not an array
 	 * - a cursor that does not decode or belongs to another store, index, or
 	 *   partition
 	 *

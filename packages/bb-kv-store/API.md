@@ -108,6 +108,7 @@ export type KeyOf<T, K> = [K] extends [undefined] ? string : {
 // @public
 export class KVStore<In = string, Out = In, K extends KeyConfig<In, Out> | undefined = undefined, I extends Record<string, IndexConfig<In, Out>> = {}> extends Scope {
     constructor(scope: ScopeParent, id: string, options?: KVStoreOptions<In, Out, K, I>);
+    appendToList<F extends ListField<In, Out>>(key: KeyOf<Out, K>, field: F, items: ListItemOf<In, F>[]): Promise<ListOf<Out, F>>;
     // (undocumented)
     readonly bbName = "KVStore";
     delete(key: KeyOf<Out, K>, conditions?: ConditionalDeleteOptions<Out>): Promise<void>;
@@ -178,6 +179,17 @@ export type LegacyKVStorePutOptions<T = unknown> = Expiry & {
     ifNotExists?: boolean;
     ifValueEquals?: T;
 };
+
+// @public
+export type ListField<In, Out> = IsRecord<Out> extends true ? {
+    [P in SharedField<In, Out>]-?: [NonNullable<Out[P]> | NonNullable<In[P]>] extends [readonly unknown[]] ? P : never;
+}[SharedField<In, Out>] : never;
+
+// @public
+export type ListItemOf<T, F> = F extends keyof T ? (NonNullable<T[F]> extends readonly (infer E)[] ? E : never) : never;
+
+// @public
+export type ListOf<T, F> = F extends keyof T ? NonNullable<T[F]> : never;
 
 // @public
 export type NumberField<In, Out> = IsRecord<Out> extends true ? {

@@ -15,7 +15,9 @@ import {
 	PutCommand,
 	QueryCommand,
 	ScanCommand,
+	UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
+import { appendToListFailure, appendToListInput, planAppendToList } from './append-to-list.js';
 import { blocksError, conditionalCheckFailed, KVStoreErrors, KVStoreMessages, remapItemTooLarge } from './errors.js';
 import {
 	assertNoDuplicateKeys,
@@ -52,6 +54,9 @@ import type {
 	KeyConfig,
 	KeyOf,
 	KVStoreOptions,
+	ListField,
+	ListItemOf,
+	ListOf,
 	PutBatchEntry,
 	PutOptions,
 	QueryOptions,
@@ -323,6 +328,70 @@ export class KVStore<
 				throw conditionalCheckFailed(condition.retriable, err);
 			}
 			throw err;
+		}
+	}
+
+	/**
+	 * Append items to the end of a list field of a stored object value, in one
+	 * atomic step, and return the new list. Use it in place of a `get` and a `put`
+	 * of the whole value, where two callers that append at the same time would lose
+	 * one of the appends.
+	 *
+	 * The key must hold an object value: `appendToList` changes a stored value and
+	 * does not create one, so the stored value keeps passing the schema. A field
+	 * that is absent starts as an empty list. The field is a top-level field, and
+	 * cannot be a key field, an indexed field, or the `ttl` field. With a `schema`,
+	 * the items are checked against the schema of the field before the call, as a
+	 * list of their own: a rule on the whole list, such as a maximum length, applies
+	 * to the items and not to the list that results. The expiry of the value does
+	 * not change. `undefined` items are left out.
+	 *
+	 * On AWS, the call is one DynamoDB `UpdateItem` with
+	 * `SET #f = list_append(if_not_exists(#f, :empty), :items)`.
+	 *
+	 * @param key - The key of the stored value.
+	 * @param field - The list field to append to.
+	 * @param items - The items to append, in order.
+	 * @returns The list after the append.
+	 * @throws {KVStoreErrors.ConditionalCheckFailed} If the key has no value.
+	 *   Serializes to HTTP 409 (Conflict). Not retriable: create the value with `put`
+	 *   first.
+	 * @throws {KVStoreErrors.InvalidQuery} If the key has the wrong shape, the field
+	 *   is not a non-empty string or is a key field, an indexed field, or the `ttl`
+	 *   field, or the items are not an array.
+	 * @throws {KVStoreErrors.ValidationFailed} If the items fail the schema of the
+	 *   field, an item has a field named `__proto__` at any depth, the field starts
+	 *   with `_bkv_` or is `__proto__`, the field holds a value that is not a list,
+	 *   or the stored value is not an object.
+	 * @throws {KVStoreErrors.ItemTooLarge} If the item would exceed 400 KB.
+	 *
+	 * @example
+	 * ```typescript
+	 * await posts.put({ userId: 'alice', postId: 'p1' }, { title: 'Hello' });
+	 * const tags = await posts.appendToList({ userId: 'alice', postId: 'p1' }, 'tags', ['news']);
+	 * // ['news']
+	 * ```
+	 */
+	async appendToList<F extends ListField<In, Out>>(
+		key: KeyOf<Out, K>,
+		field: F,
+		items: ListItemOf<In, F>[],
+	): Promise<ListOf<Out, F>> {
+		const plan = await planAppendToList(this.model, key, field, items);
+		try {
+			const result = await this.docClient.send(
+				new UpdateCommand({
+					TableName: getSdkIdentifiers(this).tableName,
+					...appendToListInput(this.model, plan),
+				}),
+			);
+			return (result.Attributes?.[plan.field] ?? []) as ListOf<Out, F>;
+		} catch (err: unknown) {
+			const failure = appendToListFailure(err, plan.field);
+			// No value at the key: an existence precondition, as `ifExists` on delete, so not retriable.
+			if (failure === 'absent') throw conditionalCheckFailed(false, err);
+			if (failure) throw failure;
+			throw remapItemTooLarge(err);
 		}
 	}
 
