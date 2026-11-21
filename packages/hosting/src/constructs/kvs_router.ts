@@ -43,6 +43,35 @@ export const ORIGIN_ID = {
   image: 'blocks-image',
 } as const;
 
+/**
+ * The cache-key header that carries a SHA-256 digest (base64url) of the
+ * viewer's complete `Accept` value on an image-optimization route (repeated
+ * `Accept` fields joined with `,`), or is absent when the viewer sends no
+ * `Accept`. The router also sends that joined value to the image origin as its
+ * only `Accept` field, so the optimizer negotiates on exactly the value the key
+ * covers; the digest keeps the key a fixed size, so a long `Accept` is not
+ * forwarded to the origin twice.
+ *
+ * The router reaches the image origin through the default behavior, so an
+ * image request is keyed by the default (SSR) cache policy, which leaves out
+ * `Accept` on purpose: browsers send many different `Accept` values for pages,
+ * and keying every page on it would split the page cache. Without `Accept` in
+ * the image key, the first viewer's format (WebP, AVIF or the source image)
+ * would be served to every later viewer of the same URL; CloudFront ignores
+ * `Vary`. The value is copied as sent, not reduced to a format: the optimizers
+ * negotiate on the whole value (Next.js honours `q=0`, so
+ * `image/png,image/webp;q=0` gets the source PNG; IPX tells JPEG and PNG
+ * apart), and any reduction that differs from theirs would serve one viewer's
+ * cached format to a viewer that rejects it.
+ *
+ * The router sets this header only on image routes, and only when the
+ * distribution keys on it; it then drops a value the viewer sent on every route.
+ * `Accept` is kept on image routes even when `cdn.cacheKeyHeaders` lists it
+ * (other entries are dropped on shared routes): it is not a credential, and the
+ * optimizer needs it.
+ */
+export const IMAGE_ACCEPT_CACHE_KEY_HEADER = 'x-blocks-image-accept';
+
 /** Route kind markers stored in the KVS route table (kept terse for size). */
 type RouteKind = 's' | 'c' | 'i'; // static(S3) | compute(server) | image
 
@@ -559,12 +588,48 @@ export const headerRowsJs = (rows: string, indent: string): string =>
  * asset onto the current build, skipping its `__dpl` pin — the exact #245 bug,
  * inverted. `slice(-5)` on a <5-char string returns the whole string, never `.html`.
  *
+ * assetPrefix (step 2) is stripped BEFORE the basePath 308. Next.js does NOT
+ * prefix assetPrefix with basePath: with basePath='/app' and
+ * assetPrefix='/cdn-static' the browser fetches /cdn-static/_next/static/*
+ * (no /app). assetPrefix is an ALTERNATIVE asset prefix, not additive with
+ * basePath. So the router strips the assetPrefix and, when a basePath is also
+ * set, RE-MAPS the asset into the basePath form (/cdn-static/_next/* ->
+ * /app/_next/*). That puts it in the exact shape a normal (no-assetPrefix)
+ * basePath asset already has, so it matches the basePath-prefixed route table,
+ * the basePath 308 does NOT fire (it is now under basePath), and the static
+ * branch (4c) strips basePath back off before the build-id rewrite. Ordering
+ * matters: if the basePath 308 ran first it would see /cdn-static/... (not
+ * under /app) and 308 to /app/cdn-static/... -> 404 -> the browser rejects the
+ * HTML 404 as a non-executable script.
+ *
+ * The basePath canonical 308 (step 2b) MUST preserve the query string: e.g.
+ * /_next/image?url=...&w=64 redirecting to /app/_next/image WITHOUT the query
+ * hits the image optimizer with no url param -> 400 "url parameter is
+ * required" (and any ?ms=/?tag= API param is likewise lost). It mirrors the www
+ * 301 and appends the rebuilt query string.
+ *
+ * On image routes (step 4a) the router joins the viewer's `Accept` fields with
+ * `,` and sends that value as the only `Accept` field, read before the
+ * credential strip so a `cacheKeyHeaders` entry for `Accept` doesn't remove it:
+ * an origin that reads one field (the IPX adapter reads API Gateway's
+ * `headers`, which keeps only the last) negotiates on the whole value. With
+ * `imageAcceptKey` set, it also writes a SHA-256 digest of that same value into
+ * {@link IMAGE_ACCEPT_CACHE_KEY_HEADER}, and deletes a viewer-sent value of that
+ * header on every route first. Without it the router leaves that header alone,
+ * so an app that keys pages on a header of the same name through
+ * `cacheKeyHeaders` keeps its cache key.
+ *
  * NOTE: this function source ships to CloudFront, which enforces a 10 KB code
  * limit — keep in-function comments terse (the rationale lives here in the
  * JSDoc, which does NOT ship).
  */
-export const generateKvsRouterRequestCode = (): string => `import cf from 'cloudfront';
-${SHARED_CF_HELPERS}
+export const generateKvsRouterRequestCode = (
+  opts: {
+    /** Write the image cache key ({@link IMAGE_ACCEPT_CACHE_KEY_HEADER}) on image routes. Default: false. */
+    readonly imageAcceptKey?: boolean;
+  } = {},
+): string => `import cf from 'cloudfront';
+${opts.imageAcceptKey ? "import crypto from 'crypto';\n" : ''}${SHARED_CF_HELPERS}
 function buildQueryString(request) {
   return request.querystring && Object.keys(request.querystring).length > 0
     ? '?' + Object.keys(request.querystring).map(function(k){ var v = request.querystring[k]; return v.multiValue ? v.multiValue.map(function(mv){ return k + '=' + mv.value; }).join('&') : k + '=' + v.value; }).join('&')
@@ -577,7 +642,7 @@ function stripCred(request, meta) {
 async function handler(event) {
   var request = event.request;
   var uri = request.uri;
-  var meta = await getJson('meta', null);
+${opts.imageAcceptKey ? `  delete request.headers['${IMAGE_ACCEPT_CACHE_KEY_HEADER}'];\n` : ''}  var meta = await getJson('meta', null);
   if (!meta) { return request; }
 
   // 0. Already-prefixed asset fetches (CloudFront custom-error responses
@@ -611,21 +676,7 @@ ${redirectRowsJs('drows', '    ')}
 
   var bp = meta.bp;
 
-  // 2. assetPrefix strip — MUST run BEFORE the basePath 308 below.
-  //
-  // Next.js does NOT prefix assetPrefix with basePath: with basePath='/app' and
-  // assetPrefix='/cdn-static' the browser fetches /cdn-static/_next/static/*
-  // (no /app). assetPrefix is an ALTERNATIVE asset prefix, not additive with
-  // basePath. So we strip the assetPrefix and, when a basePath is also set,
-  // RE-MAP the asset into the basePath form (/cdn-static/_next/* ->
-  // /app/_next/*). That puts it in the exact shape a normal (no-assetPrefix)
-  // basePath asset already has, so it matches the basePath-prefixed route table,
-  // the basePath 308 below does NOT fire (it is now under basePath), and the
-  // static branch (4c) strips basePath back off before the build-id rewrite.
-  //
-  // Ordering matters: if the basePath 308 ran first it would see /cdn-static/...
-  // (not under /app) and 308 to /app/cdn-static/... -> 404 -> the browser
-  // rejects the HTML 404 as a non-executable script (the reported bug).
+  // 2. assetPrefix strip + re-map under basePath; BEFORE the 308 (see JSDoc).
   if (meta.aP && (uri === meta.aP || uri.indexOf(meta.aP + '/') === 0)) {
     uri = uri.substring(meta.aP.length);
     if (uri.length === 0) { uri = '/'; }
@@ -634,11 +685,7 @@ ${redirectRowsJs('drows', '    ')}
     }
   }
 
-  // 2b. basePath canonical 308. MUST preserve the query string — e.g.
-  // /_next/image?url=...&w=64 redirecting to /app/_next/image WITHOUT the query
-  // hits the image optimizer with no url param -> 400 "url parameter is
-  // required" (and any ?ms=/?tag= API param is likewise lost). Mirror the www
-  // 301 above and append the rebuilt query string.
+  // 2b. basePath canonical 308; keeps the query string (see JSDoc).
   if (bp) {
     if (uri !== bp && uri.indexOf(bp + '/') !== 0) {
       var target = uri === '/' ? bp + '/' : bp + uri;
@@ -668,6 +715,8 @@ ${redirectRowsJs('drows', '    ')}
   if (kind === null) { kind = meta.srv ? 'c' : 's'; }
 
   // static/image routes share a cache key: drop credential cache-key entries.
+  // Accept is read first: the image branch needs it even if it is one of them.
+  var ac = request.headers.accept;
   if (kind !== 'c') { stripCred(request, meta); }
 
   // 4a. image-opt origin — strip basePath, then keep URI (no build-id prefix).
@@ -679,6 +728,15 @@ ${redirectRowsJs('drows', '    ')}
   if (kind === 'i') {
     uri = stripBasePath(uri, bp);
     request.uri = uri;
+    if (ac) {
+      ac = ac.multiValue ? ac.multiValue.map(function(v){ return v.value; }).join(',') : ac.value;
+      request.headers.accept = { value: ac };
+${
+      opts.imageAcceptKey
+        ? `      request.headers['${IMAGE_ACCEPT_CACHE_KEY_HEADER}'] = { value: crypto.createHash('sha256').update(ac).digest('base64url') };
+`
+        : ''
+    }    }
     cf.selectRequestOriginById(meta.oImg);
     return request;
   }

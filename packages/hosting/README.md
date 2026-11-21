@@ -981,6 +981,27 @@ Static and image routes are not keyed on `cacheKeyCookies` /
 `cacheKeyHeaders`, and those cookies and headers are not forwarded to the
 origin on those routes (an auth-gated image source does not receive them).
 
+Image optimization requests (Next.js `/_next/image`, the Nuxt and Astro image
+endpoints) share the default behavior's cache key, and the optimizer picks the
+output format from the viewer's `Accept` header. CloudFront ignores
+`Vary: Accept`, so on image routes the edge router joins the viewer's `Accept`
+fields into one value, sends that value to the image optimizer as its only
+`Accept` field, and writes a SHA-256 digest of it into an
+`x-blocks-image-accept` header that the SSR cache policy keys on. The optimizer
+negotiates on exactly the value the cache key covers, so viewers that accept,
+reject (`image/webp;q=0`) or prefer different formats get separate cached
+copies, and a long `Accept` reaches the origin once, not twice. `Accept` is
+kept on image routes even when `cacheKeyHeaders` lists it (other
+`cacheKeyHeaders` entries are dropped there). `Accept` itself stays out of the
+default cache key,
+so pages keep one cache entry whatever `Accept` the browser sends. The router
+drops an `x-blocks-image-accept` header the viewer sends on any route, so with
+an image optimizer that name is reserved and synth rejects it in
+`cacheKeyHeaders`; without one the router leaves it alone. The header takes one
+of the cache-key header slots; when `cacheKeyHeaders` already uses all five, it
+stays out of the key and synth warns with
+`@aws-cdk-blocks/hosting:ImageAcceptNotInCacheKey`.
+
 ## Custom domains (CloudFront door)
 
 Configure a custom domain through `frontDoor.features.domain`

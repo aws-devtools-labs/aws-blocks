@@ -65,6 +65,7 @@ import { assertCacheGuardIgnoredCookies } from './ssr_cache_guard.js';
 import type { SkewProtectionConfig } from './skew_protection.js';
 import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 import {
+  IMAGE_ACCEPT_CACHE_KEY_HEADER,
   ORIGIN_ID,
   generateKvsRouterRequestCode,
   generateKvsRouterResponseCode,
@@ -817,6 +818,19 @@ export class CdnConstruct extends Construct {
       'next-router-segment-prefetch',
       'next-action',
     ];
+    // With an image origin, the router writes a digest of the Accept value it
+    // sends the image origin into IMAGE_ACCEPT_CACHE_KEY_HEADER on image routes
+    // (and drops that header on all others). Image requests reach the image origin through the default
+    // behavior, so this cache policy is their cache key: without the header the
+    // first viewer's format would be served to every later one (CloudFront
+    // ignores `Vary: Accept`). `accept` itself stays out of the key, so pages
+    // keep one cache entry whatever `Accept` a browser sends.
+    // It takes a cache-key header slot only when one is free: an app already at
+    // the cap with its own cacheKeyHeaders keeps synthesizing as before, with a
+    // warning that the image format isn't in the key. Without an image origin
+    // the router leaves the header alone, so a caller-defined cacheKeyHeaders
+    // entry of the same name keeps working.
+    const hasImageOrigin = computeOrigins.has('image-optimization');
     const RESERVED_SSR_CACHE_COOKIES = [
       '__prerender_bypass',
       '__next_preview_data',
@@ -840,6 +854,27 @@ export class CdnConstruct extends Construct {
     const extraCacheKeyCookies = [
       ...new Set(props.cacheKeyCookies ?? []),
     ].filter((c) => !ROUTER_RESERVED_COOKIES.includes(c));
+    if (hasImageOrigin && extraCacheKeyHeaders.includes(IMAGE_ACCEPT_CACHE_KEY_HEADER)) {
+      throw new HostingError('ReservedCacheKeyHeaderError', {
+        message:
+          `cdn.cacheKeyHeaders includes '${IMAGE_ACCEPT_CACHE_KEY_HEADER}', which the edge router reserves for ` +
+          'the image cache key when the app has an image optimizer: it replaces the value on image routes and ' +
+          'drops it on every other route, so pages could not vary by it.',
+        resolution: 'Send that value in a header with another name and list that name in cacheKeyHeaders.',
+      });
+    }
+    const keyImageAccept =
+      hasImageOrigin &&
+      extraCacheKeyHeaders.length + RESERVED_SSR_CACHE_HEADERS.length < CLOUDFRONT_CACHE_KEY_HEADER_CAP;
+    if (hasImageOrigin && !keyImageAccept) {
+      Annotations.of(this).addWarningV2(
+        '@aws-cdk-blocks/hosting:ImageAcceptNotInCacheKey',
+        `cdn.cacheKeyHeaders uses every cache-key header slot, so ${IMAGE_ACCEPT_CACHE_KEY_HEADER} is not in the ` +
+          'cache key: CloudFront serves one cached image format per image URL, whatever the viewer accepts. ' +
+          `Free a slot (at most ${CLOUDFRONT_CACHE_KEY_HEADER_CAP - RESERVED_SSR_CACHE_HEADERS.length - 1} cacheKeyHeaders), ` +
+          'or raise quotas.cacheKeyHeaders if AWS granted your account a higher limit.',
+      );
+    }
     const hasCacheKeyCredentials =
       extraCacheKeyHeaders.length > 0 || extraCacheKeyCookies.length > 0;
     // ssrDefaultTtl may be an unresolved CDK token. Same-unit conversion
@@ -977,6 +1012,9 @@ export class CdnConstruct extends Construct {
             // cache key for correctness.
             // See: node_modules/@opennextjs/aws/dist/core/routing/cacheInterceptor.js
             'next-action',
+            // The viewer's Accept, on image routes (see
+            // RESERVED_SSR_CACHE_HEADERS above).
+            ...(keyImageAccept ? [IMAGE_ACCEPT_CACHE_KEY_HEADER] : []),
             // Caller-supplied credential-bearing headers (e.g. 'authorization')
             // so authenticated SSR responses vary per credential in the key.
             ...extraCacheKeyHeaders,
@@ -1119,7 +1157,7 @@ export class CdnConstruct extends Construct {
 
     // ---- Router functions (build-independent; routing data lives in KVS) ----
     const routerRequestFn = new CloudFrontFunction(this, 'KvsRouterRequest', {
-      code: FunctionCode.fromInline(generateKvsRouterRequestCode()),
+      code: FunctionCode.fromInline(generateKvsRouterRequestCode({ imageAcceptKey: keyImageAccept })),
       runtime: CLOUDFRONT_FUNCTION_RUNTIME,
       keyValueStore: routeStore,
       comment: 'KVS edge router: origin selection + build-id rewrite',

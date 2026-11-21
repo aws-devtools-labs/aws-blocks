@@ -23,7 +23,14 @@ import { IPX_LAMBDA_HANDLER_SOURCE } from './ipx_lambda_template.js';
 
 type LambdaResult = { statusCode: number; headers: Record<string, string>; body: string };
 type Handler = (event: unknown) => Promise<LambdaResult>;
-type Control = { s3Bytes: Uint8Array; remoteBytes: Uint8Array; outputType: string; lastPath?: string; s3Missing?: boolean };
+type Control = {
+  s3Bytes: Uint8Array;
+  remoteBytes: Uint8Array;
+  outputType: string;
+  lastPath?: string;
+  lastAccept?: string | null;
+  s3Missing?: boolean;
+};
 
 const SVG = new TextEncoder().encode('<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>');
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
@@ -39,6 +46,7 @@ export const ipxHttpStorage = () => ({ name: 'http', getMeta: async () => ({}), 
 export const createIPXWebServer = (ipx) => async (req) => {
   const url = new URL(req.url);
   control.lastPath = url.pathname;
+  control.lastAccept = req.headers.get('accept');
   const rest = url.pathname.replace(/^\\/+/, '');
   const id = decodeURIComponent(rest.slice(rest.indexOf('/') + 1));
   const storage = /^https?:/.test(id) ? ipx.httpStorage : ipx.storage;
@@ -203,3 +211,42 @@ void describe('generated IPX handler — the app base path (executed)', () => {
   });
 });
 
+
+void describe('generated IPX handler — the Accept value IPX negotiates on (executed)', () => {
+  // IPX picks the output format from Accept. The CloudFront door keys the image
+  // cache on the complete Accept value (all fields), so IPX must see that same
+  // value, not only the last field.
+  const v1 = (headers: Record<string, string>, multiValueHeaders?: Record<string, string[]>) => ({
+    resource: '/{proxy+}',
+    path: '/_ipx/_/pic.png',
+    httpMethod: 'GET',
+    headers,
+    ...(multiValueHeaders ? { multiValueHeaders } : {}),
+    queryStringParameters: null,
+    multiValueQueryStringParameters: null,
+  });
+  const acceptSeen = async (event: unknown): Promise<string | null | undefined> => {
+    const handler = await loadHandler(BASE_ENV);
+    control.s3Bytes = PNG;
+    control.outputType = 'image/png';
+    control.lastAccept = undefined;
+    const res = await handler(event);
+    assert.strictEqual(res.statusCode, 200);
+    return control.lastAccept;
+  };
+
+  void it('joins repeated Accept fields of an API Gateway REST event, in order', async () => {
+    const accept = await acceptSeen(
+      v1({ Accept: 'image/png;q=0.5' }, { Accept: ['image/webp', 'image/png;q=0.5'] }),
+    );
+    assert.strictEqual(accept, 'image/webp,image/png;q=0.5');
+  });
+
+  void it('passes a single Accept field through unchanged', async () => {
+    const accept = await acceptSeen(
+      v1({ accept: 'image/webp,image/png;q=0.5' }, { accept: ['image/webp,image/png;q=0.5'] }),
+    );
+    assert.strictEqual(accept, 'image/webp,image/png;q=0.5');
+    assert.strictEqual(await acceptSeen(v1({ accept: 'image/avif,*/*' })), 'image/avif,*/*');
+  });
+});

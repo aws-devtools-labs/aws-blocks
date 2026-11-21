@@ -364,6 +364,13 @@ const eventToRequest = (event) => {
   for (const [k, v] of Object.entries(event.headers || {})) {
     if (typeof v === 'string') headers.set(k, v);
   }
+  // API Gateway REST (v1) keeps only the LAST field of a repeated header in
+  // \`headers\`; the complete list is in \`multiValueHeaders\`. Join the Accept
+  // fields, so IPX negotiates its output format on the whole Accept value, the
+  // same value the CloudFront door keys the image cache on.
+  for (const [k, v] of Object.entries(event.multiValueHeaders || {})) {
+    if (k.toLowerCase() === 'accept' && Array.isArray(v) && v.length > 0) headers.set(k, v.join(','));
+  }
 
   const body = event.body
     ? Buffer.from(event.body, event.isBase64Encoded ? 'base64' : 'utf8')

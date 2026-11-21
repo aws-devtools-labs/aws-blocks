@@ -6,6 +6,7 @@ import assert from 'node:assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { createHash } from 'node:crypto';
 import { App, CfnParameter, Duration, Stack } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { PriceClass } from 'aws-cdk-lib/aws-cloudfront';
@@ -24,7 +25,7 @@ import { CdnConstruct } from './cdn_construct.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
 import { HostingError } from '../hosting_error.js';
 import type { DeployManifest } from '../manifest/types.js';
-import { ORIGIN_ID, buildKvsEntries } from './kvs_router.js';
+import { IMAGE_ACCEPT_CACHE_KEY_HEADER, ORIGIN_ID, buildKvsEntries } from './kvs_router.js';
 
 // ---- KVS edge-router helpers ----
 //
@@ -2210,6 +2211,212 @@ void describe('CdnConstruct', () => {
       });
       return Template.fromStack(stack);
     };
+
+    // The image route reaches the image origin through the default behavior,
+    // so the default behavior's (SSR) cache policy is its cache key. That key
+    // must vary by the format the viewer accepts, or the first viewer's format
+    // (WebP/AVIF or the source PNG) is served to every later one.
+    /** The SSR cache policy's cache-key header names in a synthesized template. */
+    const ssrCacheKeyHeaders = (template: Template): string[] => {
+      const ssrPolicy = Object.values(template.findResources('AWS::CloudFront::CachePolicy')).find((r) => {
+        const cfg = (r as { Properties: { CachePolicyConfig: { Comment?: string } } }).Properties.CachePolicyConfig;
+        return typeof cfg.Comment === 'string' && cfg.Comment.includes('SSR');
+      }) as { Properties: { CachePolicyConfig: Record<string, any> } } | undefined;
+      assert.ok(ssrPolicy, 'Should have an SSR CachePolicy');
+      return ssrPolicy.Properties.CachePolicyConfig.ParametersInCacheKeyAndForwardedToOrigin.HeadersConfig.Headers ?? [];
+    };
+
+    void it('keys the default behavior on the image Accept key the router writes, when an image origin exists', () => {
+      const template = withImageOpt(createStack(), {
+        bundle: '/tmp/img',
+        handler: 'index.handler',
+        formats: ['webp'],
+        sizes: [640],
+      });
+      const headers = ssrCacheKeyHeaders(template);
+      assert.ok(
+        headers.includes(IMAGE_ACCEPT_CACHE_KEY_HEADER),
+        `the SSR cache key must include ${IMAGE_ACCEPT_CACHE_KEY_HEADER}: ${headers.join(', ')}`,
+      );
+      // The raw Accept stays out: browsers send many different Accept values for
+      // HTML, so keying every page on it would split the page cache.
+      assert.ok(!headers.includes('accept'), 'the SSR cache key must not include accept');
+    });
+
+    void it('sends the image origin the one Accept value its cache key is a digest of', async () => {
+      // The cache key and the optimizer must negotiate from the same value. The
+      // synthesized router writes that value as the only Accept field, and the
+      // default behavior forwards it to the origin (all viewer headers but Host).
+      const template = withImageOpt(createStack(), {
+        bundle: '/tmp/img',
+        handler: 'index.handler',
+        formats: ['webp'],
+        sizes: [640],
+      });
+      const forwardAll = Object.values(template.findResources('AWS::CloudFront::OriginRequestPolicy'))
+        .map((r) => (r as { Properties: { OriginRequestPolicyConfig: Record<string, any> } }).Properties)
+        .find((p) => p.OriginRequestPolicyConfig.Comment?.includes('KVS router'));
+      assert.ok(forwardAll, 'Should have the router origin request policy');
+      assert.deepEqual(forwardAll.OriginRequestPolicyConfig.HeadersConfig, {
+        HeaderBehavior: 'allExcept',
+        Headers: ['host'],
+      });
+
+      const routerCode = Object.values(template.findResources('AWS::CloudFront::Function'))
+        .map((r) => (r as { Properties: { FunctionCode: string } }).Properties.FunctionCode)
+        .find((c) => typeof c === 'string' && c.includes('selectRequestOriginById'));
+      assert.ok(routerCode, 'Should have the KVS router request function');
+      const entries = buildKvsEntries({
+        manifest: {
+          version: 1,
+          compute: { default: { type: 'handler', bundle: '/b', handler: 'index.handler', placement: 'regional' } },
+          staticAssets: { directory: '/tmp/assets' },
+          routes: [
+            { pattern: '/_next/image*', target: 'image-optimization' },
+            { pattern: '/*', target: 'default' },
+          ],
+          buildId: 'b1',
+        },
+        buildId: 'b1',
+        hasServer: true,
+        hasImage: true,
+      });
+      let selected: string | undefined;
+      const cf = {
+        kvs: () => ({
+          get: async (key: string) => {
+            if (!(key in entries)) throw new Error('NoSuchKey');
+            return entries[key];
+          },
+        }),
+        selectRequestOriginById: (id: string) => {
+          selected = id;
+        },
+      };
+      const body = routerCode
+        .replace(/^import cf from 'cloudfront';\n?/, '')
+        .replace(/^import crypto from 'crypto';\n?/m, '');
+      // The source is the repo's own generated function code, read from the synthesized template.
+      const handler = new Function('cf', 'crypto', `${body}\nreturn handler;`)(cf, { createHash });
+      const out = await handler({
+        request: {
+          uri: '/_next/image',
+          querystring: { url: { value: '%2Fp.png' }, w: { value: '640' } },
+          headers: {
+            host: { value: 'x.test' },
+            accept: { value: 'image/png;q=0.5', multiValue: [{ value: 'image/webp' }, { value: 'image/png;q=0.5' }] },
+          },
+          cookies: {},
+        },
+      });
+      assert.equal(selected, ORIGIN_ID.image);
+      assert.deepEqual(out.headers.accept, { value: 'image/webp,image/png;q=0.5' });
+      assert.deepEqual(out.headers[IMAGE_ACCEPT_CACHE_KEY_HEADER], {
+        value: createHash('sha256').update('image/webp,image/png;q=0.5').digest('base64url'),
+      });
+    });
+
+    void it('keeps an app at the cache-key header cap synthesizing, with a warning, when there is an image origin', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const { fn, fnUrl } = createSsrFunction(stack);
+      const imageFn = new LambdaFunction(stack, 'ImageFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: {
+          ...ssrManifest,
+          imageOptimization: { bundle: '/tmp/img', handler: 'index.handler', formats: ['webp'], sizes: [640] },
+        },
+        securityHeadersPolicy: createSecurityHeadersPolicy(stack, 'SH', {}),
+        computeFunctionUrls: new Map([
+          ['default', fnUrl],
+          ['image-optimization', imageFn.addFunctionUrl({ authType: FunctionUrlAuthType.AWS_IAM })],
+        ]),
+        computeFunctions: new Map([
+          ['default', fn],
+          ['image-optimization', imageFn],
+        ]),
+        cacheKeyHeaders: ['h1', 'h2', 'h3', 'h4', 'h5'],
+      });
+      const template = Template.fromStack(stack);
+      assert.ok(!ssrCacheKeyHeaders(template).includes(IMAGE_ACCEPT_CACHE_KEY_HEADER));
+      const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('@aws-cdk-blocks/hosting:ImageAcceptNotInCacheKey'));
+      assert.equal(warnings.length, 1);
+    });
+
+    void it('leaves the image key header out of the cache key when there is no image origin', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const { fn, fnUrl } = createSsrFunction(stack);
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: ssrManifest,
+        securityHeadersPolicy: createSecurityHeadersPolicy(stack, 'SH', {}),
+        computeFunctionUrls: new Map([['default', fnUrl]]),
+        computeFunctions: new Map([['default', fn]]),
+      });
+      assert.ok(!ssrCacheKeyHeaders(Template.fromStack(stack)).includes(IMAGE_ACCEPT_CACHE_KEY_HEADER));
+    });
+
+    void it('keeps a caller-defined cache-key header of the image key name when there is no image origin', () => {
+      // An app may already key pages on this header name. Without an image
+      // origin the router writes no image key, so it must neither drop the
+      // header at the edge nor leave it out of the cache key.
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const { fn, fnUrl } = createSsrFunction(stack);
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: ssrManifest,
+        securityHeadersPolicy: createSecurityHeadersPolicy(stack, 'SH', {}),
+        computeFunctionUrls: new Map([['default', fnUrl]]),
+        computeFunctions: new Map([['default', fn]]),
+        cacheKeyHeaders: [IMAGE_ACCEPT_CACHE_KEY_HEADER],
+      });
+      const template = Template.fromStack(stack);
+      assert.ok(ssrCacheKeyHeaders(template).includes(IMAGE_ACCEPT_CACHE_KEY_HEADER));
+      const routerCode = Object.values(template.findResources('AWS::CloudFront::Function'))
+        .map((r) => (r as { Properties: { FunctionCode: string } }).Properties.FunctionCode)
+        .find((c) => c.includes('selectRequestOriginById'));
+      assert.ok(routerCode, 'Should have the KVS router request function');
+      assert.ok(!routerCode.includes(IMAGE_ACCEPT_CACHE_KEY_HEADER), 'the router must not touch the header');
+    });
+
+    void it('rejects a caller-defined cache-key header of the image key name when there is an image origin', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const { fn, fnUrl } = createSsrFunction(stack);
+      const imageFn = new LambdaFunction(stack, 'ImageFn', {
+        runtime: Runtime.NODEJS_20_X,
+        handler: 'index.handler',
+        code: Code.fromInline('exports.handler = async () => {};'),
+      });
+      assert.throws(
+        () =>
+          new CdnConstruct(stack, 'Cdn', {
+            bucket,
+            manifest: {
+              ...ssrManifest,
+              imageOptimization: { bundle: '/tmp/img', handler: 'index.handler', formats: ['webp'], sizes: [640] },
+            },
+            securityHeadersPolicy: createSecurityHeadersPolicy(stack, 'SH', {}),
+            computeFunctionUrls: new Map([
+              ['default', fnUrl],
+              ['image-optimization', imageFn.addFunctionUrl({ authType: FunctionUrlAuthType.AWS_IAM })],
+            ]),
+            computeFunctions: new Map([
+              ['default', fn],
+              ['image-optimization', imageFn],
+            ]),
+            cacheKeyHeaders: [IMAGE_ACCEPT_CACHE_KEY_HEADER.toUpperCase()],
+          }),
+        (e: unknown) => e instanceof HostingError && e.message.includes(IMAGE_ACCEPT_CACHE_KEY_HEADER),
+      );
+    });
 
     void it('IPX image Lambda (baseURL set) gets its own API Gateway, next to the SSR one', () => {
       const stack = createStack();
