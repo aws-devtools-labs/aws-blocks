@@ -69,6 +69,7 @@
     "@aws-sdk/client-secrets-manager": "^3.1156.0",
     "@aws-sdk/client-ssm": "^3.1156.0",
     "@aws-sdk/signature-v4a": "^3.1138.0",
+    "acorn": "^8.15.0",
     "cross-spawn": "^7.0.6",
     "fast-glob": "^3.3.3",
     "jiti": "^2.7.0",

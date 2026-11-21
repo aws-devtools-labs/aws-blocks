@@ -625,6 +625,49 @@ const blocksStack = await BlocksStack.create(app, stackName, {
 - `npm run destroy` passes no stack selection, so the CDK CLI refuses to
   destroy an app with more than one top-level stack.
 
+## SvelteKit: the server's dependencies
+
+The SvelteKit adapter runs `@sveltejs/adapter-node`'s server, and the server
+function ships `build/` without your app's `node_modules`. adapter-node leaves
+each package in your `dependencies` (for example `aws-cdk-blocks`, whose
+`/server` entry a `+page.server.ts` imports) as an import that it expects to
+find in `node_modules` at runtime. So the deploy builds the server with its
+dependencies bundled:
+
+- The build runs with a Node.js preload (`NODE_OPTIONS=--import=…`) that hands
+  `vite build` a config in a temporary directory: it loads the config that Vite
+  itself would load (the file your build command names with `--config`, else
+  the first of `vite.config.{js,mjs,ts,cjs,mts,cts}` in the root that the
+  command names, else in the working directory), in the same ESM or CommonJS
+  format, and adds one build-only Vite plugin, which sets
+  `ssr.noExternal: true`. When the command leaves the config unclear (for
+  example `--config` given twice, or an option the preload doesn't know), the
+  build runs unchanged and says so. Nothing in your project is written or
+  renamed, so builds that overlap are safe and a `cdk watch` sees no change.
+  Your own adapter-node setup and the adapter's transparent build are treated
+  the same.
+- After the build, synth resolves every module the server in `build/` loads,
+  the way Node.js does from the importing file's place in `build/` (where the
+  deployed ZIP stores it, also for a symlinked file) and only inside `build/`
+  (`exports`, `imports`, `main`, the CommonJS file lookup, and the target file
+  has to exist; a symlink or relative path that leads outside `build/` counts
+  as missing, and scripts reached only through such a symlink aren't checked),
+  and also checks the files those resolve to. An `import` or `require()` of an
+  `@aws-sdk/*` package that the Lambda Node.js runtime ships passes, as the
+  runtime puts its copy on `NODE_PATH` and its Node.js reads `NODE_PATH` for
+  ESM too; an `@aws-sdk/*` package the runtime doesn't ship (for example
+  `@aws-sdk/client-lambda-web`) needs a copy in `build/`. The check fails with
+  `SvelteKitUnbundledDependencyError`, naming each missing module with the file
+  that imports it, for example a package you list in `ssr.external`. Remove it
+  from `ssr.external`, or, for a build whose config the preload couldn't tell,
+  set `ssr: { noExternal: true }` yourself. A dynamic `import()` or `require()`
+  that the code handles failing (a `require()` in a `try` with a `catch`, or an
+  `import()` awaited there or given a `.catch()`) is optional and doesn't fail
+  synth, and neither does a missing dependency of a file that only optional
+  loads reach, as the load then fails into the code's fallback.
+- `npm run destroy` skips this check, so a build left from before can't block
+  deleting the stack.
+
 ## SSR compute: Lambda or Lambda Web Functions
 
 By default the SSR server runs on a Lambda function behind an API Gateway REST

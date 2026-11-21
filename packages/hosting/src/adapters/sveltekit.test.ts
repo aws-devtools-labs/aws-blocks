@@ -332,7 +332,8 @@ void describe('sveltekitAdapter — app build environment', () => {
     });
     process.env.NODE_OPTIONS = '--conditions=cdk --max-old-space-size=4096';
     sveltekitAdapter({ projectDir: tmp });
-    assert.equal(buildEnv?.NODE_OPTIONS, '--max-old-space-size=4096');
+    // The other entries stay, followed by the preload that bundles the server's dependencies.
+    assert.match(buildEnv?.NODE_OPTIONS ?? '', /^--max-old-space-size=4096 --import=file:\S+\/preload\.mjs$/);
     assert.equal(buildEnv?.PATH, process.env.PATH);
   });
 });

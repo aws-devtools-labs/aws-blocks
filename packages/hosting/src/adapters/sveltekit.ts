@@ -22,6 +22,18 @@
  * then restores the original in a `finally`. When the user already configured
  * `@sveltejs/adapter-node`, the bridge is skipped and the build runs as-is.
  *
+ * Server dependencies: the server function's bundle is `build/`, without the
+ * app's `node_modules`. adapter-node leaves every package in the app's
+ * `dependencies` as a bare import (its docs expect `node_modules` next to the
+ * server), so the build always runs with a Node.js preload that gives
+ * `vite build` a bridge config (in a temporary directory, never in the project)
+ * importing the app's own and appending a build-only Vite plugin setting
+ * `ssr.noExternal: true`: the server output then carries its dependencies,
+ * whichever adapter config the app has. After the build, a module the server
+ * needs that `build/` can't provide fails synth
+ * (`SvelteKitUnbundledDependencyError`) instead of deploying a server that
+ * crashes on its first request. See `sveltekit-server-deps.ts`.
+ *
  * Inputs read from the project after build (`build/` — adapter-node's default
  * `out`):
  *   - `build/index.js`      — the server entry (`node index.js`)
@@ -29,11 +41,12 @@
  *   - `build/prerendered/`  — prerendered HTML pages
  *   - `build/server/`       — the SSR bundle
  */
-import { shouldSkipBuild } from './shared/build_profile.js';
+import { buildProfile, shouldSkipBuild } from './shared/build_profile.js';
 import { spawn } from './spawn.js';
 import { appBuildEnv } from './shared/app_build_env.js';
 import { normalizeBasePath } from './shared/basepath.js';
 import { warnIfVercelCron } from './shared/feature_warnings.js';
+import { unresolvedServerImports, withViteBundlePreload } from './sveltekit-server-deps.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import fg from 'fast-glob';
@@ -192,6 +205,12 @@ export const sveltekitAdapter = (
         'produced `build/client/` and that the build completed without errors.',
     });
   }
+
+  // build/ is the whole server bundle: an import it can't resolve would crash
+  // the server on its first request, after a deploy that reports success. A
+  // destroy (`reuseBuild: 'if-present'`) deploys no server, so a stale build/
+  // must not stand in the way of deleting the stack.
+  if (buildProfile().reuseBuild !== 'if-present') assertServerDependenciesBundled(buildDir);
 
   // Warn (don't fail) when a vercel.json declares crons — parity with the
   // other adapters; the hosting architecture wires no scheduler.
@@ -450,6 +469,28 @@ export default {
 };
 `;
 
+/**
+ * Fail synth when the server in `build/` needs a module that `build/` itself
+ * can't provide: the function ships `build/` alone, so the import fails with
+ * `ERR_MODULE_NOT_FOUND` on the first request.
+ */
+const assertServerDependenciesBundled = (buildDir: string): void => {
+  const unresolved = [...unresolvedServerImports(buildDir)];
+  if (unresolved.length === 0) return;
+  const listed = unresolved.map(([specifier, file]) => `${specifier} (imported from build/${file})`).join(', ');
+  throw new HostingError('SvelteKitUnbundledDependencyError', {
+    message:
+      `The SvelteKit server imports modules that the deployed server function would not have: ${listed}. ` +
+      'The function ships build/ without node_modules, and without what a symlink or relative path in it leads to outside build/.',
+    resolution:
+      'Remove these packages from `ssr.external` in your Vite config so the build bundles them, ' +
+      'and rebuild (a build reused with BLOCKS_SKIP_FRONTEND_BUILD may predate the bundling). ' +
+      'The deploy builds the server with `ssr.noExternal: true` on the Vite config the build loads; ' +
+      'when the build command leaves that config unclear (the build log then says so), ' +
+      'set `ssr: { noExternal: true }` in it yourself.',
+  });
+};
+
 type PackageManager = 'pnpm' | 'yarn' | 'bun' | 'npm';
 
 /**
@@ -584,7 +625,9 @@ const runSvelteKitBuild = (
   process.stderr.write(`\u{1F528} Running SvelteKit build: ${cmd.join(' ')}\n`);
   try {
     const [bin, ...args] = cmd;
-    spawn.sync(bin!, args, { cwd: projectDir, stdio: 'inherit', env: appBuildEnv() });
+    // Bundle the server's dependencies into build/ (see the header), with the
+    // transparent bridge and with the app's own adapter-node alike.
+    withViteBundlePreload(appBuildEnv(), (env) => spawn.sync(bin!, args, { cwd: projectDir, stdio: 'inherit', env }));
   } catch (error) {
     throw new HostingError(
       'SvelteKitBuildError',
