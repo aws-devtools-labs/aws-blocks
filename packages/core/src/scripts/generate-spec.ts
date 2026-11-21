@@ -21,13 +21,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { pathToFileURL } from 'url';
 import { API_NAMESPACE_DISCOVER, API_NAMESPACE_MARKER } from '../api.js';
-import {
-	CodegenTagError,
-	extractMethodTypes,
-	extractSkipCodegenMethods,
-	DECLARATION_MARKER,
-	type MethodTypeInfo,
-} from './extract-ts-types.js';
+import type { MethodTypeInfo } from './extract-ts-types.js';
+import { DECLARATION_MARKER } from './schema-markers.js';
 import {
 	buildNativeCatalogs,
 	NATIVE_BINDINGS_EXTENSION,
@@ -263,6 +258,36 @@ export type FoundationLoader = (fileUrl: string) => Promise<Record<string, unkno
 
 const defaultLoader: FoundationLoader = (url) => import(url);
 
+/** `extract-ts-types.js`, or why it could not be loaded (most often: no `typescript` package installed). */
+type TsTypeExtractor =
+	| { ok: true; module: typeof import('./extract-ts-types.js') }
+	| { ok: false; error: Error };
+
+/**
+ * Whether `error` is Node's failure to find the `typescript` package itself. Only the
+ * module that did not load counts ("Cannot find package 'typescript' imported from …"),
+ * so a broken install, an `exports` change or an error thrown from inside the compiler
+ * keeps its own message instead of being reported as "not installed".
+ */
+function isTypeScriptMissing(error: unknown): boolean {
+	if (!(error instanceof Error) || !('code' in error) || error.code !== 'ERR_MODULE_NOT_FOUND') return false;
+	const [failed = ''] = error.message.split(' imported from ');
+	return failed.includes("'typescript'");
+}
+
+/** Load `extract-ts-types.js`, which needs the app's `typescript` package. Never throws. */
+async function loadTsTypeExtractor(): Promise<TsTypeExtractor> {
+	try {
+		return { ok: true, module: await import('./extract-ts-types.js') };
+	} catch (e) {
+		if (isTypeScriptMissing(e)) {
+			const hint = 'install it with `npm install --save-dev typescript`';
+			return { ok: false, error: new Error(`the "typescript" package is not installed; ${hint}`) };
+		}
+		return { ok: false, error: e instanceof Error ? e : new Error(String(e)) };
+	}
+}
+
 /**
  * Declarations are supplied by the authoring surface that reads them from a
  * block's `package.json`.
@@ -308,15 +333,23 @@ export async function generateSpec(
 	// Extract TypeScript type info from the source file (AST-based).
 	// Used as fallback for methods without Zod schemas — gives base types
 	// (string, number, boolean, object shapes) instead of "unknown".
+	// Loaded here, not imported at the top: it imports the `typescript` package, which
+	// an app may not have installed (`typescript` is a peer dependency of core). Every
+	// other script in `@aws-cdk-blocks/core/scripts` loads without it.
+	const tsExtractor = await loadTsTypeExtractor();
 	let tsTypes = new Map<string, MethodTypeInfo>();
 	try {
-		tsTypes = extractMethodTypes(foundationPath);
+		if (!tsExtractor.ok) throw tsExtractor.error;
+		tsTypes = tsExtractor.module.extractMethodTypes(foundationPath);
 	} catch (e) {
 		// A misused codegen tag is the author's to fix, not a reason to emit `unknown`.
-		if (e instanceof CodegenTagError) throw e;
+		if (tsExtractor.ok && e instanceof tsExtractor.module.CodegenTagError) throw e;
 		// The program itself could not be read: every method falls back to `unknown`. Say so.
+		// Without the compiler, the `@blocksSkipCodegen` scan below cannot run either, so
+		// tagged methods stay in the spec (and in native clients). Say that too.
+		const skipNote = tsExtractor.ok ? '' : ', and methods tagged @blocksSkipCodegen are not skipped';
 		console.warn(
-			`[blocks] Could not read the TypeScript types of ${foundationPath} (${e instanceof Error ? e.message : String(e)}); the OpenRPC spec describes every method as unknown.`,
+			`[blocks] Could not read the TypeScript types of ${foundationPath} (${e instanceof Error ? e.message : String(e)}); the OpenRPC spec describes every method as unknown${skipNote}.`,
 		);
 	}
 
@@ -325,7 +358,7 @@ export async function generateSpec(
 	// scenario: missing tsconfig paths, third-party `.d.ts` mismatches).
 	let skipCodegenNames = new Set<string>();
 	try {
-		skipCodegenNames = extractSkipCodegenMethods(foundationPath);
+		if (tsExtractor.ok) skipCodegenNames = tsExtractor.module.extractSkipCodegenMethods(foundationPath);
 	} catch {
 		// AST parse failed — nothing to skip.
 	}

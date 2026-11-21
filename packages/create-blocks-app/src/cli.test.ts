@@ -506,6 +506,25 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
+  it('adds typescript to an existing project, and keeps the version it already has', () => {
+    for (const [label, devDependencies, expected] of [
+      ['no typescript', {}, '^5.9.3'],
+      ['own typescript', { typescript: '~5.4.0' }, '~5.4.0'],
+    ] as const) {
+      const tmpDir = join(__dirname, `../.test-existing-typescript-${label.replace(' ', '-')}`);
+      mkdirSync(tmpDir, { recursive: true });
+      writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-nuxt-app', version: '1.0.0', devDependencies }));
+      try {
+        const result = run(['-y', '--skip-install'], tmpDir);
+        assert.strictEqual(result.exitCode, 0, result.stderr);
+        const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
+        assert.strictEqual(pkg.devDependencies?.typescript, expected, label);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    }
+  });
+
   it('deployable templates declare a floating CDK CLI dependency', () => {
     const templatesDir = join(__dirname, '..', 'templates');
     const missingOrPinned: string[] = [];

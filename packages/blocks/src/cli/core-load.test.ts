@@ -79,13 +79,15 @@ describe('an installed @aws-cdk-blocks/core that does not match the CLI', () => 
 
 	it('names the failure only when loading core failed', () => {
 		const notExported = Object.assign(
-			new Error(`Package subpath './scripts/dev-pidfile' is not defined by "exports" in /app/node_modules/@aws-cdk-blocks/core/package.json`),
+			new Error(
+				`Package subpath './scripts/dev-pidfile' is not defined by "exports" in /app/node_modules/@aws-cdk-blocks/core/package.json imported from /app/node_modules/aws-cdk-blocks/dist/cli/core-load.js`,
+			),
 			{ code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' },
 		);
 		// Node's message on Windows names the package by its path, with backslashes.
 		const notExportedOnWindows = Object.assign(
 			new Error(
-				`Package subpath './scripts' is not defined by "exports" in C:\\app\\node_modules\\@aws-cdk-blocks\\core\\package.json`,
+				`Package subpath './scripts' is not defined by "exports" in C:\\app\\node_modules\\@aws-cdk-blocks\\core\\package.json imported from C:\\app\\node_modules\\aws-cdk-blocks\\dist\\cli\\core-load.js`,
 			),
 			{ code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' },
 		);
@@ -95,13 +97,40 @@ describe('an installed @aws-cdk-blocks/core that does not match the CLI', () => 
 		const notInstalled = Object.assign(new Error("Cannot find package '@aws-cdk-blocks/core' imported from /app/x.js"), {
 			code: 'ERR_MODULE_NOT_FOUND',
 		});
-		for (const error of [notExported, notExportedOnWindows, missingExport, notInstalled]) {
+		// An entry that core's `exports` maps to a file the install lacks.
+		const missingEntry = Object.assign(
+			new Error(
+				"Cannot find module '/app/node_modules/@aws-cdk-blocks/core/dist/scripts/index.js' imported from /app/node_modules/aws-cdk-blocks/dist/cli/x.js",
+			),
+			{ code: 'ERR_MODULE_NOT_FOUND' },
+		);
+		for (const error of [notExported, notExportedOnWindows, missingExport, notInstalled, missingEntry]) {
 			assert.match(coreMismatchError(error)?.message ?? '', /cannot load @aws-cdk-blocks\/core.*, which does not match it: /);
 		}
 		const other = Object.assign(new Error("Cannot find package 'left-pad' imported from /app/x.js"), {
 			code: 'ERR_MODULE_NOT_FOUND',
 		});
-		for (const error of [other, new SyntaxError('Unexpected token'), new TypeError('@aws-cdk-blocks/core broke'), 'x']) {
+		// A package that core imports is missing: core itself loaded, so it is no version mismatch.
+		const missingFromCore = Object.assign(
+			new Error(
+				"Cannot find package 'typescript' imported from /app/node_modules/@aws-cdk-blocks/core/dist/scripts/extract-ts-types.js",
+			),
+			{ code: 'ERR_MODULE_NOT_FOUND' },
+		);
+		const missingFromCoreOnWindows = Object.assign(
+			new Error(
+				"Cannot find package 'typescript' imported from C:\\app\\node_modules\\@aws-cdk-blocks\\core\\dist\\scripts\\extract-ts-types.js",
+			),
+			{ code: 'ERR_MODULE_NOT_FOUND' },
+		);
+		for (const error of [
+			other,
+			missingFromCore,
+			missingFromCoreOnWindows,
+			new SyntaxError('Unexpected token'),
+			new TypeError('@aws-cdk-blocks/core broke'),
+			'x',
+		]) {
 			assert.strictEqual(coreMismatchError(error), undefined);
 		}
 	});
