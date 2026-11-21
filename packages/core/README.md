@@ -598,7 +598,7 @@ new Hosting(stack, 'Web', {
 });
 ```
 
-The `framework` option selects the frontend type: `'spa' | 'static' | 'nextjs'`. When omitted, it is detected from your app's own `package.json` (not `node_modules`): a `next` dependency → `nextjs`; otherwise `spa`; and `static` when there is no `package.json`. Set `framework: 'spa'` to override the detection, for example when a stray `next` dependency would trigger a Next.js/OpenNext build.
+The `framework` option selects the frontend type: `'nextjs' | 'nitro' | 'nuxt' | 'astro' | 'sveltekit' | 'spa' | 'static'`. When omitted, it is detected from your app's own `package.json` (its `dependencies`, `devDependencies` and `peerDependencies`, not `node_modules`), and the first match wins: a `next` dependency → `nextjs`; `nuxt`, `nitropack`, `@solidjs/start`, `@analogjs/platform-server` or `@tanstack/start` → `nitro`; `astro` → `astro`; `@sveltejs/kit` → `sveltekit`; otherwise (including when there is no `package.json`) `spa`. Set `framework: 'spa'` to override the detection, for example when a stray `next` dependency would trigger a Next.js/OpenNext build.
 
 `buildCommand` runs during synth, with `BLOCKS_API_URL` set to the backend the frontend talks to, and then the framework adapter runs its own build (OpenNext, Nitro, Astro, SvelteKit). Two synths skip both:
 

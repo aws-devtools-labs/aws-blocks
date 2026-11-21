@@ -249,6 +249,8 @@ void describe('WafConstruct', () => {
           assert.strictEqual(err.name, 'WafRegionError');
           assert.ok(err.message.includes('eu-west-1'));
           assert.ok(err.resolution);
+          // The fix for a stack in another region: a web ACL made in us-east-1, attached by its ARN.
+          assert.match(err.resolution, /waf: \{ enabled: true, webAclArn \}/);
           return true;
         },
       );
