@@ -174,6 +174,62 @@ describe('retrieve validation', () => {
 // ── retrieve() — mapResultItem tested indirectly via SDK mock ──────────────
 
 describe('retrieve (SDK-mocked)', () => {
+	test("sourceFormat: 'relative' returns the object key without the bucket name", async () => {
+		const cleanup = setKbEnv('TEST', 'RELF');
+		mockRuntimeSend(() => ({
+			retrievalResults: [
+				{ content: { text: 'a' }, score: 0.9, location: { s3Location: { uri: 's3://stack-kbdata-1a2b3c/faq/returns.md' }, type: 'S3' } },
+				{ content: { text: 'b' }, score: 0.8, location: { type: 'S3' } },
+			],
+		}));
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'relf', { source: './knowledge', sourceFormat: 'relative' });
+			const results = await kb.retrieve('returns');
+			assert.deepStrictEqual(results.map((r) => r.source), ['faq/returns.md', '']);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("sourceFormat: 'relative' strips the configured prefix of an s3:// source", async () => {
+		const cleanup = setKbEnv('TEST', 'RELS');
+		mockRuntimeSend(() => ({
+			retrievalResults: [
+				{ content: { text: 'a' }, score: 0.9, location: { s3Location: { uri: 's3://acme-prod-docs/kb/guides/start.md' }, type: 'S3' } },
+			],
+		}));
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rels', { source: 's3://acme-prod-docs/kb/', sourceFormat: 'relative' });
+			const results = await kb.retrieve('start');
+			assert.strictEqual(results[0].source, 'guides/start.md');
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("sourceFormat: 'relative' also applies to asAgentTool() results", async () => {
+		const cleanup = setKbEnv('TEST', 'RELT');
+		mockRuntimeSend(() => ({
+			retrievalResults: [{ content: { text: 'a' }, score: 0.9, location: { s3Location: { uri: 's3://b/docs/a.md' } } }],
+		}));
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'relt', { source: 's3://b/docs/', sourceFormat: 'relative' });
+			const tool = kb.asAgentTool<undefined>({ filter: () => undefined });
+			const hits = await tool.handler({ input: { query: 'a' }, context: undefined });
+			assert.strictEqual(hits[0].source, 'a.md');
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('an unknown sourceFormat is rejected at construction', () => {
+		assert.throws(
+			// @ts-expect-error -- exercising a value outside the declared union
+			() => new KnowledgeBase({ id: 'test' }, 'badf', { source: './knowledge', sourceFormat: 'key' }),
+			(err: unknown) => isBlocksError(err, KnowledgeBaseErrors.ValidationError),
+		);
+	});
+
 	test('maps text, score, source, metadata correctly', async () => {
 		const cleanup = setKbEnv('TEST', 'R1');
 		mockRuntimeSend(() => ({

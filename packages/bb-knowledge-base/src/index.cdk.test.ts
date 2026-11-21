@@ -347,3 +347,15 @@ test('CDK: asAgentTool() can be declared at synth; its handler throws the synth-
   assert.deepStrictEqual(Object.keys(tool.parameters.shape), ['query']);
   await assert.rejects(tool.handler({ input: { query: 'docs' }, context: {} }), /retrieve/);
 });
+
+test('CDK: an unknown sourceFormat fails at synth; a supported one synthesizes', () => {
+  const app = new cdk.App();
+  new StubBlocksStack(app, 'teststack');
+  const parent = new Scope('app');
+  assert.throws(
+    // @ts-expect-error -- exercising a value outside the declared union
+    () => new KnowledgeBase(parent, 'bad', { source: FIXTURES, sourceFormat: 'key' }),
+    (err: Error) => err.name === 'KnowledgeBaseValidationError',
+  );
+  assert.ok(new KnowledgeBase(parent, 'good', { source: FIXTURES, sourceFormat: 'relative' }));
+});

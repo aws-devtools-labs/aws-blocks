@@ -6,7 +6,7 @@ import type { KnowledgeBaseOptions, RetrieveOptions, RetrieveResult, WaitUntilSy
 import { KnowledgeBaseErrors, blocksError } from './errors.js';
 
 export type {
-	KnowledgeBaseOptions, SourceConfig,
+	KnowledgeBaseOptions, SourceConfig, SourceFormat,
 	ChunkingConfig, ChunkingStrategy,
 	RetrieveOptions, RetrieveResult,
 	MetadataFilter, WaitUntilSyncedOptions,

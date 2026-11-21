@@ -90,6 +90,7 @@ export interface KnowledgeBaseOptions {
     logger?: ChildLogger;
     removalPolicy?: 'destroy' | 'retain';
     source: SourceConfig;
+    sourceFormat?: SourceFormat;
 }
 
 // @public
@@ -113,6 +114,9 @@ export interface RetrieveResult {
 
 // @public
 export type SourceConfig = string;
+
+// @public
+export type SourceFormat = 'uri' | 'relative';
 
 // @public
 export interface WaitUntilSyncedOptions {

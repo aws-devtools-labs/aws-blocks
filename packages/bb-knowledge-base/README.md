@@ -51,6 +51,7 @@ const kb = new KnowledgeBase(scope, id, options)
 | `embeddingDimensions` | `256 \| 512 \| 1024` | `1024` | Embedding model dimensions. |
 | `description` | `string` | — | Human-readable description for the knowledge base. |
 | `removalPolicy` | `'destroy' \| 'retain'` | stack `defaults` | CDK removal behavior for BB-created data buckets (imported `s3://` URI sources are unaffected). When omitted, follows the stack-wide `defaults` (`production` → RETAIN, `sandbox` → DESTROY). Pass `'destroy'` to drop the bucket on teardown for this KB — also enables `autoDeleteObjects`. |
+| `sourceFormat` | `'uri' \| 'relative'` | `'uri'` | How each result's `source` names the document on AWS. `'uri'` returns the raw `s3://<bucket>/<key>` location. `'relative'` returns the key relative to the source root (`faq/returns.md`), without the bucket name or the `s3://` prefix path. Local development returns the relative path either way. See [Result sources](#result-sources). |
 | `logger` | `ChildLogger` | — | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
 
 ### Source Configuration
@@ -106,8 +107,21 @@ chunking: { strategy: 'fixed', chunkSize: 500, chunkOverlap: 10 }
 |-------|------|-------------|
 | `text` | `string` | Chunk text content. |
 | `score` | `number` | Relevance score 0.0–1.0. |
-| `source` | `string` | Source document path or URL. |
+| `source` | `string` | The document the chunk came from: the path relative to the source folder locally; on AWS the `s3://<bucket>/<key>` URI, or the relative key with `sourceFormat: 'relative'`. |
 | `metadata` | `Record<string, string>` | Document metadata. Includes auto-populated `folder` from subfolders. |
+
+### Result sources
+
+On AWS, `source` is the S3 location Bedrock reports, `s3://<bucket>/<key>`, by default. The bucket name can identify your AWS account or naming scheme, so when results reach a browser or an agent, set `sourceFormat: 'relative'`:
+
+```typescript
+const kb = new KnowledgeBase(scope, 'docs', { source: './knowledge', sourceFormat: 'relative' });
+
+const [hit] = await kb.retrieve('refund policy');
+hit?.source; // 'faq/returns.md' on AWS and in local development
+```
+
+With `'relative'`, the bucket is dropped, and for an `s3://bucket/prefix/` source so is the prefix. The same setting applies to the hits returned by [`asAgentTool()`](#use-as-an-agent-tool). Local development already returns the path relative to the source folder, so `'relative'` gives the same value in both environments.
 
 ### Sync
 
